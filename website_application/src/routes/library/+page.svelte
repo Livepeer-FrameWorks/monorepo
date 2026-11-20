@@ -1,4 +1,16 @@
 <script lang="ts">
+  import {
+    CreateVodOriginalDownloadStore,
+    DeleteVodOriginalStore,
+    MediaRetentionPolicyStore,
+  } from "$houdini";
+  import TranscodeLadderSelect from "$lib/components/transcode/TranscodeLadderSelect.svelte";
+  import { validUploadFilenameLength } from "$lib/uploads/filename";
+  import {
+    VOD_UPLOAD_ACCEPT,
+    VOD_UPLOAD_FORMATS_LABEL,
+    isSupportedVodFilename,
+  } from "$lib/uploads/formats";
   import { onMount, onDestroy, untrack } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
@@ -606,6 +618,44 @@
   let importing = $state(false);
   let uploadFile = $state<File | null>(null);
   let uploadTitle = $state("");
+  let uploadLadder = $state("");
+  let uploadKeepOriginal = $state<boolean | null>(null);
+  const originalDownload = new CreateVodOriginalDownloadStore();
+  const deleteOriginal = new DeleteVodOriginalStore();
+  const uploadPolicy = new MediaRetentionPolicyStore();
+  onMount(() => {
+    void uploadPolicy.fetch().catch(() => {});
+  });
+  let originalToDelete = $state<StorageArtifactNode | null>(null);
+  let deletingOriginal = $state(false);
+  async function downloadOriginal(node: StorageArtifactNode) {
+    try {
+      const result = await originalDownload.mutate({ id: node.hash });
+      const data = result.data?.createVodOriginalDownload;
+      if (data && "url" in data) window.location.assign(data.url);
+      else if (data && "message" in data) toast.error(String(data.message));
+    } catch (error) {
+      toast.error(`Download failed: ${(error as Error).message}`);
+    }
+  }
+  async function confirmDeleteOriginal() {
+    if (!originalToDelete) return;
+    deletingOriginal = true;
+    try {
+      const result = await deleteOriginal.mutate({ id: originalToDelete.hash });
+      const data = result.data?.deleteVodOriginal;
+      if (data?.__typename === "DeleteSuccess") {
+        originalToDelete = null;
+        toast.success("Original deleted; processed video kept");
+        await reloadArtifacts({ policy: "NetworkOnly" });
+      } else if (data && "message" in data) toast.error(String(data.message));
+    } catch (error) {
+      toast.error(`Delete failed: ${(error as Error).message}`);
+    } finally {
+      deletingOriginal = false;
+    }
+  }
+
   let uploadDescription = $state("");
   let uploading = $state(false);
   let uploadProgress = $state(0);
@@ -1004,6 +1054,11 @@
 
   // Upload VOD
   async function handleFileChosen(file: File) {
+    if (!isSupportedVodFilename(file.name)) {
+      toast.error(`Unsupported file type. Supported formats: ${VOD_UPLOAD_FORMATS_LABEL}`);
+      return;
+    }
+
     uploadFile = file;
     if (!uploadTitle) {
       uploadTitle = file.name.replace(/\.[^/.]+$/, "");
@@ -1156,6 +1211,10 @@
     }
 
     const file = uploadFile;
+    if (!validUploadFilenameLength(file.name)) {
+      toast.warning("Filename must be 255 UTF-8 bytes or less. Rename the file before uploading.");
+      return;
+    }
     uploading = true;
     uploadStage = "initializing";
     uploadProgress = 0;
@@ -1173,16 +1232,27 @@
         const initResult = await createVodUploadMutation.mutate({
           input: {
             filename: file.name,
+            keepOriginal: uploadKeepOriginal ?? undefined,
             sizeBytes: file.size,
             contentType: file.type || "video/mp4",
             title: uploadTitle.trim() || undefined,
             description: uploadDescription.trim() || undefined,
+            transcodeLadder: uploadLadder || undefined,
           },
         });
         const createResult = initResult.data?.createVodUpload;
         if (createResult?.__typename !== "VodUploadSession") {
           const error = createResult as unknown as { message?: string };
           throw new Error(error?.message || "Failed to initialize upload");
+        }
+        const wantedOriginal =
+          uploadKeepOriginal ??
+          $uploadPolicy.data?.mediaRetentionPolicy?.effectiveKeepVodOriginals ??
+          true;
+        if (wantedOriginal && createResult.keepOriginal === false) {
+          toast.warning(
+            "Original retention is temporarily unavailable. This upload will keep only its processed video."
+          );
         }
         session = {
           kind: "upload",
@@ -1347,6 +1417,7 @@
           filename: importFilename.trim() || undefined,
           title: uploadTitle.trim() || undefined,
           description: uploadDescription.trim() || undefined,
+          transcodeLadder: uploadLadder || undefined,
         },
       });
       const data = result.data?.importVodAsset;
@@ -1377,6 +1448,8 @@
     importFilename = "";
     uploadFile = null;
     uploadTitle = "";
+    uploadLadder = "";
+    uploadKeepOriginal = null;
     uploadDescription = "";
     uploadProgress = 0;
     uploadStage = "idle";
@@ -1953,6 +2026,24 @@
                                   >Deleted</span
                                 >
                               {:else}
+                                {#if artifact.rawData.originalFile}
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Download original"
+                                    onclick={() => downloadOriginal(artifact.rawData)}
+                                    ><DownloadIcon class="w-3.5 h-3.5" /></Button
+                                  >
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    title="Delete original"
+                                    class="h-7 px-2 text-xs"
+                                    onclick={() => {
+                                      originalToDelete = artifact.rawData;
+                                    }}><span class="text-xs">Delete original</span></Button
+                                  >
+                                {/if}
                                 {#if canPlayArtifact(artifact) && artifact.type !== "dvr" && artifact.playbackId}
                                   {@const urls = getContentDeliveryUrls(
                                     artifact.playbackId,
@@ -1965,7 +2056,7 @@
                                     variant="ghost"
                                     size="sm"
                                     class="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
-                                    title="Download MP4"
+                                    title="Download MP4 (processed)"
                                   >
                                     <DownloadIcon class="w-3.5 h-3.5" />
                                   </Button>
@@ -2083,6 +2174,15 @@
                                 >
                                   {artifact.title}
                                 </div>
+                                {#if artifact.rawData.parentRecordingId}
+                                  <a
+                                    class="text-xs text-primary hover:underline"
+                                    href={resolve("/library/[hash]", {
+                                      hash: artifact.rawData.parentRecordingId,
+                                    })}
+                                    onclick={(event) => event.stopPropagation()}>Parent recording</a
+                                  >
+                                {/if}
                                 {#if artifact.description}
                                   <div
                                     class="text-[11px] text-muted-foreground truncate max-w-xs"
@@ -2813,7 +2913,7 @@
             disabled={importing}
           />
           <p class="text-xs text-muted-foreground/70">
-            Needed when the URL does not end in mp4, mov, mkv, webm, or ts.
+            Needed when the URL does not end in mp4, mov, mkv, webm, ts, m2ts, or mts.
           </p>
         </div>
       {:else}
@@ -2838,12 +2938,12 @@
             {:else}
               <CloudUploadIcon class="w-12 h-12 text-muted-foreground mx-auto mb-2" />
               <p class="text-sm text-muted-foreground mb-2">Click to select or drag and drop</p>
-              <p class="text-xs text-muted-foreground/70">MP4, WebM, MOV up to 2GB</p>
+              <p class="text-xs text-muted-foreground/70">{VOD_UPLOAD_FORMATS_LABEL}</p>
             {/if}
             <input
               id="file-input"
               type="file"
-              accept="video/*"
+              accept={VOD_UPLOAD_ACCEPT}
               class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               onchange={handleFileSelect}
               disabled={uploading}
@@ -2879,6 +2979,46 @@
         </div>
       {/if}
 
+      <TranscodeLadderSelect
+        id="upload-transcode-ladder"
+        usage="upload"
+        bind:value={uploadLadder}
+        disabled={uploading}
+      />
+      {#if uploadSource === "file"}
+        <label class="flex items-center gap-2 text-sm"
+          ><input
+            type="checkbox"
+            indeterminate={uploadKeepOriginal === null}
+            checked={uploadKeepOriginal ??
+              $uploadPolicy.data?.mediaRetentionPolicy?.effectiveKeepVodOriginals ??
+              true}
+            onchange={(event) => {
+              uploadKeepOriginal = event.currentTarget.checked;
+            }}
+            disabled={uploading}
+          />Keep original upload</label
+        >
+        <p class="text-xs text-muted-foreground">
+          {#if uploadKeepOriginal === null}
+            Using the account default{#if $uploadPolicy.data?.mediaRetentionPolicy}: {$uploadPolicy
+                .data.mediaRetentionPolicy.effectiveKeepVodOriginals
+                ? "keep originals"
+                : "do not keep originals"}{/if}.
+          {:else}
+            This upload overrides the account default.
+            <button
+              type="button"
+              class="underline"
+              disabled={uploading}
+              onclick={() => {
+                uploadKeepOriginal = null;
+              }}>Use account default</button
+            >
+          {/if}
+          Originals count toward storage usage and your cap.
+        </p>
+      {/if}
       <div class="space-y-2">
         <label for="upload-title" class="block text-sm font-medium text-muted-foreground mb-2"
           >Title</label
@@ -2985,5 +3125,31 @@
             : "Import"}{:else if uploadStage === "uploading"}Uploading…{:else if uploadStage === "paused"}Paused{:else if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Processing…{:else if uploadStage === "done"}Done{:else}Upload{/if}</Button
       >
     </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+<Dialog
+  open={originalToDelete !== null}
+  onOpenChange={(open) => {
+    if (!open && !deletingOriginal) originalToDelete = null;
+  }}
+>
+  <DialogContent>
+    <DialogHeader
+      ><DialogTitle>Delete original upload</DialogTitle><DialogDescription
+        >This permanently deletes the original file. The processed video stays available.</DialogDescription
+      ></DialogHeader
+    >
+    <DialogFooter
+      ><Button
+        variant="ghost"
+        disabled={deletingOriginal}
+        onclick={() => {
+          originalToDelete = null;
+        }}>Cancel</Button
+      ><Button variant="destructive" disabled={deletingOriginal} onclick={confirmDeleteOriginal}
+        >Delete original</Button
+      ></DialogFooter
+    >
   </DialogContent>
 </Dialog>

@@ -104,7 +104,7 @@ type ClusterPricingConfig struct {
 	Model             string         `yaml:"model"`                         // free_unmetered, metered, monthly, tier_inherit, custom
 	RequiredTierLevel *int           `yaml:"required_tier_level,omitempty"` // 0-5 (0 = no subscription required)
 	AllowFreeTier     *bool          `yaml:"allow_free_tier,omitempty"`
-	DefaultQuotas     map[string]int `yaml:"default_quotas,omitempty"` // max_streams, max_viewers, max_bandwidth_mbps, retention_days
+	DefaultQuotas     map[string]int `yaml:"default_quotas,omitempty"` // max_streams, max_viewers, retention_days
 }
 
 // ClusterConfig defines a cluster to register in Quartermaster during provisioning

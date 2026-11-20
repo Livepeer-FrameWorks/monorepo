@@ -295,15 +295,14 @@ func TestEdgeRoleVarsCapacityControls(t *testing.T) {
 		Version:       "vtest",
 		NodeID:        "edge-eu-1",
 		Capabilities:  []string{"edge", "storage"},
-		BandwidthMbps: 2000,
 		MaxTranscodes: 4,
 		StorageBytes:  500 * 1000 * 1000 * 1000,
 	}, "linux", "amd64")
 	if err != nil {
 		t.Fatalf("edgeRoleVars returned error: %v", err)
 	}
-	if got := vars["edge_bandwidth_limit_bytes_per_sec"]; got != uint64(250000000) {
-		t.Fatalf("edge_bandwidth_limit_bytes_per_sec = %#v, want 250000000", got)
+	if got, exists := vars["edge_bandwidth_limit_bytes_per_sec"]; exists {
+		t.Fatalf("provisioning still renders API-owned bandwidth: %#v", got)
 	}
 	if got := vars["edge_max_transcodes"]; got != 4 {
 		t.Fatalf("edge_max_transcodes = %#v, want 4", got)

@@ -28,6 +28,14 @@ import (
 // foghorn.sql baseline applied.
 func startFoghornGRPCRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	baseline, baselineErr := dbsql.Content.ReadFile("schema/foghorn.sql")
+	if baselineErr != nil {
+		t.Fatal(baselineErr)
+	}
+	if conn, dsn, ok := dockerpg.OpenNativePostgresBaseline(t, "grpc", baseline); ok {
+		_ = dsn
+		return conn
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +30,7 @@ func (r *Resolver) capacityConsentAccess(ctx context.Context, manage bool) place
 	if manage {
 		permission, action = "placement:write", authz.ActionManageMediaPlacement
 	}
-	if ctxkeys.GetAuthType(ctx) == "api_token" && !slices.ContainsFunc(ctxkeys.GetPermissions(ctx), func(value string) bool { return strings.TrimSpace(value) == permission }) {
+	if err := middleware.RequirePermission(ctx, permission); err != nil {
 		return &model.AuthError{Message: "The API token does not include the required placement scope."}
 	}
 	// Capacity consent requires tenant ownership, without a platform-operator override.

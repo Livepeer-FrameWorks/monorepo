@@ -201,6 +201,7 @@ func (s *Server) registerTools() {
 	tools.RegisterPlaybackTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
 	// VOD tools (require billing + balance for upload)
+	tools.RegisterTranscodeLadderTools(s.mcpServer, s.serviceClients, s.resolver, s.logger)
 	tools.RegisterVODTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
 	// Infrastructure tools (marketplace, cluster lifecycle)
@@ -1071,6 +1072,14 @@ func mcpToolGraphQLOp(toolName string) string {
 		return "stopDVR"
 	case "create_vod_upload":
 		return "createVodUpload"
+	case "get_vod_original_download":
+		return "createVodOriginalDownload"
+	case "delete_vod_original":
+		return "deleteVodOriginal"
+	case "get_transcode_ladder_policy":
+		return "transcodeLadderPolicy"
+	case "set_transcode_ladder_policy":
+		return "setTranscodeLadderPolicy"
 	case "import_vod_asset":
 		return "importVodAsset"
 	case "complete_vod_upload":
@@ -1142,7 +1151,7 @@ func mcpToolResource(toolName string, params mcp.Params) string {
 		if dvrHash := getMcpArgString(params, "dvr_hash", "dvrHash"); dvrHash != "" {
 			return "dvr://" + dvrHash
 		}
-	case "delete_vod_asset":
+	case "delete_vod_asset", "delete_vod_original", "get_vod_original_download":
 		if artifact := getMcpArgString(params, "artifact_hash", "artifactHash", "id"); artifact != "" {
 			return "vod://" + artifact
 		}

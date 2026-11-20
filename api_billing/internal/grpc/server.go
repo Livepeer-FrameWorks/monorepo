@@ -142,7 +142,8 @@ func billingTierFromListRow(row purserdb.ListBillingTiersRow) *purserpb.BillingT
 		IsDefaultPrepaid: row.IsDefaultPrepaid, IsDefaultPostpaid: row.IsDefaultPostpaid,
 		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
 		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
-		ProcessesVod: string(row.ProcessesVod),
+		ProcessesVod:     string(row.ProcessesVod),
+		TranscodeLadders: scanTranscodeLadders(row.TranscodeLadders), DefaultTranscodeLadder: row.DefaultTranscodeLadder,
 	}
 }
 
@@ -157,8 +158,31 @@ func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) *purserpb.Billing
 		IsDefaultPrepaid: row.IsDefaultPrepaid, IsDefaultPostpaid: row.IsDefaultPostpaid,
 		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
 		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
-		ProcessesVod: string(row.ProcessesVod),
+		ProcessesVod:     string(row.ProcessesVod),
+		TranscodeLadders: scanTranscodeLadders(row.TranscodeLadders), DefaultTranscodeLadder: row.DefaultTranscodeLadder,
 	}
+}
+
+// scanTranscodeLadders decodes a transcode_ladders JSONB column, the
+// bootstrap catalog's []CatalogTranscodeLadder.
+func scanTranscodeLadders(data []byte) []*purserpb.TranscodeLadder {
+	var ladders []struct {
+		Name        string          `json:"name"`
+		DisplayName string          `json:"display_name"`
+		Description string          `json:"description"`
+		Renditions  json.RawMessage `json:"renditions"`
+	}
+	if len(data) == 0 || json.Unmarshal(data, &ladders) != nil {
+		return nil
+	}
+	out := make([]*purserpb.TranscodeLadder, 0, len(ladders))
+	for _, ladder := range ladders {
+		out = append(out, &purserpb.TranscodeLadder{
+			Name: ladder.Name, DisplayName: ladder.DisplayName, Description: ladder.Description,
+			RenditionsJson: string(ladder.Renditions),
+		})
+	}
+	return out
 }
 
 // scanBillingFeatures decodes a features JSONB column through

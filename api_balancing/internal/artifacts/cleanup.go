@@ -77,7 +77,8 @@ type ArtifactRef struct {
 	// PendingObjectKey is foghorn.artifacts.sync_object_key: the exact object an in-flight freeze
 	// authorized a PUT for. Retained on the deleted row so a PUT that lands AFTER the terminal transition
 	// is still freed even if it differs from (or the row can no longer derive) the main deletion target.
-	PendingObjectKey string
+	PendingObjectKey  string
+	OriginalObjectKey string // Byte-identical upload retained separately from the processed object.
 }
 
 // S3Client is the local-bucket subset Cleaner needs to actually free
@@ -166,15 +167,27 @@ func (c *Cleaner) localAdapterFor(backendID string) (S3Client, error) {
 // (idempotent retries). Auth/ownership/shape failures from the remote
 // path return ErrRemoteRejected with the reason in the wrapped error.
 func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
+	original := strings.TrimSpace(ref.OriginalObjectKey)
 	pending := strings.TrimSpace(ref.PendingObjectKey)
 	target, err := c.resolveTarget(ref)
 	if err != nil {
-		// No derivable main target. If a freeze bound a pending object, free THAT (an authorized-but-late
-		// PUT can otherwise leak); only when there is nothing to clean do we surface the missing-target error.
-		if pending == "" {
+		if !errors.Is(err, ErrMissingTarget) {
 			return err
 		}
-		return c.deleteKey(ctx, ref, pending)
+		if pending != "" {
+			if deleteErr := c.deleteKey(ctx, ref, pending); deleteErr != nil {
+				return deleteErr
+			}
+		}
+		if original != "" && original != pending {
+			if deleteErr := c.deleteKey(ctx, ref, original); deleteErr != nil {
+				return deleteErr
+			}
+		}
+		if pending != "" || original != "" {
+			return nil
+		}
+		return err
 	}
 
 	if c.isRemote(ref) {
@@ -204,7 +217,12 @@ func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
 	}
 	// Also free the pending freeze descriptor object when it differs from the main target.
 	if pending != "" && pending != target.S3Key {
-		return c.deleteKey(ctx, ref, pending)
+		if err := c.deleteKey(ctx, ref, pending); err != nil {
+			return err
+		}
+	}
+	if original != "" && original != target.S3Key && original != pending {
+		return c.deleteKey(ctx, ref, original)
 	}
 	return nil
 }

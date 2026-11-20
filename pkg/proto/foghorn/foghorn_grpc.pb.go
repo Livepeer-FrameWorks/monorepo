@@ -968,12 +968,14 @@ var ViewerControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VodControlService_CreateVodUpload_FullMethodName    = "/foghorn.VodControlService/CreateVodUpload"
-	VodControlService_ImportVodAsset_FullMethodName     = "/foghorn.VodControlService/ImportVodAsset"
-	VodControlService_CompleteVodUpload_FullMethodName  = "/foghorn.VodControlService/CompleteVodUpload"
-	VodControlService_AbortVodUpload_FullMethodName     = "/foghorn.VodControlService/AbortVodUpload"
-	VodControlService_GetVodUploadStatus_FullMethodName = "/foghorn.VodControlService/GetVodUploadStatus"
-	VodControlService_DeleteVodAsset_FullMethodName     = "/foghorn.VodControlService/DeleteVodAsset"
+	VodControlService_CreateVodUpload_FullMethodName           = "/foghorn.VodControlService/CreateVodUpload"
+	VodControlService_ImportVodAsset_FullMethodName            = "/foghorn.VodControlService/ImportVodAsset"
+	VodControlService_CompleteVodUpload_FullMethodName         = "/foghorn.VodControlService/CompleteVodUpload"
+	VodControlService_AbortVodUpload_FullMethodName            = "/foghorn.VodControlService/AbortVodUpload"
+	VodControlService_GetVodUploadStatus_FullMethodName        = "/foghorn.VodControlService/GetVodUploadStatus"
+	VodControlService_DeleteVodAsset_FullMethodName            = "/foghorn.VodControlService/DeleteVodAsset"
+	VodControlService_CreateVodOriginalDownload_FullMethodName = "/foghorn.VodControlService/CreateVodOriginalDownload"
+	VodControlService_DeleteVodOriginal_FullMethodName         = "/foghorn.VodControlService/DeleteVodOriginal"
 )
 
 // VodControlServiceClient is the client API for VodControlService service.
@@ -996,6 +998,8 @@ type VodControlServiceClient interface {
 	GetVodUploadStatus(ctx context.Context, in *shared.GetVodUploadStatusRequest, opts ...grpc.CallOption) (*shared.GetVodUploadStatusResponse, error)
 	// DeleteVodAsset deletes a VOD asset
 	DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error)
+	CreateVodOriginalDownload(ctx context.Context, in *shared.CreateVodOriginalDownloadRequest, opts ...grpc.CallOption) (*shared.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginal(ctx context.Context, in *shared.DeleteVodOriginalRequest, opts ...grpc.CallOption) (*shared.DeleteVodOriginalResponse, error)
 }
 
 type vodControlServiceClient struct {
@@ -1066,6 +1070,26 @@ func (c *vodControlServiceClient) DeleteVodAsset(ctx context.Context, in *shared
 	return out, nil
 }
 
+func (c *vodControlServiceClient) CreateVodOriginalDownload(ctx context.Context, in *shared.CreateVodOriginalDownloadRequest, opts ...grpc.CallOption) (*shared.CreateVodOriginalDownloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.CreateVodOriginalDownloadResponse)
+	err := c.cc.Invoke(ctx, VodControlService_CreateVodOriginalDownload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vodControlServiceClient) DeleteVodOriginal(ctx context.Context, in *shared.DeleteVodOriginalRequest, opts ...grpc.CallOption) (*shared.DeleteVodOriginalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.DeleteVodOriginalResponse)
+	err := c.cc.Invoke(ctx, VodControlService_DeleteVodOriginal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VodControlServiceServer is the server API for VodControlService service.
 // All implementations must embed UnimplementedVodControlServiceServer
 // for forward compatibility.
@@ -1086,6 +1110,8 @@ type VodControlServiceServer interface {
 	GetVodUploadStatus(context.Context, *shared.GetVodUploadStatusRequest) (*shared.GetVodUploadStatusResponse, error)
 	// DeleteVodAsset deletes a VOD asset
 	DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error)
+	CreateVodOriginalDownload(context.Context, *shared.CreateVodOriginalDownloadRequest) (*shared.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginal(context.Context, *shared.DeleteVodOriginalRequest) (*shared.DeleteVodOriginalResponse, error)
 	mustEmbedUnimplementedVodControlServiceServer()
 }
 
@@ -1113,6 +1139,12 @@ func (UnimplementedVodControlServiceServer) GetVodUploadStatus(context.Context, 
 }
 func (UnimplementedVodControlServiceServer) DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteVodAsset not implemented")
+}
+func (UnimplementedVodControlServiceServer) CreateVodOriginalDownload(context.Context, *shared.CreateVodOriginalDownloadRequest) (*shared.CreateVodOriginalDownloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateVodOriginalDownload not implemented")
+}
+func (UnimplementedVodControlServiceServer) DeleteVodOriginal(context.Context, *shared.DeleteVodOriginalRequest) (*shared.DeleteVodOriginalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteVodOriginal not implemented")
 }
 func (UnimplementedVodControlServiceServer) mustEmbedUnimplementedVodControlServiceServer() {}
 func (UnimplementedVodControlServiceServer) testEmbeddedByValue()                           {}
@@ -1243,6 +1275,42 @@ func _VodControlService_DeleteVodAsset_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VodControlService_CreateVodOriginalDownload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.CreateVodOriginalDownloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodControlServiceServer).CreateVodOriginalDownload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodControlService_CreateVodOriginalDownload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodControlServiceServer).CreateVodOriginalDownload(ctx, req.(*shared.CreateVodOriginalDownloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VodControlService_DeleteVodOriginal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.DeleteVodOriginalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodControlServiceServer).DeleteVodOriginal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodControlService_DeleteVodOriginal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodControlServiceServer).DeleteVodOriginal(ctx, req.(*shared.DeleteVodOriginalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VodControlService_ServiceDesc is the grpc.ServiceDesc for VodControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1273,6 +1341,14 @@ var VodControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteVodAsset",
 			Handler:    _VodControlService_DeleteVodAsset_Handler,
+		},
+		{
+			MethodName: "CreateVodOriginalDownload",
+			Handler:    _VodControlService_CreateVodOriginalDownload_Handler,
+		},
+		{
+			MethodName: "DeleteVodOriginal",
+			Handler:    _VodControlService_DeleteVodOriginal_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -1391,6 +1467,7 @@ var EdgeProvisioningService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	NodeControlService_PushNodeCapacity_FullMethodName       = "/foghorn.NodeControlService/PushNodeCapacity"
 	NodeControlService_SetNodeOperationalMode_FullMethodName = "/foghorn.NodeControlService/SetNodeOperationalMode"
 	NodeControlService_GetNodeHealth_FullMethodName          = "/foghorn.NodeControlService/GetNodeHealth"
 	NodeControlService_ListNodeUpdateStatus_FullMethodName   = "/foghorn.NodeControlService/ListNodeUpdateStatus"
@@ -1404,6 +1481,8 @@ const (
 // Fronts the existing HTTP handlers with tenant ownership validation.
 // Commodore proxies this as NodeManagementService for Gateway access.
 type NodeControlServiceClient interface {
+	// Re-compose the node's seed from Quartermaster and deliver it through its owning control connection.
+	PushNodeCapacity(ctx context.Context, in *PushNodeCapacityRequest, opts ...grpc.CallOption) (*PushNodeCapacityResponse, error)
 	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
 	SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
@@ -1421,6 +1500,16 @@ type nodeControlServiceClient struct {
 
 func NewNodeControlServiceClient(cc grpc.ClientConnInterface) NodeControlServiceClient {
 	return &nodeControlServiceClient{cc}
+}
+
+func (c *nodeControlServiceClient) PushNodeCapacity(ctx context.Context, in *PushNodeCapacityRequest, opts ...grpc.CallOption) (*PushNodeCapacityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushNodeCapacityResponse)
+	err := c.cc.Invoke(ctx, NodeControlService_PushNodeCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *nodeControlServiceClient) SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error) {
@@ -1461,6 +1550,8 @@ func (c *nodeControlServiceClient) ListNodeUpdateStatus(ctx context.Context, in 
 // Fronts the existing HTTP handlers with tenant ownership validation.
 // Commodore proxies this as NodeManagementService for Gateway access.
 type NodeControlServiceServer interface {
+	// Re-compose the node's seed from Quartermaster and deliver it through its owning control connection.
+	PushNodeCapacity(context.Context, *PushNodeCapacityRequest) (*PushNodeCapacityResponse, error)
 	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
 	SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
@@ -1480,6 +1571,9 @@ type NodeControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeControlServiceServer struct{}
 
+func (UnimplementedNodeControlServiceServer) PushNodeCapacity(context.Context, *PushNodeCapacityRequest) (*PushNodeCapacityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PushNodeCapacity not implemented")
+}
 func (UnimplementedNodeControlServiceServer) SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
 }
@@ -1508,6 +1602,24 @@ func RegisterNodeControlServiceServer(s grpc.ServiceRegistrar, srv NodeControlSe
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeControlService_ServiceDesc, srv)
+}
+
+func _NodeControlService_PushNodeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushNodeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).PushNodeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_PushNodeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).PushNodeCapacity(ctx, req.(*PushNodeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeControlService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1572,6 +1684,10 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*NodeControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "PushNodeCapacity",
+			Handler:    _NodeControlService_PushNodeCapacity_Handler,
+		},
+		{
 			MethodName: "SetNodeOperationalMode",
 			Handler:    _NodeControlService_SetNodeOperationalMode_Handler,
 		},
@@ -1589,10 +1705,12 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	TenantControlService_TerminateTenantStreams_FullMethodName  = "/foghorn.TenantControlService/TerminateTenantStreams"
-	TenantControlService_TerminateStreamSessions_FullMethodName = "/foghorn.TenantControlService/TerminateStreamSessions"
-	TenantControlService_InvalidateTenantCache_FullMethodName   = "/foghorn.TenantControlService/InvalidateTenantCache"
-	TenantControlService_InvalidatePlaybackAuth_FullMethodName  = "/foghorn.TenantControlService/InvalidatePlaybackAuth"
+	TenantControlService_GetStreamIngestStates_FullMethodName          = "/foghorn.TenantControlService/GetStreamIngestStates"
+	TenantControlService_TerminateTenantStreams_FullMethodName         = "/foghorn.TenantControlService/TerminateTenantStreams"
+	TenantControlService_TerminateStreamSessions_FullMethodName        = "/foghorn.TenantControlService/TerminateStreamSessions"
+	TenantControlService_TerminateClaimedStreamSessions_FullMethodName = "/foghorn.TenantControlService/TerminateClaimedStreamSessions"
+	TenantControlService_InvalidateTenantCache_FullMethodName          = "/foghorn.TenantControlService/InvalidateTenantCache"
+	TenantControlService_InvalidatePlaybackAuth_FullMethodName         = "/foghorn.TenantControlService/InvalidatePlaybackAuth"
 )
 
 // TenantControlServiceClient is the client API for TenantControlService service.
@@ -1601,10 +1719,13 @@ const (
 //
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceClient interface {
+	GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// TerminateStreamSessions stops only the specified tenant-owned streams.
 	TerminateStreamSessions(ctx context.Context, in *foghorn_control.TerminateStreamSessionsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
+	// A separate method makes older cells refuse generation-fenced user requests.
+	TerminateClaimedStreamSessions(ctx context.Context, in *foghorn_control.TerminateStreamSessionsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
@@ -1622,6 +1743,16 @@ func NewTenantControlServiceClient(cc grpc.ClientConnInterface) TenantControlSer
 	return &tenantControlServiceClient{cc}
 }
 
+func (c *tenantControlServiceClient) GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(foghorn_control.GetStreamIngestStatesResponse)
+	err := c.cc.Invoke(ctx, TenantControlService_GetStreamIngestStates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tenantControlServiceClient) TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(foghorn_control.TerminateTenantStreamsResponse)
@@ -1636,6 +1767,16 @@ func (c *tenantControlServiceClient) TerminateStreamSessions(ctx context.Context
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(foghorn_control.TerminateTenantStreamsResponse)
 	err := c.cc.Invoke(ctx, TenantControlService_TerminateStreamSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantControlServiceClient) TerminateClaimedStreamSessions(ctx context.Context, in *foghorn_control.TerminateStreamSessionsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(foghorn_control.TerminateTenantStreamsResponse)
+	err := c.cc.Invoke(ctx, TenantControlService_TerminateClaimedStreamSessions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1668,10 +1809,13 @@ func (c *tenantControlServiceClient) InvalidatePlaybackAuth(ctx context.Context,
 //
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceServer interface {
+	GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// TerminateStreamSessions stops only the specified tenant-owned streams.
 	TerminateStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
+	// A separate method makes older cells refuse generation-fenced user requests.
+	TerminateClaimedStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
@@ -1689,11 +1833,17 @@ type TenantControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedTenantControlServiceServer struct{}
 
+func (UnimplementedTenantControlServiceServer) GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamIngestStates not implemented")
+}
 func (UnimplementedTenantControlServiceServer) TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
 }
 func (UnimplementedTenantControlServiceServer) TerminateStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateStreamSessions not implemented")
+}
+func (UnimplementedTenantControlServiceServer) TerminateClaimedStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TerminateClaimedStreamSessions not implemented")
 }
 func (UnimplementedTenantControlServiceServer) InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTenantCache not implemented")
@@ -1720,6 +1870,24 @@ func RegisterTenantControlServiceServer(s grpc.ServiceRegistrar, srv TenantContr
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&TenantControlService_ServiceDesc, srv)
+}
+
+func _TenantControlService_GetStreamIngestStates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(foghorn_control.GetStreamIngestStatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantControlServiceServer).GetStreamIngestStates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantControlService_GetStreamIngestStates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantControlServiceServer).GetStreamIngestStates(ctx, req.(*foghorn_control.GetStreamIngestStatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _TenantControlService_TerminateTenantStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1754,6 +1922,24 @@ func _TenantControlService_TerminateStreamSessions_Handler(srv interface{}, ctx 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantControlServiceServer).TerminateStreamSessions(ctx, req.(*foghorn_control.TerminateStreamSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantControlService_TerminateClaimedStreamSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(foghorn_control.TerminateStreamSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantControlServiceServer).TerminateClaimedStreamSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantControlService_TerminateClaimedStreamSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantControlServiceServer).TerminateClaimedStreamSessions(ctx, req.(*foghorn_control.TerminateStreamSessionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1802,12 +1988,20 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*TenantControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "GetStreamIngestStates",
+			Handler:    _TenantControlService_GetStreamIngestStates_Handler,
+		},
+		{
 			MethodName: "TerminateTenantStreams",
 			Handler:    _TenantControlService_TerminateTenantStreams_Handler,
 		},
 		{
 			MethodName: "TerminateStreamSessions",
 			Handler:    _TenantControlService_TerminateStreamSessions_Handler,
+		},
+		{
+			MethodName: "TerminateClaimedStreamSessions",
+			Handler:    _TenantControlService_TerminateClaimedStreamSessions_Handler,
 		},
 		{
 			MethodName: "InvalidateTenantCache",

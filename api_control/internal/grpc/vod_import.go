@@ -16,17 +16,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const maxVODImportURLBytes = 4096
-
-// importVideoExtensions are the containers MistServer can read over HTTP from
-// the Helmsman relay (triggers.isRelaySafeFormat). Wrappers it can only open
-// from a local file (avi, flv, m4v) need an uploaded copy and are refused.
-var importVideoExtensions = map[string]bool{"mp4": true, "mov": true, "mkv": true, "webm": true, "ts": true}
 
 // ImportVodAsset imports a video from a public http(s) URL as a VOD asset. It
 // registers the asset with its creation intent like CreateVodUpload and has
@@ -45,6 +41,15 @@ func (s *CommodoreServer) ImportVodAsset(ctx context.Context, req *sharedpb.Impo
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	ladderChoice, err := s.checkTranscodeLadderChoice(ctx, tenantID, req.GetTranscodeLadder())
+	if err != nil {
+		return nil, err
+	}
+	processesJSON, err := s.resolveProcessesJSONWithLadder(ctx, tenantID, "", "", "vod", ladderChoice)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "resolve import processing: %v", err)
+	}
+
 	if validationErr := validatePublicDestinationHost(ctx, s.importDestinationPolicy, source); validationErr != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid import URL: %v", validationErr)
 	}
@@ -93,6 +98,7 @@ func (s *CommodoreServer) ImportVodAsset(ctx context.Context, req *sharedpb.Impo
 			Title:           sql.NullString{String: req.GetTitle(), Valid: true},
 			Description:     sql.NullString{String: req.GetDescription(), Valid: true},
 			Filename:        filename,
+			TranscodeLadder: ladderChoice,
 			OriginClusterID: sql.NullString{String: vodRoute.clusterID, Valid: true},
 			RetentionUntil:  retentionUntil,
 		}); execErr != nil {
@@ -110,7 +116,6 @@ func (s *CommodoreServer) ImportVodAsset(ctx context.Context, req *sharedpb.Impo
 		return nil, status.Errorf(codes.Internal, "failed to register VOD asset: %v", regErr)
 	}
 
-	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", vodRoute.clusterID, "vod")
 	foghornReq := &sharedpb.ImportVodAssetRequest{
 		TenantId:      tenantID,
 		UserId:        userID,
@@ -192,8 +197,8 @@ func vodImportFilename(requested string, source *url.URL) (string, error) {
 	}
 	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
 	ext := strings.TrimPrefix(strings.ToLower(path.Ext(name)), ".")
-	if name == "." || name == "/" || !importVideoExtensions[ext] {
-		return "", errors.New("a filename with a video extension (mp4, mov, mkv, webm, ts) is required when the URL path has none")
+	if name == "." || name == "/" || !vodupload.RelaySafe(ext) {
+		return "", fmt.Errorf("a filename with an importable video extension (%s) is required", strings.Join(vodupload.RelayExtensions(), ", "))
 	}
 	if len(name) > 255 {
 		return "", errors.New("filename is longer than 255 characters")

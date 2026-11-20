@@ -44,7 +44,7 @@ func TestReadTenantPerClassDefault(t *testing.T) {
 			WithArgs(tenant).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
-			}).AddRow(nil, int32(14), nil, "", time.Now()))
+				"keep_vod_originals"}).AddRow(nil, int32(14), nil, "", time.Now(), nil))
 
 		days, set, err := s.readTenantPerClassDefault(context.Background(), tenant, tgtDVR)
 		if err != nil || !set || days != 14 {
@@ -62,7 +62,7 @@ func TestReadTenantPerClassDefault(t *testing.T) {
 			WithArgs(tenant).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
-			}).AddRow(nil, nil, nil, "", time.Now()))
+				"keep_vod_originals"}).AddRow(nil, nil, nil, "", time.Now(), nil))
 
 		_, set, err := s.readTenantPerClassDefault(context.Background(), tenant, tgtClip)
 		if err != nil || set {
@@ -172,7 +172,7 @@ func TestResolveInitialRetention_Cascade(t *testing.T) {
 			WithArgs(tenant).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
-			}).AddRow(nil, int32(20), nil, "", time.Now()))
+				"keep_vod_originals"}).AddRow(nil, int32(20), nil, "", time.Now(), nil))
 
 		got, err := s.resolveInitialRetention(context.Background(), tgtDVR, tenant, stream)
 		if err != nil || got != 20 {
@@ -209,7 +209,7 @@ func TestResolveInitialRetention_Cascade(t *testing.T) {
 			WithArgs(tenant).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
-			}).AddRow(nil, int32(365), nil, "", time.Now()))
+				"keep_vod_originals"}).AddRow(nil, int32(365), nil, "", time.Now(), nil))
 
 		got, err := s.resolveInitialRetention(context.Background(), tgtDVR, tenant, stream)
 		if err != nil || got != 30 {
@@ -277,7 +277,7 @@ func TestGetMediaRetentionPolicy(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{
 				"default_vod_retention_days", "default_dvr_retention_days",
 				"default_clip_retention_days", "updated_by", "updated_at",
-			}).AddRow(int32(0), int32(7), nil, "admin", time.Unix(1_700_000_000, 0)))
+				"keep_vod_originals"}).AddRow(int32(0), int32(7), nil, "admin", time.Unix(1_700_000_000, 0), nil))
 
 		resp, err := s.GetMediaRetentionPolicy(authCtx(), &commodorepb.GetMediaRetentionPolicyRequest{})
 		if err != nil {

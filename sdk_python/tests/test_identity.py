@@ -23,14 +23,17 @@ def test_catalog_identity(op: dict[str, Any]) -> None:
 def responses() -> dict[str, list[dict[str, Any]]]:
     return {
         "ServerInfo": [
-            {"body": {"data": {"serverInfo": {"version": "v0.3.11", "features": []}}}}
+            {"body": {"data": {"serverInfo": {"version": "v0.3.16", "features": []}}}}
         ]
         * 2,
         "GetBillingLifecycle": [{"body": {"data": {"tenant": {"id": "tenant"}}}}] * 2,
     }
 
 
-def test_same_name_custom_document_sync() -> None:
+def test_same_name_custom_document_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livepeer_frameworks._generated.manifest import OPERATIONS
+
+    monkeypatch.setitem(OPERATIONS, "GetBillingLifecycle", {**OPERATIONS["GetBillingLifecycle"], "since": "v99.0.0"})
     scripted = Scripted(responses())
     with FrameWorksClient(
         "https://identity-sync.test/graphql", http_client=scripted.sync_client()
@@ -43,7 +46,10 @@ def test_same_name_custom_document_sync() -> None:
 
 
 @pytest.mark.asyncio
-async def test_same_name_custom_document_async() -> None:
+async def test_same_name_custom_document_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livepeer_frameworks._generated.manifest import OPERATIONS
+
+    monkeypatch.setitem(OPERATIONS, "GetBillingLifecycle", {**OPERATIONS["GetBillingLifecycle"], "since": "v99.0.0"})
     scripted = Scripted(responses())
     async with AsyncFrameWorksClient(
         "https://identity-async.test/graphql", http_client=scripted.async_client()

@@ -72,16 +72,16 @@ const createInfrastructureCluster = `-- name: CreateInfrastructureCluster :exec
 INSERT INTO quartermaster.infrastructure_clusters
     (id, cluster_id, cluster_name, cluster_type, deployment_model,
      owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
-     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+     max_concurrent_streams, max_concurrent_viewers,
      health_status, is_active, is_platform_official, is_default_cluster,
      public_topology, allow_private_pull_sources, created_at, updated_at)
 VALUES ($1::uuid, $2, $3, $4,
         $5, NULLIF($6::text, '')::uuid,
         $7, $8, $9, $10::text[],
-        $11, $12, $13,
-        'healthy', true, $14, $15,
-        $16, $17,
-        $18::timestamp, $18::timestamp)
+        $11, $12,
+        'healthy', true, $13, $14,
+        $15, $16,
+        $17::timestamp, $17::timestamp)
 `
 
 type CreateInfrastructureClusterParams struct {
@@ -97,7 +97,6 @@ type CreateInfrastructureClusterParams struct {
 	KafkaBrokers            []string       `db:"kafka_brokers" json:"kafka_brokers"`
 	MaxConcurrentStreams    sql.NullInt32  `db:"max_concurrent_streams" json:"max_concurrent_streams"`
 	MaxConcurrentViewers    sql.NullInt32  `db:"max_concurrent_viewers" json:"max_concurrent_viewers"`
-	MaxBandwidthMbps        sql.NullInt32  `db:"max_bandwidth_mbps" json:"max_bandwidth_mbps"`
 	IsPlatformOfficial      sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
 	IsDefaultCluster        sql.NullBool   `db:"is_default_cluster" json:"is_default_cluster"`
 	PublicTopology          bool           `db:"public_topology" json:"public_topology"`
@@ -119,7 +118,6 @@ func (q *Queries) CreateInfrastructureCluster(ctx context.Context, arg CreateInf
 		pq.Array(arg.KafkaBrokers),
 		arg.MaxConcurrentStreams,
 		arg.MaxConcurrentViewers,
-		arg.MaxBandwidthMbps,
 		arg.IsPlatformOfficial,
 		arg.IsDefaultCluster,
 		arg.PublicTopology,

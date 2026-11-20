@@ -91,7 +91,7 @@ func TestUpdateNodeStatus_AllowsProviderRoleAcrossActiveClusters(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type[\s\S]*snapshot_cpu_percent[\s\S]*WHERE n\.node_id = \$1 OR n\.id::text = \$1`).
 		WithArgs("edge-1").
-		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
+		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newQueryNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
 
 	resp, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            "edge-1",
@@ -138,7 +138,7 @@ func TestUpdateNodeStatus_FlipsAggregateEdgeInstanceUnhealthy(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type[\s\S]*WHERE n\.node_id = \$1 OR n\.id::text = \$1`).
 		WithArgs("edge-1").
-		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
+		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newQueryNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
 
 	if _, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            "edge-1",

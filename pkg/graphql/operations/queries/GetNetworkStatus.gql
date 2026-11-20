@@ -21,6 +21,8 @@ query GetNetworkStatus {
       currentViewers
       egressMbps
       egressCapacityMbps
+      egressUsableMbps
+      defaultBudgetNodes
       ingressMbps
       services
     }

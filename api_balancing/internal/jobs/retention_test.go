@@ -28,8 +28,8 @@ func TestNewRetentionJobDefaults(t *testing.T) {
 }
 
 // TestRetentionScan pins the eligibility sweep: the UPDATE...RETURNING marks
-// terminal artifacts deleted (expired retention OR legacy clip/vod past the
-// fallback window) and the row loop drains every returned artifact. decklogClient
+// terminal artifacts deleted (expired retention OR failed clip/vod past the
+// cleanup horizon) and the row loop drains every returned artifact. decklogClient
 // is nil so the deterministic DB path is what's under test (lifecycle emission is
 // fire-and-forget and exercised elsewhere).
 func TestRetentionScan(t *testing.T) {

@@ -17,10 +17,10 @@ ON CONFLICT (country_code, effective_from) DO NOTHING;
 WITH demo_process_config AS (
     SELECT
         '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_live,
-        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr,
-        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_clip,
-        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr_finalize,
-        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr,
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_clip,
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr_finalize,
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
 )
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,
@@ -40,13 +40,13 @@ FROM (VALUES
 ('free', 'Free', 'Hosted plan with 10K delivered mins, 10 GB storage, 3 streams and 200 viewers. Livepeer transcoding.', 0.00, 'EUR',
 '{"support_level": "community"}',
 'community', '', true, 1, false, false, true),
-('supporter', 'Supporter', '120K delivered mins, hosted load balancer, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
+('supporter', 'Supporter', '120K delivered mins, hosted load balancer, custom subdomain.', 79.00, 'EUR',
 '{"support_level": "business_hours"}',
 'business_hours', '', true, 2, false, false, false),
-('developer', 'Developer', '500K delivered mins, lower overage rates, team features as they ship. ~500-1K viewers.', 249.00, 'EUR',
+('developer', 'Developer', '500K delivered mins, lower overage rates, team features as they ship.', 249.00, 'EUR',
 '{"support_level": "business_hours"}',
 'business_hours', '', true, 3, false, false, false),
-('production', 'Production', '2M delivered mins, lowest overage rates, dedicated processing allocation. ~2-5K viewers.', 999.00, 'EUR',
+('production', 'Production', '2M delivered mins, lowest overage rates, dedicated processing allocation.', 999.00, 'EUR',
 '{"support_level": "business_hours"}',
 'business_hours', '', true, 4, false, false, false),
 ('enterprise', 'Enterprise', 'Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.', 0.00, 'EUR',

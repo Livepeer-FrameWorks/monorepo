@@ -67,6 +67,8 @@
     currentViewers?: number;
     egressMbps?: number;
     egressCapacityMbps?: number;
+    egressUsableMbps?: number;
+    defaultBudgetNodes?: number;
     ingressMbps?: number;
     services?: string[];
   }
@@ -633,7 +635,14 @@
         rows: [
           detailRow("Streams", `${cluster.currentStreams ?? 0}`),
           detailRow("Viewers", `${cluster.currentViewers ?? 0}`),
-          detailRow("Egress", `${formatLoad(cluster.egressMbps, cluster.egressCapacityMbps)} Mbps`),
+          detailRow(
+            "Egress",
+            `${formatLoad(cluster.egressMbps, cluster.egressUsableMbps)} Mbit/s usable`
+          ),
+          detailRow(
+            "Budget",
+            `${cluster.egressCapacityMbps ?? 0} Mbit/s (${cluster.defaultBudgetNodes ?? 0} default nodes)`
+          ),
           detailRow("Ingress", `${cluster.ingressMbps ?? 0} Mbps`),
         ],
       });

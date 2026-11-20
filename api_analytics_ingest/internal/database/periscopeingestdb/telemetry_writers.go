@@ -250,7 +250,7 @@ func PrepareVODRetentionBucket(ctx context.Context, db BatchPreparer) (*Writer[V
 const insertNodeState = `INSERT INTO node_state_current (
 	tenant_id, cluster_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
 	disk_used_bytes, disk_total_bytes, up_speed, down_speed, bw_limit,
-	active_streams, is_healthy, operational_mode, latitude, longitude, location, metadata, updated_at
+	active_streams, is_healthy, operational_mode, latitude, longitude, location, metadata, updated_at, egress_budget, budget_source, viewers
 )`
 
 type NodeStateRow struct {
@@ -266,11 +266,14 @@ type NodeStateRow struct {
 	Location                                                   string
 	Metadata                                                   []byte
 	UpdatedAt                                                  time.Time
+	EgressBudget                                               uint64
+	BudgetSource                                               string
+	Viewers                                                    uint32
 }
 
 func PrepareNodeState(ctx context.Context, db BatchPreparer) (*Writer[NodeStateRow], error) {
 	return prepare(ctx, db, insertNodeState, func(row NodeStateRow) []interface{} {
-		return []interface{}{row.TenantID, row.ClusterID, row.NodeID, row.CPUPercent, row.RAMUsedBytes, row.RAMTotalBytes, row.DiskUsedBytes, row.DiskTotalBytes, row.UpSpeed, row.DownSpeed, row.BWLimit, row.ActiveStreams, row.IsHealthy, row.OperationalMode, row.Latitude, row.Longitude, row.Location, row.Metadata, row.UpdatedAt}
+		return []interface{}{row.TenantID, row.ClusterID, row.NodeID, row.CPUPercent, row.RAMUsedBytes, row.RAMTotalBytes, row.DiskUsedBytes, row.DiskTotalBytes, row.UpSpeed, row.DownSpeed, row.BWLimit, row.ActiveStreams, row.IsHealthy, row.OperationalMode, row.Latitude, row.Longitude, row.Location, row.Metadata, row.UpdatedAt, row.EgressBudget, row.BudgetSource, row.Viewers}
 	})
 }
 

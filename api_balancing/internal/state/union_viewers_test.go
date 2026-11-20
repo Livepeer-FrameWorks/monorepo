@@ -19,16 +19,15 @@ func TestUnionViewers_DerivedFromInstances(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.UpdateUserConnection("s1", "node-a", "tenant-1", 1)
-	sm.UpdateUserConnection("s1", "node-a", "tenant-1", 1)
-	sm.UpdateUserConnection("s1", "node-b", "tenant-1", 1)
+	setTestAudience(t, sm, "s1", "node-a", "tenant-1", 2)
+	setTestAudience(t, sm, "s1", "node-b", "tenant-1", 1)
 
 	if ss := sm.GetStreamState("s1"); ss == nil || ss.Viewers != 3 {
 		t.Fatalf("union viewers = %+v, want 3 across two instances", ss)
 	}
 
-	// Per-instance decrements clamp at zero and the union follows.
-	sm.UpdateUserConnection("s1", "node-b", "tenant-1", -5)
+	// A later complete census replaces the previous node count.
+	setTestAudience(t, sm, "s1", "node-b", "tenant-1", 0)
 	if ss := sm.GetStreamState("s1"); ss == nil || ss.Viewers != 2 {
 		t.Fatalf("union viewers after clamped decrement = %+v, want 2", ss)
 	}
@@ -40,7 +39,7 @@ func TestUnionStats_DerivedFromInstances(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.UpdateUserConnection("s1", "node-a", "tenant-1", 0) // seed tenant identity
+	sm.EnsureViewerStreamIdentity("s1", "node-a", "tenant-1") // seed tenant identity
 	sm.UpdateNodeStats("s1", "node-a", 4, 1, 1000, 100, false)
 	sm.UpdateNodeStats("s1", "node-b", 2, 1, 500, 50, true)
 
@@ -67,7 +66,7 @@ func TestUnionViewers_IncomingSnapshotValueNotServed(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	// Local truth: one viewer on node-a.
-	sm.UpdateUserConnection("s1", "node-a", "tenant-1", 1)
+	setTestAudience(t, sm, "s1", "node-a", "tenant-1", 1)
 
 	bogus := StreamState{InternalName: "s1", StreamName: "s1", Viewers: 999, Status: "live"}
 	payload, _ := json.Marshal(bogus)
@@ -119,8 +118,8 @@ func TestUnionViewers_TwoInstanceConvergence(t *testing.T) {
 	smB := newInstance("instance-b")
 
 	// A owns node-a's conn stream, B owns node-b's.
-	smA.UpdateUserConnection("s1", "node-a", "tenant-1", 2)
-	smB.UpdateUserConnection("s1", "node-b", "tenant-1", 1)
+	setTestAudience(t, smA, "s1", "node-a", "tenant-1", 2)
+	setTestAudience(t, smB, "s1", "node-b", "tenant-1", 1)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -132,5 +131,17 @@ func TestUnionViewers_TwoInstanceConvergence(t *testing.T) {
 			t.Fatalf("union did not converge to 3: A=%+v B=%+v", a, b)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func setTestAudience(t *testing.T, sm *StreamStateManager, streamName, nodeID, tenantID string, count uint32) {
+	t.Helper()
+	sm.TouchNode(nodeID, true)
+	sm.EnsureViewerStreamIdentity(streamName, nodeID, tenantID)
+	sm.mu.RLock()
+	seq := sm.nodeStreamCounts[nodeID].snapshot.Seq + 1
+	sm.mu.RUnlock()
+	if err := sm.SetNodeStreamCounts(context.Background(), NodeStreamCountsSnapshot{NodeID: nodeID, Fence: 1, Seq: seq, Streams: map[string]uint32{streamName: count}}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,0 +1,22 @@
+mutation SetNodeCapacity($input: SetNodeCapacityInput!) {
+  setNodeCapacity(input: $input) {
+    __typename
+    ... on InfrastructureNode {
+      id
+      nodeId
+      capacity {
+        ...NodeCapacityFields @mask_disable
+      }
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

@@ -97,3 +97,70 @@ query ListArtifacts($input: StorageArtifactsInput) {
     offset
   }
 }
+
+# @target query.stream.recordings
+query ListStreamRecordings($id: ID!, $page: ConnectionInput) {
+  stream(id: $id) {
+    recordings(page: $page) {
+      edges {
+        cursor
+        node {
+          ...StorageArtifactFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+
+# @target query.stream.clips
+query ListStreamClips($id: ID!, $page: ConnectionInput) {
+  stream(id: $id) {
+    clips(page: $page) {
+      edges {
+        cursor
+        node {
+          ...StorageArtifactFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+
+# @target query.dvrRecording.chapters
+query ListRecordingChapters(
+  $id: ID!
+  $page: ConnectionInput
+  $rangeStartMs: Float
+  $rangeEndMs: Float
+) {
+  dvrRecording(id: $id) {
+    id
+    dvrHash
+    chapters(page: $page, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+      edges {
+        cursor
+        node {
+          ...DVRChapterRefFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+
+query GetDvrRecording($id: ID!) {
+  dvrRecording(id: $id) {
+    ...DVRRequestFields
+  }
+}

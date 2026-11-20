@@ -10,7 +10,7 @@ func TestPlaybackProtocolSeparatesRequestsFromConnectorObservations(t *testing.T
 		"MIST_WEBRTC": "webrtc", "wswebrtc": "webrtc", "WHEP": "whep", "mews": "wsmp4", "wsmp4": "wsmp4",
 		"hls_cmaf": "cmaf", "hss": "smoothstreaming", "smoothstreaming": "smoothstreaming", "raw_ws": "raw_ws",
 		"json_ws": "json_ws", "h264_ws": "h264_ws", "mews_webm": "mews_webm", "http": "mist_html",
-		"hls": "hls", "HLS,HTTP": "", "json": "", "unknown": "", "": "",
+		"WEBVTT": "webvtt", "hls": "hls", "HLS,HTTP": "", "json": "", "unknown": "", "": "",
 	} {
 		if got := PlaybackProtocol(requested); got != want {
 			t.Errorf("PlaybackProtocol(%q)=%q, want %q", requested, got, want)
@@ -168,5 +168,13 @@ func TestResolvePlaybackURLRejectsAmbiguousOrUnsafeReports(t *testing.T) {
 	outputs = map[string]any{"HTTP": "http://HOST:8080/$.html", "WebRTC": "ws://HOST:8200/webrtc/$", "WHEP": true}
 	if got := ResolvePlaybackURL(outputs, "https://edge", "whep", "key"); got != "" {
 		t.Fatalf("malformed explicit WHEP bypassed: %q", got)
+	}
+}
+
+func TestWebVTTUsesReportedSubtitleListener(t *testing.T) {
+	outputs := map[string]any{"SubRip": "http://HOST:18080/$.srt"}
+	got := ResolvePlaybackURL(outputs, "https://edge.example/view", "webvtt", "vod+public")
+	if got != "https://edge.example/view/vod+public.webvtt" {
+		t.Fatalf("subtitle URL = %q", got)
 	}
 }

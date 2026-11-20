@@ -3,7 +3,12 @@
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { GetStorageArtifactsConnectionStore, type MediaRetentionTarget$options } from "$houdini";
+  import {
+    GetStorageArtifactsConnectionStore,
+    GetRecordingChaptersStore,
+    type GetRecordingChapters$result,
+    type MediaRetentionTarget$options,
+  } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
@@ -14,6 +19,17 @@
   import { formatDate } from "$lib/utils/stream-helpers";
 
   const artifactsStore = new GetStorageArtifactsConnectionStore();
+  const chaptersStore = new GetRecordingChaptersStore();
+  type SavedChapter = NonNullable<
+    NonNullable<NonNullable<GetRecordingChapters$result["dvrRecording"]>["chapters"]>["nodes"]
+  >[number];
+  let chapters = $state<SavedChapter[]>([]);
+  let chaptersError = $state(false);
+  let chaptersLoading = $state(false);
+  let chaptersCursor = $state<string | null>(null);
+  let moreChapters = $state(false);
+  let recordingId = $state<string | null>(null);
+  let resolvedHash = $state<string | null>(null);
 
   let hash = $derived(page.params.hash as string);
   let loading = $state(true);
@@ -26,7 +42,9 @@
     return $artifactsStore.data?.storageArtifactsConnection?.nodes ?? [];
   }
   // Resolve the single artifact via the exact tenant-scoped hash lookup.
-  let artifact = $derived<ArtifactNode | null>(pickNodes().find((n) => n.hash === hash) ?? null);
+  let artifact = $derived<ArtifactNode | null>(
+    pickNodes().find((n) => n.hash === (resolvedHash ?? hash)) ?? null
+  );
   // False when the lifecycle backend was unavailable: the flags are unknown, not false,
   // so the tier/lifecycle presentation must show "unknown", not inactive/not-synced.
   let lifecycleAvailable = $derived(
@@ -165,15 +183,45 @@
     return pills;
   });
 
+  async function loadChapters(id: string, more = false) {
+    chaptersLoading = true;
+    chaptersError = false;
+    try {
+      const result = await chaptersStore.fetch({
+        policy: "NetworkOnly",
+        variables: { id, first: 25, after: more ? chaptersCursor : null },
+      });
+      const recording = result.data?.dvrRecording;
+      if (!recording) throw new Error("Recording is unavailable");
+      recordingId = recording.id ?? id;
+      resolvedHash = recording.dvrHash;
+      if (!recording.chapters) throw new Error("Saved chapters are unavailable");
+      chapters = more ? [...chapters, ...recording.chapters.nodes] : [...recording.chapters.nodes];
+      chaptersCursor = recording.chapters.pageInfo.endCursor;
+      moreChapters = recording.chapters.pageInfo.hasNextPage;
+    } catch {
+      chaptersError = true;
+    } finally {
+      chaptersLoading = false;
+    }
+  }
+
   async function load() {
     loading = true;
     loadError = false;
     try {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(hash)) {
+        await loadChapters(hash);
+      }
       const result = await artifactsStore.fetch({
-        variables: { input: { artifactHash: hash, first: 1 } },
+        variables: { input: { artifactHash: resolvedHash ?? hash, first: 1 } },
       });
       // Houdini may resolve with an in-band errors array — a failed request must not
       // masquerade as "asset not found".
+      const saved = result.data?.storageArtifactsConnection?.nodes.find(
+        (node) => node.hash === (resolvedHash ?? hash)
+      );
+      if (saved?.kind === "DVR" && !recordingId) await loadChapters(saved.id);
       const errs = (result as { errors?: unknown[] })?.errors;
       if (Array.isArray(errs) && errs.length > 0) {
         loadError = true;
@@ -253,6 +301,57 @@
       </div>
     {:else}
       <div class="dashboard-grid">
+        {#if artifact.parentRecordingId}
+          <div class="slab col-span-full slab-body--padded">
+            <a
+              class="text-primary text-sm hover:underline"
+              href={resolve("/library/[hash]", { hash: artifact.parentRecordingId })}
+              >Open parent recording</a
+            >
+          </div>
+        {/if}
+        {#if artifact.kind === "DVR"}
+          <section class="slab col-span-full">
+            <div class="slab-header">
+              <h3 class="font-semibold text-xs uppercase tracking-wide">Saved chapters</h3>
+            </div>
+            <div class="slab-body--padded space-y-3">
+              {#if chaptersError}
+                <p class="text-sm text-destructive">Saved chapters are unavailable.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => loadChapters(recordingId ?? artifact.id)}>Retry chapters</Button
+                >
+              {:else if chapters.length === 0}
+                <p class="text-sm text-muted-foreground">
+                  {chaptersLoading ? "Loading chapters…" : "No saved chapters yet."}
+                </p>
+              {/if}
+              {#each chapters as chapter (chapter.chapterId)}
+                <div class="flex items-center justify-between gap-3 text-sm">
+                  <span
+                    >{formatDate(new Date(chapter.startMs).toISOString())} · {chapter.state.toLowerCase()}</span
+                  >
+                  {#if chapter.playbackId && ["FINALIZED", "FROZEN", "RECLAIMED"].includes(chapter.state)}
+                    <a
+                      class="text-primary hover:underline"
+                      href={resolve(`/view?type=vod&id=${encodeURIComponent(chapter.playbackId)}`)}
+                      >Play chapter</a
+                    >
+                  {/if}
+                </div>
+              {/each}
+              {#if moreChapters}<Button
+                  variant="outline"
+                  size="sm"
+                  disabled={chaptersLoading}
+                  onclick={() => loadChapters(recordingId ?? artifact.id, true)}
+                  >Load more chapters</Button
+                >{/if}
+            </div>
+          </section>
+        {/if}
         <!-- Playback -->
         {#if artifact.playbackId}
           <div class="slab col-span-full">

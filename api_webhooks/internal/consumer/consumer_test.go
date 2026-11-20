@@ -73,12 +73,12 @@ func TestHandleStoresPublicTenantEvents(t *testing.T) {
 
 func TestHandleDropsWhatIsNotForDelivery(t *testing.T) {
 	tenant := uuid.NewString()
-	internal := message(t, tenant, &internalv1.RecordingChapterReady{ChapterId: "c1"})
+	internal := message(t, tenant, &internalv1.ArtifactNodeCopyChanged{ArtifactHash: "c1"})
 	// Not public by header: dropped before decoding, even with a garbage body.
 	undecodableInternal := internal
 	undecodableInternal.Value = []byte{0xff, 0xff}
 	// An internal type under a forged public header.
-	forged := message(t, tenant, &internalv1.RecordingChapterReady{ChapterId: "c1"})
+	forged := message(t, tenant, &internalv1.ArtifactNodeCopyChanged{ArtifactHash: "c1"})
 	forged.Headers[events.HeaderVisibility] = events.VisibilityPublic
 	// A public type the registry does not know.
 	unknown := message(t, tenant, &publicv1.StreamLive{StreamId: "s1"})
@@ -174,5 +174,23 @@ func TestRegisterSubscribesLocalAndMirroredCopies(t *testing.T) {
 	}
 	if names[1] != "bosun-domain-mirror:eu" {
 		t.Fatalf("consumer names = %v", names)
+	}
+}
+
+func TestStreamIntegrationEventsReachWebhookLedger(t *testing.T) {
+	for _, name := range []string{"stream.ended", "stream.ingest_disconnected", "recording.chapter_ready"} {
+		t.Run(name, func(t *testing.T) {
+			spec, ok := events.Lookup(name)
+			if !ok || !spec.Public() {
+				t.Fatalf("missing public contract %s", name)
+			}
+			rec := &fakeRecorder{}
+			if err := (&Handler{Recorder: rec}).Handle(t.Context(), message(t, uuid.NewString(), spec.NewMessage())); err != nil {
+				t.Fatal(err)
+			}
+			if len(rec.got) != 1 || rec.got[0].Type != name {
+				t.Fatalf("event did not reach the webhook ledger: %+v", rec.got)
+			}
+		})
 	}
 }

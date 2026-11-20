@@ -872,7 +872,7 @@ func ybRoleRunPlaybook(t *testing.T, repo, container string, vars map[string]any
 	}
 	files := map[string]string{
 		"vars.json":     string(encoded),
-		"inventory.ini": container + " ansible_connection=community.docker.docker ansible_python_interpreter=/usr/bin/python3\n",
+		"inventory.ini": container + " ansible_connection=community.docker.docker ansible_python_interpreter=/usr/bin/python3.11\n",
 		"playbook.yml":  "- hosts: all\n  gather_facts: true\n  tasks:\n" + tasks,
 	}
 	for name, content := range files {
@@ -946,6 +946,14 @@ func ybRoleStartEngine(t *testing.T, repo, container string) {
 			t.Fatalf("%s did not accept YSQL connections within 3 minutes:\n%s", container, logs)
 		}
 		time.Sleep(2 * time.Second)
+	}
+	// Ansible 2.21 requires Python 3.9 or newer before gathering facts; AlmaLinux 8's
+	// default Python is 3.6. Bootstrap the same interpreter used by the role's psycopg2 package.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if out, installErr := exec.CommandContext(ctx, "docker", "exec", "--user", "0", container,
+		"dnf", "-qy", "install", "python3.11").CombinedOutput(); installErr != nil {
+		t.Fatalf("bootstrap Ansible Python in %s: %v: %s", container, installErr, out)
 	}
 	if out, linkErr := exec.Command("docker", "exec", container, "sh", "-c",
 		"mkdir -p /opt/yugabyte && ln -sfn /home/yugabyte /opt/yugabyte/current").CombinedOutput(); linkErr != nil {

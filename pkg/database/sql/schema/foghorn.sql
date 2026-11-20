@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- and a same-revision/not-found result never falsely marks a row synchronized.
     catalog_revision BIGINT NOT NULL DEFAULT 0,
     catalog_synced_rev BIGINT NOT NULL DEFAULT 0,
+    catalog_capture_times_synced_rev BIGINT NOT NULL DEFAULT 0,
     -- Projection quarantine: when the reconciler can't build a valid snapshot for a row
     -- (unsupported type, malformed persisted tracks), it records the offending revision +
     -- reason here instead of falsely advancing catalog_synced_rev (which would claim
@@ -284,6 +285,10 @@ ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS catalog_projection_attemp
 -- catalog_revision, which advances only on catalog-projected field changes.
 ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_capture_projection
+    ON foghorn.artifacts(origin_cluster_id,catalog_synced_rev,catalog_revision)
+    WHERE artifact_type='dvr' AND catalog_revision>catalog_capture_times_synced_rev;
+
 -- Source-owned per-artifact catalog revision. Updates to one artifact serialize on its row,
 -- so OLD+1 is the ordering domain Commodore actually compares and cannot regress across
 -- Yugabyte sessions. The BEFORE UPDATE trigger skips watermark-only writes
@@ -322,6 +327,8 @@ CREATE TRIGGER artifact_catalog_revision_upd
             OR OLD.duration_ms IS DISTINCT FROM NEW.duration_ms
             OR OLD.duration_seconds IS DISTINCT FROM NEW.duration_seconds
             OR OLD.tracks IS DISTINCT FROM NEW.tracks
+            OR OLD.started_at IS DISTINCT FROM NEW.started_at
+            OR OLD.ended_at IS DISTINCT FROM NEW.ended_at
             OR OLD.sync_status IS DISTINCT FROM NEW.sync_status
             OR OLD.dtsh_synced IS DISTINCT FROM NEW.dtsh_synced
             OR OLD.frozen_at IS DISTINCT FROM NEW.frozen_at
@@ -751,6 +758,9 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     started_at_unix_millis BIGINT NOT NULL CHECK (started_at_unix_millis > 0),
     started_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at               TIMESTAMPTZ,
+    buffer_ended_at        TIMESTAMPTZ,
+    ingest_disconnected_at TIMESTAMPTZ,
+    ingest_disconnect_requested_at TIMESTAMPTZ,
     ended_at_unix_millis   BIGINT,
     ended_reason           VARCHAR(64),
     -- Virtual media cluster this session was ADMITTED into, captured at mint. Placement claim,
@@ -819,6 +829,8 @@ ALTER TABLE foghorn.ingest_sessions
     ADD COLUMN IF NOT EXISTS tenant_authority_version BIGINT,
     ADD COLUMN IF NOT EXISTS processes_json TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS capacity_max_streams INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_stream_history
+    ON foghorn.ingest_sessions(tenant_id,stream_id,started_at DESC,id) WHERE stream_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_pid
     ON foghorn.ingest_sessions(tenant_id, node_id, connector_pid)
     WHERE ended_at IS NULL;
@@ -895,6 +907,95 @@ CREATE TABLE IF NOT EXISTS foghorn.source_projection_revision_counter (
     PRIMARY KEY (tenant_id, stream_internal_name)
 );
 
+-- Each direct upstream buffer owns one row; relay destinations do not admit pull ingest.
+CREATE TABLE IF NOT EXISTS foghorn.pull_ingest_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    cell_session_id UUID NOT NULL DEFAULT gen_random_uuid(),
+    buffer_ended_at TIMESTAMPTZ,
+    stream_id UUID NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    node_id VARCHAR(100) NOT NULL,
+    ingest_cluster_id VARCHAR(100) NOT NULL,
+    admission_state VARCHAR(16) NOT NULL DEFAULT 'pending',
+    buffer_pid BIGINT,
+    start_event_id TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at_unix_millis BIGINT NOT NULL DEFAULT 0,
+    playable_at TIMESTAMPTZ,
+    playable_at_unix_millis BIGINT,
+    ended_at TIMESTAMPTZ,
+    ended_at_unix_millis BIGINT,
+    ended_reason VARCHAR(100),
+    CONSTRAINT ck_foghorn_pull_ingest_admission_state CHECK (admission_state IN ('pending','active')),
+    CONSTRAINT ck_foghorn_pull_ingest_buffer CHECK (buffer_pid IS NULL OR buffer_pid > 0),
+    CONSTRAINT ck_foghorn_pull_ingest_active_buffer CHECK (admission_state <> 'active' OR
+        (buffer_pid IS NOT NULL AND start_event_id IS NOT NULL AND playable_at IS NOT NULL AND playable_at_unix_millis > 0))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_pull_ingest_open_buffer
+    ON foghorn.pull_ingest_sessions(tenant_id,node_id,buffer_pid)
+    WHERE ended_at IS NULL AND buffer_pid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_pull_ingest_open_node_stream
+    ON foghorn.pull_ingest_sessions(tenant_id,stream_internal_name,node_id)
+    WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_stream_history
+    ON foghorn.pull_ingest_sessions(tenant_id,stream_id,started_at DESC,id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_open_stream
+    ON foghorn.pull_ingest_sessions(tenant_id,stream_internal_name)
+    WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_node_buffer
+    ON foghorn.pull_ingest_sessions(tenant_id,node_id,buffer_pid);
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_node_open
+    ON foghorn.pull_ingest_sessions(node_id,started_at ASC)
+    WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_node_end
+    ON foghorn.pull_ingest_sessions(tenant_id,stream_internal_name,node_id,ended_at_unix_millis DESC)
+    WHERE ended_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_pending_range
+    ON foghorn.pull_ingest_sessions(started_at ASC,id)
+    WHERE ended_at IS NULL AND admission_state='pending';
+CREATE INDEX IF NOT EXISTS idx_foghorn_pull_ingest_ended_range
+    ON foghorn.pull_ingest_sessions(ended_at ASC,id)
+    WHERE ended_at IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION foghorn.admit_pull_ingest_v1(
+    p_tenant_id UUID, p_stream_id UUID, p_internal_name TEXT, p_node_id TEXT,
+    p_cluster_id TEXT, p_max_streams INTEGER)
+RETURNS JSONB LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog,foghorn AS $$
+DECLARE
+    existing UUID;
+    occupied BIGINT;
+BEGIN
+    IF p_tenant_id IS NULL OR p_stream_id IS NULL OR btrim(COALESCE(p_internal_name,''))=''
+       OR btrim(COALESCE(p_node_id,''))='' OR btrim(COALESCE(p_cluster_id,''))=''
+       OR p_max_streams IS NULL OR p_max_streams < 0 THEN
+        RAISE EXCEPTION 'pull admission scope missing' USING ERRCODE='22023';
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtext('tenant-capacity:'||octet_length(p_tenant_id::text)||':'||p_tenant_id::text)::bigint);
+    PERFORM pg_advisory_xact_lock(hashtext(octet_length(p_tenant_id::text)||':'||p_tenant_id::text||':'||octet_length(p_internal_name)||':'||p_internal_name)::bigint);
+    SELECT s.id INTO existing FROM foghorn.pull_ingest_sessions s
+      WHERE s.tenant_id=p_tenant_id AND s.stream_internal_name=p_internal_name
+        AND s.node_id=p_node_id AND s.ended_at IS NULL;
+    IF FOUND THEN
+        RETURN jsonb_build_object('admitted',true,'session_id',existing);
+    END IF;
+    IF p_max_streams > 0 AND NOT EXISTS (
+        SELECT 1 FROM foghorn.pull_ingest_sessions s WHERE s.tenant_id=p_tenant_id
+          AND s.stream_internal_name=p_internal_name AND s.ended_at IS NULL) THEN
+        SELECT (SELECT count(*) FROM foghorn.ingest_sessions s WHERE s.tenant_id=p_tenant_id AND s.ended_at IS NULL)
+             + (SELECT count(DISTINCT s.stream_internal_name) FROM foghorn.pull_ingest_sessions s
+                 WHERE s.tenant_id=p_tenant_id AND s.ended_at IS NULL) INTO occupied;
+        IF occupied >= p_max_streams THEN RETURN jsonb_build_object('admitted',false); END IF;
+    END IF;
+    INSERT INTO foghorn.pull_ingest_sessions(tenant_id,stream_id,stream_internal_name,node_id,ingest_cluster_id,cell_session_id)
+      VALUES(p_tenant_id,p_stream_id,p_internal_name,p_node_id,p_cluster_id,
+        COALESCE((SELECT s.cell_session_id FROM foghorn.pull_ingest_sessions s
+          WHERE s.tenant_id=p_tenant_id AND s.stream_internal_name=p_internal_name AND s.ended_at IS NULL
+          ORDER BY s.started_at,s.id LIMIT 1),gen_random_uuid())) RETURNING id INTO existing;
+    RETURN jsonb_build_object('admitted',true,'session_id',existing);
+END;
+$$;
+
 -- Durable, revision-fenced stream-offline work. The transition is enqueued under the same
 -- (tenant, stream) advisory lock as admission; workers apply it only while no newer active session
 -- exists. All effects are idempotent, so a lease loss or process crash safely retries the row.
@@ -928,6 +1029,14 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_offline_effects (
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     applied_at           TIMESTAMPTZ,
+    drain_publisher      BOOLEAN NOT NULL DEFAULT FALSE,
+    drain_done           BOOLEAN NOT NULL DEFAULT TRUE,
+    drain_runtime_name   TEXT NOT NULL DEFAULT '',
+    state_superseded     BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT ck_foghorn_ingest_offline_effects_drain_binding
+        CHECK (NOT drain_publisher OR (source_generation IS NOT NULL AND drain_runtime_name <> '')),
+    CONSTRAINT ck_foghorn_ingest_offline_effects_drain_settled
+        CHECK (state NOT IN ('applied', 'superseded') OR NOT drain_publisher OR drain_done),
     UNIQUE (tenant_id, stream_internal_name, source_revision)
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending_range
@@ -937,6 +1046,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending_range
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_terminal_range
     ON foghorn.ingest_offline_effects(updated_at ASC)
     WHERE state IN ('applied', 'superseded', 'failed');
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_drain_ack
+    ON foghorn.ingest_offline_effects(source_node_id, source_generation)
+    WHERE drain_publisher AND NOT drain_done AND state IN ('pending', 'failed');
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_teardown_ack
     ON foghorn.ingest_offline_effects(source_node_id, source_generation)
     WHERE teardown_stream AND NOT teardown_done AND state IN ('pending', 'failed');
@@ -2143,6 +2256,22 @@ CREATE OR REPLACE TRIGGER trg_ingest_runtime_binding
 BEFORE UPDATE OF runtime_layout_version,runtime_name,id,node_id,stream_internal_name,tenant_id ON foghorn.ingest_sessions
 FOR EACH ROW EXECUTE FUNCTION foghorn.guard_ingest_runtime_binding();
 
+CREATE OR REPLACE FUNCTION foghorn.enqueue_publisher_session_event_v1(p_tenant uuid, p_stream uuid, p_event jsonb, p_session uuid, p_prefix text)
+RETURNS void LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog, foghorn AS $$
+BEGIN
+    -- Older replicas provide no prefix. Upgraded producers supply the generated
+    -- protobuf string tag and the fixed UUID length; SQL supplies the locked UUID.
+    IF p_prefix IS NOT NULL THEN
+        IF p_session IS NULL OR octet_length(decode(p_prefix,'base64')) <> 2 THEN
+            RAISE EXCEPTION 'publisher event session identity missing' USING ERRCODE='22023';
+        END IF;
+        p_event := jsonb_set(p_event,'{Data}',to_jsonb(encode(
+            decode(p_event->>'Data','base64') || decode(p_prefix,'base64') || convert_to(p_session::text,'UTF8'), 'base64')));
+    END IF;
+    PERFORM foghorn.enqueue_publisher_event_v1(p_tenant,p_stream,p_event);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION foghorn.prepare_publisher_admission_v1(p jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog, foghorn AS $$
 DECLARE
@@ -2181,7 +2310,7 @@ BEGIN
         IF current_row.stream_internal_name <> stream OR current_row.connector_pid <> pid THEN
             RETURN jsonb_build_object('outcome', 3);
         END IF;
-        IF current_row.ended_at IS NOT NULL THEN
+        IF current_row.ended_at IS NOT NULL OR current_row.ingest_disconnect_requested_at IS NOT NULL THEN
             RETURN jsonb_build_object('outcome', 2, 'generation', current_row.id);
         END IF;
         IF current_row.runtime_layout_version=1 AND layout_version<>1 THEN
@@ -2228,7 +2357,8 @@ BEGIN
         IF EXISTS (SELECT 1 FROM foghorn.ingest_close_tombstones t WHERE t.tenant_id=tid AND t.node_id=node
                    AND t.connector_pid=pid AND t.stream_internal_name=stream AND t.close_unix_millis >= fired) THEN
             result_outcome := 2;
-        ELSIF cap > 0 AND (SELECT count(*) FROM foghorn.ingest_sessions s WHERE s.tenant_id=tid AND s.ended_at IS NULL)
+        ELSIF cap > 0 AND ((SELECT count(*) FROM foghorn.ingest_sessions s WHERE s.tenant_id=tid AND s.ended_at IS NULL)
+            + (SELECT count(DISTINCT s.stream_internal_name) FROM foghorn.pull_ingest_sessions s WHERE s.tenant_id=tid AND s.ended_at IS NULL))
               - (CASE WHEN stale_reason='superseded_by_new_node' THEN 1 ELSE 0 END) >= cap THEN
             result_outcome := 4;
         END IF;
@@ -2240,7 +2370,7 @@ BEGIN
                 UPDATE foghorn.ingest_sessions SET ended_at=NOW(), ended_at_unix_millis=fired, ended_reason=stale_reason
                   WHERE id=incumbent.id AND tenant_id=tid;
             END IF;
-            PERFORM foghorn.enqueue_publisher_event_v1(tid, sid, p->'idle_event');
+            PERFORM foghorn.enqueue_publisher_session_event_v1(tid, sid, p->'idle_event', incumbent.id, p->>'idle_session_prefix');
             WITH stopped AS (
                 UPDATE foghorn.artifacts SET dvr_start_dispatch=jsonb_set(COALESCE(dvr_start_dispatch,'{}'::jsonb),'{state}','"stop_pending"'::jsonb),
                     status='stopping', updated_at=NOW()
@@ -2275,7 +2405,7 @@ BEGIN
         VALUES(generation,tid,node,stream,pid,execution,fired,NULLIF(p->'dvr_intent','null'::jsonb),NULLIF(p->>'ingest_cluster_id',''),sid,
           NULLIF(p->'authority'->>'MediaAuthorityID',''),NULLIF((p->'authority'->>'MediaAuthorityVersion')::bigint,0),
           NULLIF((p->'authority'->>'TenantAuthorityVersion')::bigint,0),COALESCE(p->'authority'->>'ProcessesJSON',''),cap,1,COALESCE((p->>'strict_lease_owner')::boolean,false),lease_epoch,layout_version,bound_runtime);
-        PERFORM foghorn.enqueue_publisher_event_v1(tid,sid,p->'connected_event');
+        PERFORM foghorn.enqueue_publisher_session_event_v1(tid,sid,p->'connected_event', generation, p->>'connected_session_prefix');
         SELECT * INTO current_row FROM foghorn.ingest_sessions s WHERE s.id=generation AND s.tenant_id=tid;
     END IF;
     revision := current_row.source_revision;
@@ -2313,7 +2443,7 @@ BEGIN
     IF EXISTS(SELECT 1 FROM foghorn.ingest_admission_abandonments a WHERE a.node_id=node AND a.start_trigger_uuid=execution) THEN RETURN false; END IF;
     UPDATE foghorn.ingest_sessions SET projection_state='active',projected_at=COALESCE(projected_at,NOW())
       WHERE id=generation AND tenant_id=tid AND stream_internal_name=stream AND node_id=node
-        AND start_trigger_uuid=execution AND ended_at IS NULL AND source_revision=revision;
+        AND start_trigger_uuid=execution AND ended_at IS NULL AND ingest_disconnect_requested_at IS NULL AND source_revision=revision;
     IF NOT FOUND THEN RETURN false; END IF;
     IF p ? 'decision_expires_at' AND (p->>'decision_expires_at')::timestamptz <= clock_timestamp() THEN
         RAISE EXCEPTION 'publisher placement decision expired' USING ERRCODE='22023';
@@ -2396,3 +2526,33 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
 );
 INSERT INTO public._schema_baseline (floor)
     SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+
+ALTER TABLE foghorn.vod_metadata
+    ADD COLUMN IF NOT EXISTS keep_original BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS original_s3_key TEXT,
+    ADD COLUMN IF NOT EXISTS original_size_bytes BIGINT;
+ALTER TABLE foghorn.vod_metadata DROP CONSTRAINT IF EXISTS chk_vod_original_retention;
+ALTER TABLE foghorn.vod_metadata ADD CONSTRAINT chk_vod_original_retention CHECK (
+    (original_s3_key IS NULL AND original_size_bytes IS NULL) OR
+    (keep_original AND original_s3_key IS NOT NULL AND original_s3_key <> ''
+     AND original_size_bytes IS NOT NULL AND original_size_bytes > 0)
+) NOT VALID;
+
+ALTER TABLE foghorn.vod_metadata VALIDATE CONSTRAINT chk_vod_original_retention;
+
+-- A clean baseline has no pre-retention workers. Upgrades activate only in postdeploy.
+CREATE TABLE IF NOT EXISTS foghorn.vod_original_retention_activation (
+    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+    activated_at TIMESTAMPTZ
+);
+INSERT INTO foghorn.vod_original_retention_activation (singleton, activated_at)
+VALUES (true, NOW())
+ON CONFLICT (singleton) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_billable_storage
+    ON foghorn.artifacts (tenant_id ASC, artifact_type ASC, artifact_hash ASC)
+    INCLUDE (size_bytes, sync_status)
+    WHERE tenant_id IS NOT NULL AND federated_pointer = false
+      AND status <> 'deleted'
+      AND (artifact_type <> 'vod' OR status NOT IN ('failed', 'expired', 'aborted'))
+      AND durable_backend_local = true;

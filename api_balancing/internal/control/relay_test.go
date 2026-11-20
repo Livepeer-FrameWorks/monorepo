@@ -788,14 +788,17 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
 	sendByField := map[string]func() error{
-		"config_seed":         func() error { return SendConfigSeed("node-1", &ipcpb.ConfigSeed{NodeId: "node-1"}) },
-		"dvr_start":           func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) },
-		"dvr_stop":            func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) },
-		"clip_delete":         func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) },
-		"dvr_delete":          func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) },
-		"vod_delete":          func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) },
-		"dtsh_sync":           func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) },
-		"stop_sessions":       func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) },
+		"config_seed":   func() error { return SendConfigSeed("node-1", &ipcpb.ConfigSeed{NodeId: "node-1"}) },
+		"dvr_start":     func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) },
+		"dvr_stop":      func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) },
+		"clip_delete":   func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) },
+		"dvr_delete":    func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) },
+		"vod_delete":    func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) },
+		"dtsh_sync":     func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) },
+		"stop_sessions": func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) },
+		"stop_claimed_sessions": func() error {
+			return SendClaimedStopSessionsContext(t.Context(), "node-1", &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "stream", SourceGeneration: "10000000-0000-4000-8000-000000000001", ConnectorPid: 123, FenceAdmission: true}}})
+		},
 		"invalidate_sessions": func() error { return SendInvalidateSessions("node-1", &ipcpb.InvalidateSessionsRequest{}) },
 		"deactivate_push_targets": func() error {
 			return SendDeactivatePushTargets(context.Background(), "node-1", &ipcpb.DeactivatePushTargets{})

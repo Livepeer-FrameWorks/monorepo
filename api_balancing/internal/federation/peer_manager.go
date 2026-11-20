@@ -2296,6 +2296,10 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 		if isOrigin {
 			generation, revision = confirmedPublisherBinding(entry, snap.NodeID, ss.TenantID, pm.clusterID)
 		}
+		if generation != "" && ns.ClusterID == "" {
+			continue
+		}
+
 		var leaseEpoch int64
 		var publisherRuntime string
 		if generation != "" {
@@ -2325,7 +2329,6 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 			DtscObservedAt:    dtscObservedAt,
 			SourceObservedAt:  sourceObservedSeconds,
 			IsOrigin:          isOrigin,
-			BwAvailable:       snap.BWAvailable,
 			CpuPercent:        snap.CPU,
 			ViewerCount:       uint32(sm.GetNodeActiveViewers(snap.NodeID)),
 			GeoLat:            snap.GeoLatitude,
@@ -2338,7 +2341,7 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 			SourceLeaseEpoch:  leaseEpoch,
 			SourceRuntimeName: publisherRuntime,
 			SourceRevision:    revision,
-			ClusterId:         snap.ClusterID,
+			ClusterId:         ns.ClusterID,
 		})
 	}
 	if len(edges) == 0 {

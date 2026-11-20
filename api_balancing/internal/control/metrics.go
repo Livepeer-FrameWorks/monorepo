@@ -13,6 +13,8 @@ import (
 
 // ControlMetrics holds Prometheus metrics for the HelmsmanControl stream ingress.
 type ControlMetrics struct {
+	// PullAdmissionMisses counts playable buffers healed without a pending admission.
+	PullAdmissionMisses *prometheus.CounterVec
 	// PublisherAdmissionDuration records request-owned phase durations in seconds.
 	// Labels are fixed phase/outcome enums; identities never become labels.
 	PublisherAdmissionDuration *prometheus.HistogramVec

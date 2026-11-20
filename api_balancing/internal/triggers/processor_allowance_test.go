@@ -138,8 +138,8 @@ func TestFreeTierAllowanceState(t *testing.T) {
 func TestIngestLoadThresholdsDefaults(t *testing.T) {
 	useFoghornConfig(t, &appconfig.Foghorn{})
 	got := ingestLoadThresholds()
-	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.95 {
-		t.Errorf("defaults: got %+v, want over=0.5 redline=0.95", got)
+	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.85 {
+		t.Errorf("defaults: got %+v, want over=0.5 redline=0.85", got)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestIngestLoadThresholdsOverridesAndFallback(t *testing.T) {
 	settings.IngestRejectOverAllowanceLoad = "garbage"
 	settings.IngestRejectFreeLoad = "1.5" // out of range
 	got = ingestLoadThresholds()
-	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.95 {
+	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.85 {
 		t.Errorf("garbage/out-of-range fall back to defaults: got %+v", got)
 	}
 }
@@ -164,8 +164,8 @@ func TestIngestLoadThresholdsOverridesAndFallback(t *testing.T) {
 func TestViewerLoadThresholdsDefaults(t *testing.T) {
 	useFoghornConfig(t, &appconfig.Foghorn{})
 	got := viewerLoadThresholds()
-	if got.rejectOverAllowance != 0.8 || got.rejectAnyFree != 0.95 {
-		t.Errorf("viewer defaults: got %+v, want over=0.8 redline=0.95", got)
+	if got.rejectOverAllowance != 0.8 || got.rejectAnyFree != 0.85 {
+		t.Errorf("viewer defaults: got %+v, want over=0.8 redline=0.85", got)
 	}
 }
 
@@ -326,15 +326,15 @@ func TestEvaluateViewerAdmissionFreeOverAllowanceAt85PctRejects(t *testing.T) {
 	}
 }
 
-func TestEvaluateViewerAdmissionFreeUnderAllowanceAt85PctAdmits(t *testing.T) {
+func TestEvaluateViewerAdmissionFreeUnderAllowanceAt85PctRejects(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	defer sm.Shutdown()
 	seedClusterNode(sm, "n1", "media-cluster-a", 85)
 
 	p := newTestProcessor(t)
 	ctx := streamContext{TenantID: "free-tenant", IsFreeTier: true, AllowanceExhausted: false}
-	if _, blocked := p.evaluateViewerAdmission(ctx, "media-cluster-a"); blocked {
-		t.Fatal("viewer of free under-allowance stream at 85%% (<95%% redline) must admit")
+	if _, blocked := p.evaluateViewerAdmission(ctx, "media-cluster-a"); !blocked {
+		t.Fatal("viewer of free under-allowance stream at the 85% redline must reject")
 	}
 }
 

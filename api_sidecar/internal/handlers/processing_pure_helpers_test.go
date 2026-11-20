@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -74,7 +75,7 @@ func TestRenditionHeightsClose(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renditionHeightsClose(tc.actual, tc.expected); got != tc.want {
+			if got := mist.RenditionShortSideMatches(tc.actual*2, tc.actual, tc.expected); got != tc.want {
 				t.Fatalf("renditionHeightsClose(%d, %d) = %v, want %v", tc.actual, tc.expected, got, tc.want)
 			}
 		})

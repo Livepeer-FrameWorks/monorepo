@@ -147,7 +147,7 @@ type Candidate struct {
 	// report, or is empty when all are current. Diagnostic only; never read by
 	// the decision.
 	EvidenceGap    string
-	BWAvailable    uint64 // bytes/second after admission headroom
+	BWAvailable    uint64 // budget less committed bytes/second, before admission headroom
 	BWLimit        uint64 // bytes/second
 	CPUPercent     float64
 	RAMUsed        uint64

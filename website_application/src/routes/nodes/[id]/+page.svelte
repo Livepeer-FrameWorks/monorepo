@@ -28,6 +28,7 @@
   import { formatBytes } from "$lib/utils/formatters.js";
   import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import { getPlatformOperator } from "$lib/stores/capabilities.svelte";
+  import NodeCapacityPanel from "$lib/components/nodes/NodeCapacityPanel.svelte";
   import NodeModePanel from "$lib/components/nodes/NodeModePanel.svelte";
   import OpenMistAdminButton from "$lib/components/nodes/OpenMistAdminButton.svelte";
 
@@ -457,6 +458,18 @@
             </div>
           </div>
         </div>
+
+        {#if node.nodeType?.toLowerCase() === "edge"}
+          <div class="slab col-span-full">
+            <NodeCapacityPanel
+              nodeId={node.nodeId}
+              capacity={node.capacity ?? null}
+              onCapacityChanged={async () => {
+                await nodeStore.fetch({ policy: "NetworkOnly", variables: { id: nodeRelayId } });
+              }}
+            />
+          </div>
+        {/if}
 
         <!-- Operational mode controls -->
         {#if node.nodeType?.toLowerCase() === "edge" && node.effectiveMode}

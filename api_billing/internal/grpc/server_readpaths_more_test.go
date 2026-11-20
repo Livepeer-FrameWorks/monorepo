@@ -301,14 +301,14 @@ func TestGetBillingTierMapsRowAndSubqueries(t *testing.T) {
 		"is_active", "tier_level", "is_enterprise",
 		"created_at", "updated_at",
 		"is_default_prepaid", "is_default_postpaid",
-		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
+		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod", "transcode_ladders", "default_transcode_ladder",
 	}).AddRow(
 		tierID, "pro", "Pro", "Pro plan", 49.0, "USD", "monthly",
 		[]byte(`{"sla":true,"processing_customizable":true}`), "priority", "gold", true,
 		true, int32(3), false,
 		now, now,
 		true, false,
-		[]byte(`["live+"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
+		[]byte(`["live+"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), "",
 	)
 	mock.ExpectQuery(`FROM purser\.billing_tiers\s+WHERE id = \$1`).
 		WithArgs(tierID).

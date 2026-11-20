@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/appconfig"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
 
@@ -30,6 +31,7 @@ type IngestGenerationRecord struct {
 	Generation   string `json:"generation"`
 	ConnectorPID int64  `json:"connector_pid"`
 	Active       bool   `json:"active"`
+	Revoked      bool   `json:"revoked,omitempty"`
 	UpdatedAt    int64  `json:"updated_at_unix_milli"`
 	// AdmissionKey is a one-way digest of the PUSH_REWRITE stream key that admitted the runtime. A
 	// reconnect presents the same key before Foghorn names the runtime, so the digest lets Helmsman
@@ -41,14 +43,15 @@ type IngestGenerationRecord struct {
 // indefinitely so a Helmsman restart does not lose fences for publishers that outlive it. Ended
 // entries are tombstones retained for reordered commands, then age/cap evicted.
 type IngestGenerationStore struct {
-	dir          string
-	mu           sync.RWMutex
-	records      map[string]IngestGenerationRecord
-	active       int
-	maxActive    int
-	runtimeLocks [256]sync.Mutex
-	pruneHook    func(time.Time) ([]string, error)
-	maintenance  struct {
+	dir            string
+	mu             sync.RWMutex
+	records        map[string]IngestGenerationRecord
+	active         int
+	maxActive      int
+	runtimeLocks   [256]sync.Mutex
+	admissionLocks [256]sync.Mutex
+	pruneHook      func(time.Time) ([]string, error)
+	maintenance    struct {
 		sync.Mutex
 		running   bool
 		requested bool
@@ -103,10 +106,18 @@ func (s *IngestGenerationStore) PutAdmission(runtimeName, generation string, con
 		return errors.New("ingest generation record requires runtime, generation, and positive connector PID")
 	}
 
+	rejectionKey := publisherRejectionRuntime(runtimeName, generation)
+	digest := sha256.Sum256([]byte(rejectionKey))
+	s.admissionLocks[digest[0]].Lock()
+	defer s.admissionLocks[digest[0]].Unlock()
 	runtimeLock := s.runtimeLock(runtimeName)
 	runtimeLock.Lock()
 	defer runtimeLock.Unlock()
 	s.mu.Lock()
+	if rejected := s.records[rejectionKey]; rejected.Revoked && rejected.Generation == generation {
+		s.mu.Unlock()
+		return errors.New("publisher admission generation was explicitly disconnected")
+	}
 	previous, existed := s.records[runtimeName]
 	if existed && previous.Active && previous.Generation == generation && previous.ConnectorPID == connectorPID &&
 		(admissionKey == "" || previous.AdmissionKey == admissionKey) {
@@ -324,6 +335,11 @@ func (s *IngestGenerationStore) prune(now time.Time) ([]string, error) {
 	evicted := make([]string, 0)
 	for index, record := range tombstones {
 		expired := record.UpdatedAt <= 0 || now.Sub(time.UnixMilli(record.UpdatedAt)) > ingestGenerationTombstoneTTL
+		// A delayed admission remains possible for the blocking-trigger lifetime.
+		// Capacity pruning must not erase its explicit rejection during that window.
+		if record.Revoked && now.Sub(time.UnixMilli(record.UpdatedAt)) <= mist.BlockingTriggerLifetime+time.Minute {
+			continue
+		}
 		if !expired && index < maxIngestGenerationTombstones {
 			continue
 		}
@@ -370,4 +386,48 @@ func cloneIngestGenerationRecords(records map[string]IngestGenerationRecord) map
 		cloned[runtimeName] = record
 	}
 	return cloned
+}
+
+func publisherRejectionRuntime(runtimeName, generation string) string {
+	bound, err := streamident.BoundRuntimeName(mist.ExtractInternalName(runtimeName), streamident.RuntimePublisher, generation)
+	if err != nil {
+		return runtimeName
+	}
+	return bound
+}
+
+// RevokeAdmission persists an exact-generation rejection even before that
+// generation's admission reply arrives. It shares the admission lock with both
+// isolated and legacy runtime writes, so neither can overwrite the rejection.
+func (s *IngestGenerationStore) RevokeAdmission(runtimeName, generation string, connectorPID int64) error {
+	if connectorPID <= 0 {
+		return errors.New("publisher rejection requires connector identity")
+	}
+	bound, err := streamident.BoundRuntimeName(mist.ExtractInternalName(runtimeName), streamident.RuntimePublisher, generation)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(bound))
+	s.admissionLocks[digest[0]].Lock()
+	defer s.admissionLocks[digest[0]].Unlock()
+	lock := s.runtimeLock(bound)
+	lock.Lock()
+	defer lock.Unlock()
+	s.mu.RLock()
+	previous, exists := s.records[bound]
+	s.mu.RUnlock()
+	if exists && previous.Revoked && previous.Generation == generation {
+		return nil
+	}
+	record := IngestGenerationRecord{Version: ingestGenerationStoreVersion, RuntimeName: bound, Generation: generation, ConnectorPID: connectorPID, Revoked: true, UpdatedAt: time.Now().UnixMilli()}
+	if err := s.writeRecord(record); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if exists && previous.Active {
+		s.active--
+	}
+	s.records[bound] = record
+	s.mu.Unlock()
+	return nil
 }

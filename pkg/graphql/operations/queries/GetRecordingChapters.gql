@@ -1,0 +1,25 @@
+query GetRecordingChapters($id: ID!, $first: Int = 25, $after: String) {
+  dvrRecording(id: $id) {
+    id
+    dvrHash
+    status
+    startedAt
+    endedAt
+    chapters(page: { first: $first, after: $after }) {
+      nodes {
+        chapterId
+        startMs
+        endMs
+        state
+        playbackId
+        isCurrent
+        hasGaps
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+}

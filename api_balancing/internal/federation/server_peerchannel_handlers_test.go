@@ -157,7 +157,6 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 						BaseUrl:     "edge-ad.example.com",
 						DtscUrl:     "dtsc://edge-ad.example.com/stream-ad",
 						IsOrigin:    true,
-						BwAvailable: 1234,
 						CpuPercent:  15.5,
 						ViewerCount: 3,
 						GeoLat:      5.5,
@@ -200,7 +199,6 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			{
 				ClusterId: peerCluster,
 				Payload: &foghornfederationpb.PeerMessage_CapacitySummary{CapacitySummary: &foghornfederationpb.CapacitySummary{
-					TotalBandwidth:     1000,
 					AvailableBandwidth: 900,
 					TotalEdges:         2,
 					AvailableEdges:     1,

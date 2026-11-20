@@ -69,6 +69,7 @@ export interface StreamConnected {
   protocol: IngestProtocol;
   /** playback_id is the stream's public playback ID. */
   playbackId: string;
+  sessionId: string;
 }
 
 /** StreamLive reports that the stream became playable. */
@@ -79,6 +80,7 @@ export interface StreamLive {
    * not resolve the stream while the control plane was unreachable.
    */
   playbackId: string;
+  sessionId: string;
 }
 
 /** StreamIdle reports that the stream's ingest session ended. */
@@ -89,6 +91,21 @@ export interface StreamIdle {
    * not resolve the stream while the control plane was unreachable.
    */
   playbackId: string;
+  sessionId: string;
+}
+
+/** StreamEnded reports that the origin unloaded the latest ingest buffer. */
+export interface StreamEnded {
+  streamId: string;
+  playbackId: string;
+  sessionId: string;
+}
+
+/** StreamIngestDisconnected reports an explicitly requested publisher disconnect. */
+export interface StreamIngestDisconnected {
+  streamId: string;
+  sessionId: string;
+  reason: string;
 }
 
 export const StreamCreated: MessageFns<StreamCreated> = {
@@ -166,6 +183,11 @@ export const StreamConnected: MessageFns<StreamConnected> = {
         : isSet(object.playback_id)
         ? globalThis.String(object.playback_id)
         : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
     };
   },
 };
@@ -182,6 +204,11 @@ export const StreamLive: MessageFns<StreamLive> = {
         ? globalThis.String(object.playbackId)
         : isSet(object.playback_id)
         ? globalThis.String(object.playback_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
         : "",
     };
   },
@@ -200,6 +227,51 @@ export const StreamIdle: MessageFns<StreamIdle> = {
         : isSet(object.playback_id)
         ? globalThis.String(object.playback_id)
         : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+    };
+  },
+};
+
+export const StreamEnded: MessageFns<StreamEnded> = {
+  fromJSON(object: any): StreamEnded {
+    return {
+      streamId: isSet(object.streamId)
+        ? globalThis.String(object.streamId)
+        : isSet(object.stream_id)
+        ? globalThis.String(object.stream_id)
+        : "",
+      playbackId: isSet(object.playbackId)
+        ? globalThis.String(object.playbackId)
+        : isSet(object.playback_id)
+        ? globalThis.String(object.playback_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+    };
+  },
+};
+
+export const StreamIngestDisconnected: MessageFns<StreamIngestDisconnected> = {
+  fromJSON(object: any): StreamIngestDisconnected {
+    return {
+      streamId: isSet(object.streamId)
+        ? globalThis.String(object.streamId)
+        : isSet(object.stream_id)
+        ? globalThis.String(object.stream_id)
+        : "",
+      sessionId: isSet(object.sessionId)
+        ? globalThis.String(object.sessionId)
+        : isSet(object.session_id)
+        ? globalThis.String(object.session_id)
+        : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
     };
   },
 };

@@ -177,6 +177,9 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	if input.LiveVideoAbr != nil {
 		req.LiveVideoAbr = *input.LiveVideoAbr
 	}
+	if input.TranscodeLadder != nil {
+		req.TranscodeLadder = *input.TranscodeLadder
+	}
 	if input.IngestMode != nil {
 		req.IngestMode = ingestModeToWire(*input.IngestMode)
 	}
@@ -246,7 +249,7 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 }
 
 // DoRefreshStreamKey refreshes the stream key for a stream
-func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodorepb.Stream, error) {
+func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string, endActiveSession ...bool) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -264,7 +267,12 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodor
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
-	_, err := r.Clients.Commodore.RefreshStreamKey(ctx, id)
+	var err error
+	if len(endActiveSession) > 0 && endActiveSession[0] {
+		_, err = r.Clients.Commodore.RefreshStreamKeyAndEndIngest(ctx, id)
+	} else {
+		_, err = r.Clients.Commodore.RefreshStreamKey(ctx, id)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to refresh stream key: %w", err)
 	}
@@ -280,6 +288,9 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodor
 
 // DoValidateStreamKey validates a stream key
 func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream key validation")
 		// Demo validation - validate demo stream keys
@@ -601,8 +612,7 @@ func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*com
 	return keysResp.StreamKeys, nil
 }
 
-// DoGetStreamKeysConnection returns a Relay-style connection for stream keys.
-// Stream keys accumulate over time and can grow unbounded.
+// DoGetStreamKeysConnection projects the primary key for legacy clients.
 func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID string, first *int, after *string, last *int, before *string) (*model.StreamKeysConnection, error) {
 	// Stream keys are publishing credentials: listing them needs streams:write.
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
@@ -616,7 +626,8 @@ func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID strin
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream keys connection")
-		keys := demo.GenerateStreamKeys(streamID)
+		now := timestamppb.Now()
+		keys := []*commodorepb.StreamKey{{Id: streamID, StreamId: streamID, KeyValue: demo.DemoStreamKey, KeyName: "Primary Key", IsActive: true, CreatedAt: now, UpdatedAt: now}}
 		return r.buildStreamKeysConnectionFromSlice(keys, first, after, last, before), nil
 	}
 
@@ -729,7 +740,7 @@ func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*commodorepb.Stream
 }
 
 // DoCreateStreamKey creates a new stream key for a specific stream
-func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*commodorepb.StreamKey, error) {
+func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (model.CreateStreamKeyResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -740,24 +751,15 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 	streamID = normalizedID
 
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream key creation")
-		now := time.Now()
-		return &commodorepb.StreamKey{
-			Id:        "sk_demo_new_" + now.Format("20060102150405"),
-			TenantId:  "tenant_demo_1",
-			UserId:    "user_demo_1",
-			StreamId:  streamID,
-			KeyValue:  "sk_demo_" + now.Format("150405"),
-			KeyName:   input.Name,
-			IsActive:  true,
-			CreatedAt: timestamppb.New(now),
-			UpdatedAt: timestamppb.New(now),
-		}, nil
+		return &model.ValidationError{Message: "A stream has one key; use refreshStreamKey.", Code: strPtr("FAILED_PRECONDITION")}, nil
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	keyResp, err := r.Clients.Commodore.CreateStreamKey(ctx, streamID, input.Name)
 	if err != nil {
+		if status.Code(err) == codes.FailedPrecondition {
+			return &model.ValidationError{Message: status.Convert(err).Message(), Code: strPtr("FAILED_PRECONDITION")}, nil
+		}
 		return nil, fmt.Errorf("failed to create stream key: %w", err)
 	}
 
@@ -776,13 +778,15 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 	streamID = normalizedID
 
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream key deletion")
-		return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
+		return &model.ValidationError{Message: "A stream has one key; use refreshStreamKey.", Code: strPtr("FAILED_PRECONDITION")}, nil
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	err = r.Clients.Commodore.DeactivateStreamKey(ctx, streamID, keyID)
 	if err != nil {
+		if status.Code(err) == codes.FailedPrecondition {
+			return &model.ValidationError{Message: status.Convert(err).Message(), Code: strPtr("FAILED_PRECONDITION")}, nil
+		}
 		if strings.Contains(err.Error(), "not found") {
 			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to deactivate stream key")
 			return &model.NotFoundError{
@@ -818,36 +822,14 @@ func (r *Resolver) DoGetClip(ctx context.Context, id string) (*sharedpb.ClipInfo
 		}, nil
 	}
 
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
+
 	// Call Commodore gRPC (context metadata carries auth)
 	clip, err := r.Clients.Commodore.GetClip(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get clip: %w", err)
-	}
-	// hasLocalCopy (the proto's has_local_copy field) is placement-derived and sourced solely from
-	// Periscope — clear any catalog frozen_at-derived value so a missing overlay reports null (unknown),
-	// not the durable fact.
-	clip.HasLocalCopy = nil
-	if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-		if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil {
-			if state, stateErr := l.ArtifactLifecycle.Load(ctx, tenantID, clip.GetClipHash()); stateErr != nil {
-				r.Logger.WithError(stateErr).Warn("Failed to load clip lifecycle data")
-			} else if state != nil {
-				applyArtifactStorageStateToClip(clip, state)
-				if state.GetStreamId() != "" {
-					clip.StreamId = state.GetStreamId()
-				}
-				if state.SizeBytes != nil {
-					size := int64(*state.SizeBytes)
-					clip.SizeBytes = &size
-				}
-				if artifactLifecycleStageCanOverrideRegistry(clip.Status, state.Stage) {
-					clip.Status = state.Stage
-				}
-				if state.FilePath != nil {
-					clip.StoragePath = *state.FilePath
-				}
-			}
-		}
 	}
 
 	return clip, nil
@@ -1012,6 +994,15 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 	if l := loaders.FromContext(ctx); l != nil && l.Stream != nil {
 		tenantID := ctxkeys.GetTenantID(ctx)
 		l.Stream.PrimeMany(tenantID, resp.GetStreams())
+		if l.StreamIngest != nil && selectionContainsField(ctx, "ingest") {
+			ids := make([]string, 0, len(resp.GetStreams()))
+			for _, stream := range resp.GetStreams() {
+				ids = append(ids, stream.GetStreamId())
+			}
+			if err := l.StreamIngest.LoadMany(ctx, tenantID, ids); err != nil {
+				r.Logger.WithError(err).Warn("Failed to batch-prime stream ingest state")
+			}
+		}
 
 		// Warm the metrics cache in one batched Periscope call when the page actually
 		// requests metrics, so the per-row Stream.metrics resolver doesn't fan out into

@@ -30,7 +30,7 @@ function makeGqlResponse(primary: Record<string, unknown> | null, fallbacks: unk
   };
 }
 
-const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.11", features: ["playback"] } } };
+const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.16", features: ["playback"] } } };
 
 function isProbe(init?: RequestInit): boolean {
   return typeof init?.body === "string" && init.body.includes("serverInfo");
@@ -709,7 +709,7 @@ describe("GatewayClient", () => {
     function gatewayAnswering(probeVersions: string[]) {
       return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
         if (!isProbe(init)) return rejectedResolve;
-        const version = probeVersions.shift() ?? "v0.3.11";
+        const version = probeVersions.shift() ?? "v0.3.16";
         return {
           ok: true,
           json: async () => ({ data: { serverInfo: { version, features: [] } } }),
@@ -724,7 +724,7 @@ describe("GatewayClient", () => {
     }
 
     it("asks the gateway again at once and reports a gateway that is now too old", async () => {
-      globalThis.fetch = gatewayAnswering(["v0.3.11", "v0.3.10"]);
+      globalThis.fetch = gatewayAnswering(["v0.3.16", "v0.3.10"]);
       const client = new GatewayClient(makeConfig());
       const error = await client.resolve().catch((e: unknown) => e);
       expect((error as Error).name).toBe("ServerTooOldError");
@@ -734,7 +734,7 @@ describe("GatewayClient", () => {
     });
 
     it("keeps the resolve error when the fresh answer still supports the gateway", async () => {
-      globalThis.fetch = gatewayAnswering(["v0.3.11", "v0.3.11"]);
+      globalThis.fetch = gatewayAnswering(["v0.3.16", "v0.3.16"]);
       const client = new GatewayClient(makeConfig());
       const error = await client.resolve().catch((e: unknown) => e);
       expect((error as Error).name).not.toBe("ServerTooOldError");

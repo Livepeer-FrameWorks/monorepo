@@ -9,11 +9,11 @@ so a tangled proto graph directly inflates carry-forward misses.
 
 A `.proto` may import another monorepo `.proto` only **downward**:
 
-| Layer                       | Files                                                                                                                                                   | May be imported by               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| 0 - value types             | `common.proto`, `cluster_peer.proto`, `tenant_limits.proto`, `metering_contract.proto`, `x402.proto`                                                    | anyone                           |
-| 1 - cross-service contracts | `shared.proto` (clip/DVR/VOD/playback), `foghorn_control.proto` (the Foghorn control msgs Commodore proxies)                                            | any Layer-2 proto                |
-| 2 - service / event APIs    | `commodore`, `quartermaster`, `purser`, `foghorn`, `periscope`, `signalman`, `ipc`, `deckhand`, `skipper`, `dns`, `foghorn_federation`, `foghorn_relay` | only their own service's Go code |
+| Layer                       | Files                                                                                                                                                                      | May be imported by               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| 0 - value types             | `common.proto`, `capacity_values.proto`, `cluster_peer.proto`, `tenant_limits.proto`, `metering_contract.proto`, `x402.proto`                                              | anyone                           |
+| 1 - cross-service contracts | `quartermaster_values.proto` (node-capacity values/requests), `shared.proto` (clip/DVR/VOD/playback), `foghorn_control.proto` (the Foghorn control msgs Commodore proxies) | any Layer-2 proto                |
+| 2 - service / event APIs    | `commodore`, `quartermaster`, `purser`, `foghorn`, `periscope`, `signalman`, `ipc`, `deckhand`, `skipper`, `dns`, `foghorn_federation`, `foghorn_relay`                    | only their own service's Go code |
 
 **A Layer-2 service proto must not import another Layer-2 service proto.** If two
 services need the same type, the type belongs in a Layer-0/1 package, not in one
@@ -63,8 +63,11 @@ base Foghorn client. (`Relay()` stays on the base client because the relay layer
 
 ## Wire compatibility when moving a type
 
-Moving a message between `.proto` files keeps its wire format (field numbers) but
-changes its fully-qualified name. Safe because FrameWorks gRPC messages are matched
-by field number, not type name; but **preserve every field number**, never move a
-`service`/RPC (method paths are `/<package>.<Service>/<Method>`), and check the type
-isn't packed into a `google.protobuf.Any` (type URLs embed the FQN).
+Moving a message between `.proto` files preserves its fully-qualified name when the protobuf
+`package` stays the same. Keep its field numbers and package when extracting shared values.
+Generate the value file into its own Go package so importing it does not pull in service APIs;
+service packages can re-export aliases to preserve their existing Go client types.
+
+Changing the protobuf package changes the fully-qualified name. Check `google.protobuf.Any`
+usage before doing so because its type URLs embed that name. Never move a `service`/RPC between
+packages: method paths are `/<package>.<Service>/<Method>`.

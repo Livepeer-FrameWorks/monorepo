@@ -1,0 +1,31 @@
+query GetStreamRecordings($id: ID!, $first: Int = 25, $after: String) {
+  stream(id: $id) {
+    recordings(page: { first: $first, after: $after }) {
+      nodes {
+        key
+        kind
+        id
+        hash
+        playbackId
+        streamId
+        title
+        secondaryLabel
+        status
+        createdAt
+        updatedAt
+        expiresAt
+        sizeBytes
+        durationSeconds
+        storageLocation
+        isSynced
+        originType
+        parentRecordingId
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+}

@@ -26,7 +26,7 @@ query GetStreamKey($id: ID!) {
   }
 }
 
-# Live state comes from analytics: an API token needs analytics:read.
+# Viewer and quality metrics require analytics:read. Ingest state uses streams:read.
 # @target query.stream.metrics
 query GetStreamMetrics($id: ID!) {
   stream(id: $id) {
@@ -37,8 +37,8 @@ query GetStreamMetrics($id: ID!) {
   }
 }
 
-# Live state of a page of streams, for the same page and search as ListStreams.
-# Live state comes from analytics: an API token needs analytics:read.
+# Viewer and quality metrics for the same page and search as ListStreams.
+# Viewer and quality metrics require analytics:read. Ingest state uses streams:read.
 # @target query.streamsConnection.nodes.metrics
 query ListStreamMetrics($page: ConnectionInput, $search: String) {
   streamsConnection(page: $page, search: $search) {
@@ -56,18 +56,6 @@ query ListStreamMetrics($page: ConnectionInput, $search: String) {
   }
 }
 
-query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
-  streamKeysConnection(streamId: $streamId, page: $page) {
-    nodes {
-      ...StreamKeyFields
-    }
-    pageInfo {
-      ...PageInfoFields
-    }
-    totalCount
-  }
-}
-
 # @target query.stream.pushTargets
 query ListPushTargets($streamId: ID!) {
   stream(id: $streamId) {
@@ -75,5 +63,45 @@ query ListPushTargets($streamId: ID!) {
     pushTargets {
       ...PushTargetFields
     }
+  }
+}
+
+# @target query.stream.ingest
+query GetStreamIngest($id: ID!) {
+  stream(id: $id) {
+    id
+    streamId
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
+  }
+}
+
+# @target query.streamsConnection.nodes.ingest
+query ListStreamIngest($page: ConnectionInput, $search: String) {
+  streamsConnection(page: $page, search: $search) {
+    nodes {
+      id
+      streamId
+      ingest {
+        state
+        isLive
+        sessionId
+        connectedAt
+        liveSince
+        endedAt
+        resumableUntil
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
   }
 }

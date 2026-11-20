@@ -69,6 +69,8 @@ func cloneNodeStateLocked(n *NodeState) *NodeState {
 		c.ConfigStreams = append([]string(nil), n.ConfigStreams...)
 	}
 	c.ProcessingClasses = cloneProcessingClasses(n.ProcessingClasses)
+	c.Capacity = proto.CloneOf(n.Capacity)
+	c.CapacityRevisionApplied = cloneUint64Ptr(n.CapacityRevisionApplied)
 	c.Artifacts = cloneStoredArtifacts(n.Artifacts)
 	return &c
 }
@@ -250,7 +252,7 @@ type StreamInstanceState struct {
 	BufferState        string                              `json:"buffer_state"`
 	Playable           bool                                `json:"playable"`
 	LastTrackList      string                              `json:"last_track_list,omitempty"`
-	Viewers            int                                 `json:"viewers"`
+	Viewers            int                                 `json:"-"`
 	BytesUp            int64                               `json:"bytes_up,omitempty"`
 	BytesDown          int64                               `json:"bytes_down,omitempty"`
 	TotalConnections   int                                 `json:"total_connections,omitempty"`
@@ -289,9 +291,10 @@ type VirtualViewer struct {
 	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
 	MistSessionID  string             `json:"mist_session_id"` // Mist session ID for disconnect correlation
 	MistSessionIDs []string           `json:"mist_session_ids,omitempty"`
-	State          VirtualViewerState `json:"state"`           // Current lifecycle state
-	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
-	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
+	State          VirtualViewerState `json:"state"`         // Current lifecycle state
+	RedirectTime   time.Time          `json:"redirect_time"` // When redirect was issued
+	ConnectTime    time.Time          `json:"connect_time"`  // When USER_NEW matched (zero if not yet)
+	LastClientSeen time.Time          `json:"-"`
 	DisconnectTime time.Time          `json:"disconnect_time"` // When USER_END received (zero if not yet)
 	EstBandwidth   uint64             `json:"est_bandwidth"`   // Estimated bytes/sec for this viewer
 }
@@ -415,27 +418,34 @@ type NodeState struct {
 	// Edge config marker the node reports: the CLI release that rendered its
 	// config, the digest of that rendered set, and the digest of that CLI's
 	// render logic.
-	ProvisionedConfigCLIVersion   string         `json:"provisioned_config_cli_version,omitempty"`
-	ProvisionedConfigDigest       string         `json:"provisioned_config_digest,omitempty"`
-	ProvisionedConfigRenderDigest string         `json:"provisioned_config_render_digest,omitempty"`
-	Latitude                      *float64       `json:"latitude,omitempty"`
-	Longitude                     *float64       `json:"longitude,omitempty"`
-	Location                      string         `json:"location,omitempty"`
-	Outputs                       map[string]any `json:"outputs,omitempty"`
-	OutputsRaw                    string         `json:"outputs_raw,omitempty"`
-	CPU                           float64        `json:"cpu,omitempty"`
-	RAMMax                        float64        `json:"ram_max,omitempty"`
-	RAMCurrent                    float64        `json:"ram_current,omitempty"`
-	UpSpeed                       float64        `json:"up_speed,omitempty"`
-	DownSpeed                     float64        `json:"down_speed,omitempty"`
-	BWLimit                       float64        `json:"bw_limit,omitempty"`
-	CapIngest                     bool           `json:"cap_ingest,omitempty"`
-	CapEdge                       bool           `json:"cap_edge,omitempty"`
-	CapStorage                    bool           `json:"cap_storage,omitempty"`
-	CapProcessing                 bool           `json:"cap_processing,omitempty"`
-	Roles                         []string       `json:"roles,omitempty"`
-	StorageCapacityBytes          uint64         `json:"storage_capacity_bytes,omitempty"`
-	StorageUsedBytes              uint64         `json:"storage_used_bytes,omitempty"`
+	ProvisionedConfigCLIVersion   string                       `json:"provisioned_config_cli_version,omitempty"`
+	ProvisionedConfigDigest       string                       `json:"provisioned_config_digest,omitempty"`
+	ProvisionedConfigRenderDigest string                       `json:"provisioned_config_render_digest,omitempty"`
+	Latitude                      *float64                     `json:"latitude,omitempty"`
+	Longitude                     *float64                     `json:"longitude,omitempty"`
+	Location                      string                       `json:"location,omitempty"`
+	Outputs                       map[string]any               `json:"outputs,omitempty"`
+	OutputsRaw                    string                       `json:"outputs_raw,omitempty"`
+	CPU                           float64                      `json:"cpu,omitempty"`
+	RAMMax                        float64                      `json:"ram_max,omitempty"`
+	RAMCurrent                    float64                      `json:"ram_current,omitempty"`
+	UpSpeed                       float64                      `json:"up_speed,omitempty"`
+	DownSpeed                     float64                      `json:"down_speed,omitempty"`
+	BWLimit                       float64                      `json:"bw_limit,omitempty"`
+	Capacity                      *ipcpb.NodeBandwidthCapacity `json:"capacity,omitempty"`
+	CapacityRevisionApplied       *uint64                      `json:"capacity_revision_applied,omitempty"`
+	ObservedValid                 bool                         `json:"observed_valid"`
+	ObservedSource                ipcpb.ObservedSource         `json:"observed_source,omitempty"`
+	SampleWindowStartMS           int64                        `json:"sample_window_start_ms,omitempty"`
+	SampleWindowEndMS             int64                        `json:"sample_window_end_ms,omitempty"`
+	CapacityResendAt              time.Time                    `json:"-"`
+	CapIngest                     bool                         `json:"cap_ingest,omitempty"`
+	CapEdge                       bool                         `json:"cap_edge,omitempty"`
+	CapStorage                    bool                         `json:"cap_storage,omitempty"`
+	CapProcessing                 bool                         `json:"cap_processing,omitempty"`
+	Roles                         []string                     `json:"roles,omitempty"`
+	StorageCapacityBytes          uint64                       `json:"storage_capacity_bytes,omitempty"`
+	StorageUsedBytes              uint64                       `json:"storage_used_bytes,omitempty"`
 	// ProcessingClasses is the scheduler's source of truth for load-aware
 	// routing: per-class capacity keyed by class name ("video_transcode", ...).
 	// Routing matches a job's processing_class against this; there is no flat
@@ -467,12 +477,10 @@ type NodeState struct {
 	DTSCPort      int      `json:"dtsc_port,omitempty"`      // DTSC protocol port
 	Tags          []string `json:"tags,omitempty"`           // Tags for scoring adjustments
 	ConfigStreams []string `json:"config_streams,omitempty"` // Streams this node can serve
-	// AddBandwidth is local-only soft state: the bandwidth penalty for THIS
-	// instance's pending redirects (virtual viewers), debiting only its own
-	// routing decisions. Still serialized for old-peer wire compat, but
-	// receivers keep their local value (mergeIncomingNode); peers' penalties
-	// derive from virtual-viewer sets that are never replicated.
-	AddBandwidth uint64 `json:"add_bandwidth,omitempty"`
+	// Reservation sums come from the dedicated cell ledger. Whole-node snapshots cannot update them.
+	AddBandwidth                 uint64 `json:"add_bandwidth,omitempty"`
+	IngressReservedBytesPerSec   uint64 `json:"ingress_reserved_bytes_per_sec,omitempty"`
+	BandwidthReservationRevision uint64 `json:"-"`
 
 	// Artifacts stored on this node
 	Artifacts []*ipcpb.StoredArtifact `json:"artifacts,omitempty"`
@@ -487,11 +495,10 @@ type NodeState struct {
 	// Cached scoring helpers (computed on update)
 	CPUScore      uint64    `json:"-"` // Pre-computed CPU score component
 	RAMScore      uint64    `json:"-"` // Pre-computed RAM score component
-	BWAvailable   uint64    `json:"-"` // Available bandwidth (BWLimit - UpSpeed - AddBandwidth)
+	BWAvailable   uint64    `json:"-"` // Budget less observed and reserved egress, before admission headroom
 	LastScoreTime time.Time `json:"-"` // When scores were last computed
 
-	// Virtual Viewer Tracking (local-only like AddBandwidth: this instance's
-	// redirects awaiting USER_NEW; never adopted from peer snapshots)
+	// Virtual viewer correlation is replica-local; bandwidth reservations are cell-shared.
 	PendingRedirects    int       `json:"pending_redirects"`
 	EstBandwidthPerUser uint64    `json:"-"` // Cached per-viewer bandwidth estimate (bytes/sec)
 	LastPollTime        time.Time `json:"-"` // When real metrics arrived from Helmsman
@@ -516,9 +523,10 @@ const (
 
 // StreamStateManager manages in-memory cluster state
 type StreamStateManager struct {
-	streams         map[string]*StreamState                    // internal_name -> union summary
-	streamInstances map[string]map[string]*StreamInstanceState // internal_name -> node_id -> instance
-	nodes           map[string]*NodeState                      // node_id -> node state
+	bandwidthReservations *nodeBandwidthReservations
+	streams               map[string]*StreamState                    // internal_name -> union summary
+	streamInstances       map[string]map[string]*StreamInstanceState // internal_name -> node_id -> instance
+	nodes                 map[string]*NodeState                      // node_id -> node state
 	// Process-local eviction tombstones suppress periodic node_outputs
 	// rehydration until an authenticated heartbeat/register observes the node
 	// again. Durable output metadata is not liveness evidence.
@@ -527,6 +535,10 @@ type StreamStateManager struct {
 	// playbackAuthorityHandler receives peers' authority announcements.
 	playbackAuthorityHandler func(PlaybackAuthorityChange)
 	nodeClusterObserver      func(string)
+
+	nodeStreamCounts      map[string]nodeStreamCountsState
+	nodeCountsPublishMu   sync.Mutex
+	nodeStreamReportLocks sync.Map
 
 	// Whole-node artifact report ordering (see SetNodeArtifacts). A report is ordered by (fence,
 	// seq): the connection fence is issued monotonically by Foghorn when the node's control
@@ -620,6 +632,7 @@ type StreamStateManager struct {
 // NewStreamStateManager creates a new stream state manager
 func NewStreamStateManager() *StreamStateManager {
 	sm := &StreamStateManager{
+		bandwidthReservations:      newNodeBandwidthReservations(),
 		streams:                    make(map[string]*StreamState),
 		streamInstances:            make(map[string]map[string]*StreamInstanceState),
 		nodes:                      make(map[string]*NodeState),
@@ -658,6 +671,7 @@ func NewStreamStateManager() *StreamStateManager {
 
 	// Start staleness detection background goroutine
 	go sm.runStalenessChecker()
+	go sm.runBandwidthReservationSweep()
 
 	return sm
 }
@@ -790,11 +804,11 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 func (sm *StreamStateManager) deriveUnionStatsLocked(internalName string, s *StreamState) {
 	var viewers, totalConnections, inputs int
 	var bytesUp, bytesDown int64
-	for _, inst := range sm.streamInstances[internalName] {
+	for nodeID, inst := range sm.streamInstances[internalName] {
 		if inst == nil {
 			continue
 		}
-		viewers += inst.Viewers
+		viewers += sm.audienceViewersLocked(nodeID, internalName)
 		totalConnections += inst.TotalConnections
 		inputs += inst.Inputs
 		bytesUp += inst.BytesUp
@@ -955,13 +969,16 @@ func extractTracksFromDetails(details map[string]any) []StreamTrack {
 
 		// Extract codec
 		if codec, ok := detailString(track, "codec", trackID); ok {
+			if strings.EqualFold(codec, "EAC-3") {
+				codec = "EAC3"
+			}
 			streamTrack.Codec = codec
 
 			// Determine track type from codec
 			switch codec {
-			case "H264", "HEVC", "VP8", "VP9", "AV1":
+			case "H264", "HEVC", "VP8", "VP9", "AV1", "MPEG2", "MPEG4":
 				streamTrack.Type = "video"
-			case "AAC", "MP3", "Opus", "AC3":
+			case "AAC", "MP3", "Opus", "opus", "AC3", "EAC3", "MP2", "FLAC", "PCM":
 				streamTrack.Type = "audio"
 			default:
 				// Try to infer from other fields
@@ -1137,7 +1154,7 @@ func (sm *StreamStateManager) publishStateChangeContext(ctx context.Context, cha
 }
 
 func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload json.RawMessage) {
-	if sm.redisStore == nil {
+	if sm.redisStore == nil || len(payload) == 0 {
 		return
 	}
 	persistenceLock := sm.nodePersistenceLock(nodeID)
@@ -1248,7 +1265,7 @@ func (sm *StreamStateManager) persistStreamInstanceWriteThroughContext(ctx conte
 	return sm.publishStateChangeContext(ctx, StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
 }
 
-func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
+func (sm *StreamStateManager) EnsureViewerStreamIdentity(internalName, nodeID, tenantID string) {
 	sm.mu.Lock()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
@@ -1259,10 +1276,6 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 		sm.streamInstances[internalName][nodeID] = inst
 	}
 	applyIdentity(&inst.TenantID, tenantID)
-	inst.Viewers += delta
-	if inst.Viewers < 0 {
-		inst.Viewers = 0
-	}
 	inst.LastUpdate = time.Now()
 
 	union := sm.streams[internalName]
@@ -1276,69 +1289,12 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 	// the aggregates; receivers re-derive from instances and never adopt it.
 	sm.deriveUnionStatsLocked(internalName, union)
 
-	// Apply bandwidth penalty when a viewer connects (delta > 0)
-	if delta > 0 {
-		sm.addViewerBandwidthPenalty(nodeID, internalName, inst)
-	}
-
 	streamPayload, _ := json.Marshal(union)
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()
 
-	// The bandwidth penalty is local routing state, like virtual viewers; the
-	// node snapshot is not republished for it.
 	sm.persistStreamWriteThrough(internalName, streamPayload)
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
-}
-
-// addViewerBandwidthPenalty implements bandwidth penalty tracking when a viewer connects (must hold lock)
-// This pre-accounts for expected bandwidth usage before the next NodeLifecycleUpdate arrives with actual metrics.
-func (sm *StreamStateManager) addViewerBandwidthPenalty(nodeID string, _ string, _ *StreamInstanceState) {
-	node := sm.nodes[nodeID]
-	if node == nil {
-		return
-	}
-
-	var toAdd uint64 = 0
-
-	// Use node's current UpSpeed (bytes/sec rate) to estimate per-viewer bandwidth
-	// UpSpeed is the real-time upload rate from MistServer, not cumulative bytes
-	if node.UpSpeed > 0 {
-		// Count total viewers across all streams on this node
-		totalViewers := uint64(0)
-		for _, nodeInstances := range sm.streamInstances {
-			if inst := nodeInstances[nodeID]; inst != nil && inst.TotalConnections > 0 {
-				totalViewers += uint64(inst.TotalConnections)
-			}
-		}
-
-		if totalViewers > 0 {
-			// Estimate bandwidth per viewer = current upload rate / current viewers
-			toAdd = uint64(node.UpSpeed) / totalViewers
-		} else {
-			// No viewers yet, use the full current upload rate as baseline
-			// (stream is ingesting but nobody watching)
-			toAdd = uint64(node.UpSpeed)
-		}
-	}
-
-	// If we still don't have a good estimate, use default
-	if toAdd == 0 {
-		toAdd = 131072 // assume 1mbps (like C++)
-	}
-
-	// Ensure reasonable limits (like C++)
-	if toAdd < 64*1024 {
-		toAdd = 64 * 1024 // minimum 0.5 mbps (64 KB/s)
-	}
-	if toAdd > 1024*1024 {
-		toAdd = 1024 * 1024 // maximum 8 mbps (1 MB/s)
-	}
-
-	node.AddBandwidth = saturatingAddBandwidth(node.AddBandwidth, toAdd)
-
-	// Recompute scores since bandwidth penalty changed
-	sm.recomputeNodeScoresLocked(node)
 }
 
 func saturatingAddBandwidth(current, delta uint64) uint64 {
@@ -1450,6 +1406,7 @@ func (sm *StreamStateManager) setOfflineRuntimeContext(ctx context.Context, inte
 	inst.Inputs = 0
 	inst.TotalConnections = 0
 	inst.Viewers = 0
+	sm.clearAudienceStreamLocked(nodeID, internalName)
 	inst.LastUpdate = now
 
 	// The union goes offline only when no other node still actively
@@ -1635,6 +1592,8 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 		if inst == nil {
 			continue
 		}
+		inst.Viewers = 0
+		sm.clearAudienceStreamLocked(nodeID, internalName)
 		if inst.Inputs == 0 && inst.TotalConnections == 0 && inst.Status == "offline" && !inst.Replicated {
 			// Trigger bookkeeping (node-local STREAM_END, a lifecycle report
 			// Mist does not flag as replicated) can settle the instance before
@@ -1697,12 +1656,22 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
-	if inst.RawDetails == nil {
-		inst.RawDetails = make(map[string]any)
+	candidate := *inst
+	candidate.RawDetails = maps.Clone(inst.RawDetails)
+	if candidate.RawDetails == nil {
+		candidate.RawDetails = make(map[string]any)
 	}
-	maps.Copy(inst.RawDetails, info)
-	inst.LastUpdate = time.Now()
-	instPayload, _ := json.Marshal(inst)
+	maps.Copy(candidate.RawDetails, info)
+	candidate.LastUpdate = time.Now()
+	instPayload, err := json.Marshal(&candidate)
+	if err != nil {
+		sm.mu.Unlock()
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithFields(map[string]any{"stream": internalName, "node_id": nodeID}).Warn("Rejected unserializable stream instance info")
+		}
+		return
+	}
+	*inst = candidate
 	sm.mu.Unlock()
 
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
@@ -1895,7 +1864,7 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 		n.OutputsRaw = outputsRaw
 	}
 	n.LastUpdate = time.Now()
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
@@ -1983,7 +1952,11 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	n.RAMCurrent = metrics.RAMCurrent
 	n.UpSpeed = metrics.UpSpeed
 	n.DownSpeed = metrics.DownSpeed
-	n.BWLimit = metrics.BWLimit
+	if n.Capacity == nil {
+		n.BWLimit = metrics.BWLimit
+	} else {
+		n.BWLimit = float64(n.Capacity.GetEgressBudgetBytesPerSec())
+	}
 	n.CapIngest = metrics.CapIngest
 	n.CapEdge = metrics.CapEdge
 	n.CapStorage = metrics.CapStorage
@@ -1997,7 +1970,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 
 	// Recompute cached scores
 	sm.recomputeNodeScoresLocked(n)
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
@@ -2022,8 +1995,12 @@ func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, disk
 	n.DiskUsedBytes = diskUsed
 	n.LastUpdate = time.Now()
 
-	nodePayload, _ := json.Marshal(n)
+	nodePayload, err := json.Marshal(n)
 	sm.mu.Unlock()
+	if err != nil {
+		logging.NewLogger().WithError(err).WithField("node_id", nodeID).Warn("Could not serialize node disk usage")
+		return
+	}
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
@@ -2061,7 +2038,7 @@ func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	// Keep the disconnected state sticky until a new heartbeat arrives.
 	n.LastHeartbeat = time.Time{}
 	n.LastUpdate = time.Now()
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
@@ -2091,7 +2068,7 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 	n.OperationalMode = normalized
 	n.OperationalModeSetBy = setBy
 	n.LastUpdate = now
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	modePayload, modeMarshalErr := json.Marshal(nodeModeRecord{NodeID: nodeID, Mode: normalized, SetBy: setBy, SetAt: now})
 	sm.mu.Unlock()
 
@@ -2118,10 +2095,8 @@ func (sm *StreamStateManager) GetNodeActiveViewers(nodeID string) int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	total := 0
-	for _, nodes := range sm.streamInstances {
-		if inst := nodes[nodeID]; inst != nil {
-			total += inst.Viewers
-		}
+	for streamName := range sm.nodeStreamCounts[nodeID].snapshot.Streams {
+		total += sm.audienceViewersLocked(nodeID, streamName)
 	}
 	return total
 }
@@ -2145,7 +2120,7 @@ func (sm *StreamStateManager) GetNodeActiveStreams(nodeID string) int {
 // must treat as "no signal" rather than "idle." Used by Foghorn admission to
 // decide whether to gate free-tier over-allowance ingest.
 //
-// Bandwidth utilization is sum(UpSpeed) / sum(BWLimit) across nodes that
+// Bandwidth utilization is sum(observed + reserved egress) / sum(budget) across nodes that
 // declare a non-zero BWLimit. Nodes without BWLimit contribute only to the
 // CPU average. If no node declares BWLimit, the bandwidth term is treated as
 // zero (CPU alone gates the decision).
@@ -2162,8 +2137,8 @@ func (sm *StreamStateManager) ClusterLoad(clusterID string) (loadPercent float64
 		}
 		cpuSum += n.CPU
 		if n.BWLimit > 0 {
-			upSum += n.UpSpeed
-			bwSum += n.BWLimit
+			upSum += float64(n.EgressLink().Committed())
+			bwSum += float64(n.EgressLink().Budget)
 		}
 		sampleCount++
 	}
@@ -2197,7 +2172,7 @@ func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gp
 	n.GPUCC = gpuCC
 	n.LastUpdate = time.Now()
 
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
@@ -2218,7 +2193,7 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 	n.StoragePrefix = storagePrefix
 	n.LastUpdate = time.Now()
 
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
@@ -2239,105 +2214,6 @@ type BalancerStreamSummary struct {
 	BytesUp     uint64    `json:"bytes_up"`
 	BytesDown   uint64    `json:"bytes_down"`
 	Replicated  bool      `json:"replicated"`
-}
-
-// BalancerNodeSnapshot is a read-optimized view for the load balancer
-type BalancerNodeSnapshot struct {
-	Host                 string                           `json:"host"`
-	NodeID               string                           `json:"node_id"`
-	GeoLatitude          float64                          `json:"geo_latitude"`
-	GeoLongitude         float64                          `json:"geo_longitude"`
-	LocationName         string                           `json:"location_name"`
-	CPU                  uint64                           `json:"cpu_tenths"`
-	RAMMax               uint64                           `json:"ram_max"`
-	RAMCurrent           uint64                           `json:"ram_current"`
-	UpSpeed              uint64                           `json:"up_speed"`
-	DownSpeed            uint64                           `json:"down_speed"`
-	AvailBandwidth       uint64                           `json:"avail_bandwidth"`
-	IsActive             bool                             `json:"is_active"`
-	Streams              map[string]BalancerStreamSummary `json:"streams"`
-	Roles                []string                         `json:"roles"`
-	CapIngest            bool                             `json:"cap_ingest"`
-	CapEdge              bool                             `json:"cap_edge"`
-	CapStorage           bool                             `json:"cap_storage"`
-	CapProcessing        bool                             `json:"cap_processing"`
-	StorageCapacityBytes uint64                           `json:"storage_capacity_bytes"`
-	StorageUsedBytes     uint64                           `json:"storage_used_bytes"`
-}
-
-// GetBalancerNodeSnapshots returns a read-optimized snapshot for the balancer
-func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	snapshots := make([]BalancerNodeSnapshot, 0, len(sm.nodes))
-
-	// Build a quick reverse index of nodeID -> streams on that node
-	nodeStreams := make(map[string]map[string]BalancerStreamSummary)
-	for internalName, instances := range sm.streamInstances {
-		for nodeID, inst := range instances {
-			if inst == nil {
-				continue
-			}
-			m := nodeStreams[nodeID]
-			if m == nil {
-				m = make(map[string]BalancerStreamSummary)
-				nodeStreams[nodeID] = m
-			}
-			m[internalName] = BalancerStreamSummary{
-				RuntimeName: inst.RuntimeName,
-				TenantID:    inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable, Status: inst.Status, ObservedAt: inst.LastUpdate,
-				Total:      uint64(inst.TotalConnections),
-				Viewers:    uint64(inst.Viewers),
-				Inputs:     uint32(inst.Inputs),
-				Bandwidth:  0,
-				BytesUp:    uint64(inst.BytesUp),
-				BytesDown:  uint64(inst.BytesDown),
-				Replicated: inst.Replicated,
-			}
-		}
-	}
-
-	for nodeID, n := range sm.nodes {
-		if n == nil {
-			continue
-		}
-		snap := BalancerNodeSnapshot{
-			Host:   n.BaseURL,
-			NodeID: nodeID,
-			GeoLatitude: func() float64 {
-				if n.Latitude != nil {
-					return *n.Latitude
-				}
-				return 0
-			}(),
-			GeoLongitude: func() float64 {
-				if n.Longitude != nil {
-					return *n.Longitude
-				}
-				return 0
-			}(),
-			LocationName:         n.Location,
-			CPU:                  uint64(n.CPU * 10.0),
-			RAMMax:               uint64(n.RAMMax),
-			RAMCurrent:           uint64(n.RAMCurrent),
-			UpSpeed:              uint64(n.UpSpeed),
-			DownSpeed:            uint64(n.DownSpeed),
-			AvailBandwidth:       uint64(n.BWLimit),
-			IsActive:             n.IsHealthy,
-			Streams:              nodeStreams[nodeID],
-			Roles:                append([]string(nil), n.Roles...),
-			CapIngest:            n.CapIngest,
-			CapEdge:              n.CapEdge,
-			CapStorage:           n.CapStorage,
-			CapProcessing:        n.CapProcessing,
-			StorageCapacityBytes: n.StorageCapacityBytes,
-			StorageUsedBytes:     n.StorageUsedBytes,
-		}
-		snapshots = append(snapshots, snap)
-	}
-
-	return snapshots
 }
 
 // GetStreamInstances returns copies of per-node instances for a stream
@@ -2449,10 +2325,11 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(ctx context.Context, nodeID 
 	// Recompute cached scores as node connection info (like BinHost) affects eligibility.
 	sm.recomputeNodeScoresLocked(n)
 
-	nodePayload, _ := json.Marshal(n)
+	nodePayload := marshalNodeState(n)
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.notifyNodeStreamsChanged(nodeID)
 	sm.MarkNodeDNSChanged(nodeID)
 }
 
@@ -2618,7 +2495,7 @@ func storedArtifactsToStates(nodeID string, artifacts []*ipcpb.StoredArtifact) [
 // ownership in the window after AcquireConnOwnerFenced), it returns ErrArtifactInventorySuperseded so
 // the caller rejects the superseded connection rather than making it ready. A nil redis store
 // (single-Foghorn) has no peers, so publishing is a no-op success.
-func (sm *StreamStateManager) RecordNodeArtifactFence(nodeID string, fence int64) error {
+func (sm *StreamStateManager) RecordNodeArtifactFence(nodeID string, fence int64) (err error) {
 	if fence <= 0 {
 		return nil
 	}
@@ -2639,6 +2516,21 @@ func (sm *StreamStateManager) RecordNodeArtifactFence(nodeID string, fence int64
 	instanceID := sm.instanceID
 	sm.mu.Unlock()
 
+	if newFence {
+		defer func() {
+			if err != nil {
+				return
+			}
+			sm.mu.Lock()
+			defer sm.mu.Unlock()
+			// Only a successful fenced takeover can revive an evicted node. A concurrent
+			// eviction advances the sequence to MaxInt64 and must keep its tombstone.
+			current := sm.lastAcceptedArtifactOrder[nodeID]
+			if current.fence == fence && current.seq != math.MaxInt64 {
+				delete(sm.evictedNodes, nodeID)
+			}
+		}()
+	}
 	if !newFence || redisStore == nil {
 		return nil
 	}
@@ -3212,17 +3104,7 @@ func (sm *StreamStateManager) recomputeNodeScoresLocked(n *NodeState) {
 		n.RAMScore = 0
 	}
 
-	// Available Bandwidth: BWLimit - UpSpeed - AddBandwidth
-	if n.BWLimit > 0 {
-		used := uint64(n.UpSpeed) + n.AddBandwidth
-		if used < uint64(n.BWLimit) {
-			n.BWAvailable = uint64(n.BWLimit) - used
-		} else {
-			n.BWAvailable = 0
-		}
-	} else {
-		n.BWAvailable = 0
-	}
+	n.BWAvailable = n.EgressLink().RawAvailable()
 
 	n.LastScoreTime = time.Now()
 }
@@ -3277,25 +3159,29 @@ type EnhancedBalancerNodeSnapshot struct {
 	OperationalMode   NodeOperationalMode `json:"operational_mode"`
 
 	// Performance-critical fields
-	BinHost       [16]byte       `json:"-"` // Binary IP for fast comparison
-	Port          int            `json:"port"`
-	DTSCPort      int            `json:"dtsc_port"`
-	Tags          []string       `json:"tags"`
-	ConfigStreams []string       `json:"config_streams"`
-	Outputs       map[string]any `json:"outputs,omitempty"`
-	AddBandwidth  uint64         `json:"add_bandwidth"`
+	BinHost                    [16]byte       `json:"-"` // Binary IP for fast comparison
+	Port                       int            `json:"port"`
+	DTSCPort                   int            `json:"dtsc_port"`
+	Tags                       []string       `json:"tags"`
+	ConfigStreams              []string       `json:"config_streams"`
+	Outputs                    map[string]any `json:"outputs,omitempty"`
+	AddBandwidth               uint64         `json:"add_bandwidth"`
+	IngressReservedBytesPerSec uint64         `json:"ingress_reserved_bytes_per_sec"`
 
 	// Virtual Viewer Tracking
 	PendingRedirects    int    `json:"pending_redirects"`      // Redirects awaiting USER_NEW confirmation
 	EstBandwidthPerUser uint64 `json:"est_bandwidth_per_user"` // Estimated bytes/sec per viewer
 
 	// Raw metrics
-	CPU        float64 `json:"cpu"`
-	RAMMax     float64 `json:"ram_max"`
-	RAMCurrent float64 `json:"ram_current"`
-	UpSpeed    float64 `json:"up_speed"`
-	DownSpeed  float64 `json:"down_speed"`
-	BWLimit    float64 `json:"bw_limit"`
+	CPU                     float64                      `json:"cpu"`
+	RAMMax                  float64                      `json:"ram_max"`
+	RAMCurrent              float64                      `json:"ram_current"`
+	UpSpeed                 float64                      `json:"up_speed"`
+	DownSpeed               float64                      `json:"down_speed"`
+	BWLimit                 float64                      `json:"bw_limit"`
+	Capacity                *ipcpb.NodeBandwidthCapacity `json:"capacity,omitempty"`
+	CapacityRevisionApplied *uint64                      `json:"capacity_revision_applied,omitempty"`
+	ObservedSource          ipcpb.ObservedSource         `json:"observed_source,omitempty"`
 
 	// Pre-computed scoring components
 	CPUScore       uint64 `json:"-"`               // Pre-computed CPU score
@@ -3389,7 +3275,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				Status:     inst.Status,
 				ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
-				Viewers:    uint64(inst.Viewers),
+				Viewers:    uint64(sm.audienceViewersLocked(nodeID, internalName)),
 				Inputs:     uint32(inst.Inputs),
 				Bandwidth:  0, // TODO: Calculate from BytesUp/BytesDown if needed
 				BytesUp:    uint64(inst.BytesUp),
@@ -3445,31 +3331,35 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			OperationalMode:   mode,
 
 			// Performance-critical fields
-			BinHost:       n.BinHost,
-			Port:          n.Port,
-			DTSCPort:      n.DTSCPort,
-			Tags:          append([]string(nil), n.Tags...),
-			ConfigStreams: append([]string(nil), n.ConfigStreams...),
-			Outputs:       cloneJSONMap(n.Outputs),
-			AddBandwidth:  n.AddBandwidth,
+			BinHost:                    n.BinHost,
+			Port:                       n.Port,
+			DTSCPort:                   n.DTSCPort,
+			Tags:                       append([]string(nil), n.Tags...),
+			ConfigStreams:              append([]string(nil), n.ConfigStreams...),
+			Outputs:                    cloneJSONMap(n.Outputs),
+			AddBandwidth:               n.AddBandwidth,
+			IngressReservedBytesPerSec: n.IngressReservedBytesPerSec,
 
 			// Virtual Viewer Tracking
 			PendingRedirects:    n.PendingRedirects,
 			EstBandwidthPerUser: n.EstBandwidthPerUser,
 
 			// Raw metrics
-			CPU:        n.CPU,
-			RAMMax:     n.RAMMax,
-			RAMCurrent: n.RAMCurrent,
-			UpSpeed:    n.UpSpeed,
-			DownSpeed:  n.DownSpeed,
-			BWLimit:    n.BWLimit,
+			CPU:                     n.CPU,
+			RAMMax:                  n.RAMMax,
+			RAMCurrent:              n.RAMCurrent,
+			UpSpeed:                 n.UpSpeed,
+			DownSpeed:               n.DownSpeed,
+			BWLimit:                 n.BWLimit,
+			Capacity:                proto.CloneOf(n.Capacity),
+			CapacityRevisionApplied: cloneUint64Ptr(n.CapacityRevisionApplied),
+			ObservedSource:          n.ObservedSource,
 
 			// Pre-computed scoring components
 			CPUScore:       n.CPUScore,
 			RAMScore:       n.RAMScore,
 			BWAvailable:    n.BWAvailable,
-			AvailBandwidth: n.BWAvailable,
+			AvailBandwidth: n.EgressLink().Available(),
 
 			// Capabilities
 			Roles:                append([]string(nil), n.Roles...),
@@ -3601,6 +3491,7 @@ type nodeEvictionTombstone struct {
 
 // checkStaleNodes marks nodes as stale and evicts long-disconnected nodes.
 func (sm *StreamStateManager) checkStaleNodes() {
+	sm.expireVirtualViewerLeases("")
 	sm.mu.Lock()
 
 	now := time.Now()
@@ -3646,71 +3537,130 @@ func (sm *StreamStateManager) checkStaleNodes() {
 		}
 	}
 
-	evictTombstone := make(map[string]incOrder, len(toRemove))
-	for _, nodeID := range toRemove {
-		delete(sm.nodes, nodeID)
-		sm.evictedNodes[nodeID] = nodeEvictionTombstone{at: now}
-		// Fence the current connection: raise the accepted seq to the max so no in-flight/duplicate
-		// report of this connection's fence can resurrect the placement we're about to orphan. A
-		// returning node registers a NEW (higher) fence, which supersedes. The tombstone outlives the
-		// deleted NodeState (in memory AND — via the terminal orphan below — durably in Postgres).
-		fenced := sm.lastAcceptedArtifactOrder[nodeID]
-		fenced.seq = math.MaxInt64
-		sm.lastAcceptedArtifactOrder[nodeID] = fenced
-		evictTombstone[nodeID] = fenced
-	}
 	sm.mu.Unlock()
 	for _, nodeID := range retryNodeOutputDeletes {
-		sm.deleteDurableNodeOutputs(nodeID)
+		err := sm.withNodeEvictionGuard(nodeID, func() error { sm.deleteDurableNodeOutputs(nodeID); return nil })
+		reportBandwidthError("retry node output eviction", nodeID, err)
+	}
+	for _, nodeID := range toRemove {
+		err := sm.withNodeEvictionGuard(nodeID, func() error { return sm.evictDisconnectedNode(nodeID) })
+		reportBandwidthError("evict disconnected node", nodeID, err)
+	}
+}
+
+// The registration barrier keeps a different replica's reconnect ahead of every eviction effect.
+func (sm *StreamStateManager) withNodeEvictionGuard(nodeID string, work func() error) error {
+	if sm.redisStore == nil {
+		return work()
+	}
+	store := sm.redisStore
+	token := uuid.NewString()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	acquired, err := store.AcquireNodeReapGuard(ctx, nodeID, token, 90*time.Second)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return nil
+	}
+	defer func() {
+		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelRelease()
+		reportBandwidthError("release node eviction guard", nodeID, store.ReleaseNodeReapGuard(releaseCtx, nodeID, token))
+	}()
+	return work()
+}
+
+func (sm *StreamStateManager) retryEvictedNodeDelete(nodeID string, del func(string) error) error {
+	return sm.withNodeEvictionGuard(nodeID, func() error {
+		persistenceLock := sm.nodePersistenceLock(nodeID)
+		persistenceLock.Lock()
+		defer persistenceLock.Unlock()
+		sm.mu.RLock()
+		_, evicted := sm.evictedNodes[nodeID]
+		sm.mu.RUnlock()
+		if !evicted {
+			return nil
+		}
+		return del(nodeID)
+	})
+}
+
+func (sm *StreamStateManager) evictDisconnectedNode(nodeID string) error {
+	reportLock := sm.nodeStreamReportLock(nodeID)
+	reportLock.Lock()
+	defer reportLock.Unlock()
+	sm.mu.Lock()
+	node := sm.nodes[nodeID]
+	now := time.Now()
+	if node == nil || !node.LastHeartbeat.IsZero() || node.LastUpdate.IsZero() || now.Sub(node.LastUpdate) <= nodeRemovalThreshold {
+		sm.mu.Unlock()
+		return nil
+	}
+	delete(sm.nodes, nodeID)
+	sm.evictedNodes[nodeID] = nodeEvictionTombstone{at: now}
+	if counts, ok := sm.nodeStreamCounts[nodeID]; ok {
+		counts.snapshot.Streams = nil
+		counts.snapshot.Seq = math.MaxInt64
+		counts.appliedAt = time.Time{}
+		sm.nodeStreamCounts[nodeID] = counts
 	}
 
-	// Delete from Redis and mark DB artifacts orphaned outside the lock
+	fenced := sm.lastAcceptedArtifactOrder[nodeID]
+	fenced.seq = math.MaxInt64
+	sm.lastAcceptedArtifactOrder[nodeID] = fenced
+	sm.mu.Unlock()
 	artifactRepo := sm.repos.Artifacts
-	for _, nodeID := range toRemove {
-		sm.deleteDurableNodeOutputs(nodeID)
-		if sm.redisStore != nil {
-			persistenceLock := sm.nodePersistenceLock(nodeID)
-			persistenceLock.Lock()
-			sm.mu.RLock()
-			_, stillEvicted := sm.evictedNodes[nodeID]
-			sm.mu.RUnlock()
-			if !stillEvicted {
-				persistenceLock.Unlock()
-				continue
-			}
-			if err := sm.redisStore.DeleteNode(nodeID); err != nil {
-				if stateLogger != nil {
-					stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis; retrying in background")
-				}
-				store := sm.redisStore
-				nid := nodeID
-				retryRedisDeleteAsync("node", nid, func() error { return store.DeleteNode(nid) })
-			}
-			if err := sm.redisStore.DeleteNodeMode(nodeID); err != nil {
-				store := sm.redisStore
-				nid := nodeID
-				retryRedisDeleteAsync("node_mode", nid, func() error { return store.DeleteNodeMode(nid) })
-			}
-			sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+	sm.bandwidthReservations.clearNode(nodeID)
+	sm.deleteDurableNodeOutputs(nodeID)
+	if sm.redisStore != nil {
+		persistenceLock := sm.nodePersistenceLock(nodeID)
+		persistenceLock.Lock()
+		sm.mu.RLock()
+		_, stillEvicted := sm.evictedNodes[nodeID]
+		sm.mu.RUnlock()
+		if !stillEvicted {
 			persistenceLock.Unlock()
+			return nil
 		}
-		if artifactRepo != nil {
-			evictedAtMs := time.Now().UnixMilli()
-			// Orphan with a DURABLE tombstone: advance the watermark to (currentFence, MaxInt64) so a
-			// stale in-flight upsert from that fence can't commit afterward and resurrect the rows. A
-			// node that never carried a fence orphans unversioned (0,0). A returning node's higher
-			// fence still supersedes the tombstone.
-			tomb := evictTombstone[nodeID]
-			go func(nid string, t incOrder) {
-				if err := artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid, evictedAtMs, t.fence, t.seq); err != nil && stateLogger != nil {
-					stateLogger.WithError(err).WithField("node_id", nid).Warn("Failed to orphan artifacts for evicted node (placement may stay present)")
-				}
-			}(nodeID, tomb)
+		if err := sm.redisStore.DeleteNode(nodeID); err != nil {
+			if stateLogger != nil {
+				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis; retrying in background")
+			}
+			store := sm.redisStore
+			nid := nodeID
+			retryRedisDeleteAsync("node", nid, func() error { return sm.retryEvictedNodeDelete(nid, store.DeleteNode) })
 		}
-		if stateLogger != nil {
-			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
+		if err := sm.redisStore.DeleteNodeMode(nodeID); err != nil {
+			store := sm.redisStore
+			nid := nodeID
+			retryRedisDeleteAsync("node_mode", nid, func() error { return sm.retryEvictedNodeDelete(nid, store.DeleteNodeMode) })
 		}
+		if err := sm.redisStore.deleteNodeStreamCounts(nodeID); err != nil {
+			store, nid := sm.redisStore, nodeID
+			retryRedisDeleteAsync("node_counts", nid, func() error { return sm.retryEvictedNodeDelete(nid, store.deleteNodeStreamCounts) })
+		}
+		sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+		persistenceLock.Unlock()
 	}
+	if artifactRepo != nil {
+		evictedAtMs := time.Now().UnixMilli()
+		// Orphan with a DURABLE tombstone: advance the watermark to (currentFence, MaxInt64) so a
+		// stale in-flight upsert from that fence can't commit afterward and resurrect the rows. A
+		// node that never carried a fence orphans unversioned (0,0). A returning node's higher
+		// fence still supersedes the tombstone.
+		tomb := fenced
+		go func(nid string, t incOrder) {
+			if err := artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid, evictedAtMs, t.fence, t.seq); err != nil && stateLogger != nil {
+				stateLogger.WithError(err).WithField("node_id", nid).Warn("Failed to orphan artifacts for evicted node (placement may stay present)")
+			}
+		}(nodeID, tomb)
+	}
+	if stateLogger != nil {
+		stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
+	}
+	return nil
 }
 
 func (sm *StreamStateManager) deleteDurableNodeOutputs(nodeID string) {
@@ -3724,7 +3674,10 @@ func (sm *StreamStateManager) deleteDurableNodeOutputs(nodeID string) {
 		return
 	}
 	if sm.nodeRepo != nil {
-		if err := sm.nodeRepo.DeleteNodeOutputs(context.Background(), nodeID); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := sm.nodeRepo.DeleteNodeOutputs(ctx, nodeID)
+		cancel()
+		if err != nil {
 			if stateLogger != nil {
 				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete evicted node outputs")
 			}
@@ -4115,6 +4068,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch(), update.GetOnnxProfile())
 	sm.SetNodeProvisionedConfig(update.GetNodeId(), update.GetProvisionedConfig())
 	sm.setNodeDiskUsageForLifecycle(update.GetNodeId(), update.GetDiskTotalBytes(), update.GetDiskUsedBytes())
+	budget, up, down := sm.nodeCapacityObservation(update)
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {
 		CPU                  float64
 		RAMMax               float64
@@ -4131,17 +4085,12 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 		StorageUsedBytes     uint64
 		ProcessingClasses    map[string]ClassCapacity
 	}{
-		CPU:        float64(update.GetCpuTenths()) / 10.0,
-		RAMMax:     float64(update.GetRamMax()),
-		RAMCurrent: float64(update.GetRamCurrent()),
-		UpSpeed:    float64(update.GetUpSpeed()),
-		DownSpeed:  float64(update.GetDownSpeed()),
-		BWLimit: func() float64 {
-			if limit := float64(update.GetBwLimit()); limit > 0 {
-				return limit
-			}
-			return 128 * 1024 * 1024 // Default 1Gbps when not specified
-		}(),
+		CPU:           float64(update.GetCpuTenths()) / 10.0,
+		RAMMax:        float64(update.GetRamMax()),
+		RAMCurrent:    float64(update.GetRamCurrent()),
+		UpSpeed:       up,
+		DownSpeed:     down,
+		BWLimit:       budget,
 		CapIngest:     update.GetCapabilities() != nil && update.GetCapabilities().GetIngest(),
 		CapEdge:       update.GetCapabilities() != nil && update.GetCapabilities().GetEdge(),
 		CapStorage:    update.GetCapabilities() != nil && update.GetCapabilities().GetStorage(),
@@ -4167,6 +4116,11 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 		ProcessingClasses: ProcessingClassesFromLimits(update.GetLimits()),
 	})
 
+	if update.ObservedValid == nil || update.GetObservedValid() {
+		if err := sm.SettleNodeBandwidth(ctx, update.GetNodeId(), update.GetSampleWindowStartMs(), update.GetSampleWindowEndMs(), time.Now()); err != nil {
+			return err
+		}
+	}
 	// Write-through: persist outputs/base_url and lifecycle snapshot if policy allows
 	if sm.nodeRepo != nil {
 		if update.GetOutputsJson() != "" {
@@ -4527,9 +4481,16 @@ type ArtifactSyncInfo struct {
 // CreateVirtualViewer creates a new PENDING virtual viewer when a redirect is issued.
 // Returns the viewer ID for correlation.
 func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP string) string {
+	id := uuid.New().String()
+	if !sm.ReservePendingViewer(id, nodeID, streamName) {
+		return ""
+	}
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	return sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
+	if viewer := sm.virtualViewers[id]; viewer != nil {
+		viewer.ClientIP = clientIP
+	}
+	sm.mu.Unlock()
+	return id
 }
 
 // EnsurePendingVirtualViewer creates a PENDING virtual viewer unless this client already has one.
@@ -4547,9 +4508,9 @@ func (sm *StreamStateManager) EnsurePendingVirtualViewer(nodeID, streamName, cli
 		}
 	}
 
-	viewerID := sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
 	sm.mu.Unlock()
-	return viewerID, true
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	return viewerID, viewerID != ""
 }
 
 // ReservePendingViewer records a live viewer this cell prepared for one of its
@@ -4558,37 +4519,102 @@ func (sm *StreamStateManager) EnsurePendingVirtualViewer(nodeID, streamName, cli
 // carries the viewer's estimated bandwidth. A repeated ID is a no-op, so a
 // retried preparation reserves once.
 func (sm *StreamStateManager) ReservePendingViewer(viewerID, nodeID, streamName string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, created, err := sm.prepareViewerBandwidth(ctx, viewerID, nodeID, streamName)
+	reportBandwidthError("reserve viewer", nodeID, err)
+	return created
+}
+
+// PrepareViewerBandwidth reserves a serving attempt and records its correlation locally.
+func (sm *StreamStateManager) PrepareViewerBandwidth(ctx context.Context, viewerID, nodeID, streamName string) (bool, error) {
+	allowed, _, err := sm.prepareViewerBandwidth(ctx, viewerID, nodeID, streamName)
+	return allowed, err
+}
+
+func (sm *StreamStateManager) prepareViewerBandwidth(ctx context.Context, viewerID, nodeID, streamName string) (bool, bool, error) {
 	if viewerID == "" || nodeID == "" || streamName == "" {
-		return false
+		return false, false, errors.New("viewer bandwidth identity is required")
+	}
+	sm.mu.RLock()
+	existing := sm.virtualViewerForNodeLocked(viewerID, nodeID)
+	conflict := existing != nil && existing.StreamName != streamName
+	if original := sm.virtualViewers[viewerID]; original != nil && original.StreamName != streamName {
+		conflict = true
+	}
+	sm.mu.RUnlock()
+	if conflict {
+		return false, false, nil
+	}
+	result, err := sm.reserveNodeBandwidth(ctx, viewerID, nodeID, streamName, BandwidthEgress, sm.EstimateStreamBandwidth(nodeID, streamName))
+	if err != nil || !result.Allowed {
+		return false, false, err
 	}
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if _, exists := sm.virtualViewers[viewerID]; exists {
-		return false
+	if v := sm.virtualViewerForNodeLocked(viewerID, nodeID); v != nil {
+		allowed := v.StreamName == streamName
+		sm.mu.Unlock()
+		if !allowed {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if releaseErr := sm.ReleasePendingNodeBandwidth(cleanupCtx, viewerID, nodeID); releaseErr != nil {
+				return false, false, releaseErr
+			}
+		}
+		return allowed, false, nil
 	}
+	if original := sm.virtualViewers[viewerID]; original != nil && original.StreamName != streamName {
+		sm.mu.Unlock()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		return false, false, sm.ReleasePendingNodeBandwidth(cleanupCtx, viewerID, nodeID)
+	}
+	key := sm.virtualViewerKeyLocked(viewerID, nodeID)
 	sm.createVirtualViewerWithIDLocked(viewerID, nodeID, streamName, "")
-	return true
+	if result.Entry != nil {
+		sm.virtualViewers[key].EstBandwidth = result.Entry.Bytes
+	}
+	sm.mu.Unlock()
+	return true, true, nil
+}
+
+// Playback IDs are shared by primary and fallback URLs; each serving node owns
+// a separate virtual viewer and Redis reservation for that playback.
+func (sm *StreamStateManager) virtualViewerKeyLocked(viewerID, nodeID string) string {
+	scoped := nodeID + "\x00" + viewerID
+	if sm.virtualViewers[scoped] != nil {
+		return scoped
+	}
+	if v := sm.virtualViewers[viewerID]; v != nil && v.NodeID != nodeID {
+		return scoped
+	}
+	return viewerID
+}
+
+func (sm *StreamStateManager) virtualViewerForNodeLocked(viewerID, nodeID string) *VirtualViewer {
+	v := sm.virtualViewers[sm.virtualViewerKeyLocked(viewerID, nodeID)]
+	if v != nil && v.NodeID == nodeID {
+		return v
+	}
+	return nil
 }
 
 // ReleasePendingViewer drops only this preparation's unconsumed reservation.
 // An already connected viewer and other attempts retain their accounting.
 func (sm *StreamStateManager) ReleasePendingViewer(viewerID, nodeID, streamName string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	viewer := sm.virtualViewers[viewerID]
+	viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID)
 	if viewer == nil || viewer.State != VirtualViewerPending || viewer.NodeID != nodeID || viewer.StreamName != streamName {
+		sm.mu.Unlock()
 		return
 	}
 	viewer.State = VirtualViewerAbandoned
 	viewer.DisconnectTime = time.Now()
 	sm.reconcilePendingViewersLocked(nodeID)
-	if node := sm.nodes[nodeID]; node != nil {
-		sm.recomputeNodeScoresLocked(node)
-	}
-}
-
-func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clientIP string) string {
-	return sm.createVirtualViewerWithIDLocked(uuid.New().String(), nodeID, streamName, clientIP)
+	sm.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	reportBandwidthError("release pending viewer", nodeID, sm.ReleasePendingNodeBandwidth(ctx, viewerID, nodeID))
 }
 
 func (sm *StreamStateManager) createVirtualViewerWithIDLocked(viewerID, nodeID, streamName, clientIP string) string {
@@ -4600,7 +4626,7 @@ func (sm *StreamStateManager) createVirtualViewerWithIDLocked(viewerID, nodeID, 
 	}
 
 	// Calculate estimated bandwidth for this viewer
-	estBW := sm.calculateEstBandwidthPerUserLocked(node)
+	estBW := sm.estimateStreamBandwidthLocked(nodeID, streamName)
 
 	// Create the virtual viewer
 	viewer := &VirtualViewer{
@@ -4614,12 +4640,12 @@ func (sm *StreamStateManager) createVirtualViewerWithIDLocked(viewerID, nodeID, 
 	}
 
 	// Store in maps
-	sm.virtualViewers[viewerID] = viewer
-	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], viewerID)
+	key := sm.virtualViewerKeyLocked(viewerID, nodeID)
+	sm.virtualViewers[key] = viewer
+	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], key)
 
 	// Update node's pending count and add bandwidth
 	node.PendingRedirects++
-	node.AddBandwidth = saturatingAddBandwidth(node.AddBandwidth, estBW)
 
 	// Recompute scores since AddBandwidth changed
 	sm.recomputeNodeScoresLocked(node)
@@ -4631,6 +4657,63 @@ func (sm *StreamStateManager) createVirtualViewerWithIDLocked(viewerID, nodeID, 
 // If viewerID is present it correlates a prior gateway redirect; otherwise it
 // deduplicates direct edge playback by node, stream, and client IP.
 func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamName, clientIP string) (string, bool) {
+	sm.mu.RLock()
+	if viewerID != "" {
+		if v := sm.virtualViewers[viewerID]; v != nil && v.StreamName != streamName {
+			sm.mu.RUnlock()
+			return "", false
+		}
+		if v := sm.virtualViewerForNodeLocked(viewerID, nodeID); v != nil {
+			if v.StreamName != streamName {
+				sm.mu.RUnlock()
+				return "", false
+			}
+			if v.State == VirtualViewerActive {
+				sm.mu.RUnlock()
+				return v.ID, false
+			}
+		}
+	} else {
+		var pending *VirtualViewer
+		for _, id := range sm.viewersByNode[nodeID] {
+			v := sm.virtualViewers[id]
+			if v == nil || v.StreamName != streamName || v.ClientIP != clientIP {
+				continue
+			}
+			if v.State == VirtualViewerActive {
+				sm.mu.RUnlock()
+				return v.ID, false
+			}
+			if v.State == VirtualViewerPending && (pending == nil || v.RedirectTime.Before(pending.RedirectTime)) {
+				pending = v
+			}
+		}
+		if pending != nil {
+			viewerID = pending.ID
+		} else {
+			viewerID = uuid.New().String()
+		}
+	}
+	sm.mu.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := sm.bandwidthMutation(ctx, "activate", viewerID, nodeID, bandwidthReservation{Stream: streamName}, 0, time.Now())
+	if err != nil {
+		return "", false
+	}
+	if !result.Allowed {
+		ok, reserveErr := sm.ReserveNodeBandwidth(ctx, viewerID, nodeID, streamName, BandwidthEgress, sm.EstimateStreamBandwidth(nodeID, streamName))
+		if reserveErr != nil || !ok {
+			return "", false
+		}
+		if ok, err = sm.ActivateNodeBandwidth(ctx, viewerID, nodeID); err != nil || !ok {
+			return "", false
+		}
+	}
+	return sm.startVirtualViewerByID(viewerID, nodeID, streamName, clientIP)
+}
+
+func (sm *StreamStateManager) startVirtualViewerByID(viewerID, nodeID, streamName, clientIP string) (string, bool) {
 	sm.mu.Lock()
 
 	node := sm.nodes[nodeID]
@@ -4640,16 +4723,16 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 	}
 
 	if viewerID != "" {
-		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+		if viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID); viewer != nil &&
 			viewer.NodeID == nodeID &&
-			viewer.StreamName == streamName {
+			viewer.StreamName == streamName && (viewer.State == VirtualViewerPending || viewer.State == VirtualViewerActive) {
 			started := sm.activateVirtualViewerLocked(node, viewer)
 			sm.mu.Unlock()
 			return viewer.ID, started
 		}
 		// A playback session this replica holds no reservation for is still its own viewer:
 		// matching it by client address would merge every player behind one address.
-		if sm.virtualViewers[viewerID] == nil {
+		if viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID); viewer == nil || viewer.State == VirtualViewerAbandoned || viewer.State == VirtualViewerDisconnected {
 			sm.addActiveVirtualViewerLocked(viewerID, nodeID, streamName, clientIP)
 			sm.mu.Unlock()
 			return viewerID, true
@@ -4685,7 +4768,9 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 }
 
 func (sm *StreamStateManager) addActiveVirtualViewerLocked(viewerID, nodeID, streamName, clientIP string) {
-	sm.virtualViewers[viewerID] = &VirtualViewer{
+	key := sm.virtualViewerKeyLocked(viewerID, nodeID)
+	existing := sm.virtualViewers[key] != nil
+	sm.virtualViewers[key] = &VirtualViewer{
 		ID:          viewerID,
 		NodeID:      nodeID,
 		StreamName:  streamName,
@@ -4693,7 +4778,9 @@ func (sm *StreamStateManager) addActiveVirtualViewerLocked(viewerID, nodeID, str
 		State:       VirtualViewerActive,
 		ConnectTime: time.Now(),
 	}
-	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], viewerID)
+	if !existing {
+		sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], key)
+	}
 }
 
 func (sm *StreamStateManager) activateVirtualViewerLocked(node *NodeState, viewer *VirtualViewer) bool {
@@ -4711,11 +4798,6 @@ func (sm *StreamStateManager) activateVirtualViewerLocked(node *NodeState, viewe
 	if node.PendingRedirects < 0 {
 		node.PendingRedirects = 0
 	}
-	if node.AddBandwidth >= viewer.EstBandwidth {
-		node.AddBandwidth -= viewer.EstBandwidth
-	} else {
-		node.AddBandwidth = 0
-	}
 
 	sm.recomputeNodeScoresLocked(node)
 	return true
@@ -4731,7 +4813,7 @@ func (sm *StreamStateManager) AttachVirtualViewerSession(viewerID, nodeID, strea
 	defer sm.mu.Unlock()
 
 	if viewerID != "" {
-		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+		if viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID); viewer != nil &&
 			viewer.State == VirtualViewerActive &&
 			viewer.NodeID == nodeID &&
 			viewer.StreamName == streamName {
@@ -4803,7 +4885,7 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 	var oldestTime time.Time
 
 	if viewerID != "" {
-		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+		if viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID); viewer != nil &&
 			viewer.State == VirtualViewerPending &&
 			viewer.NodeID == nodeID &&
 			viewer.StreamName == streamName {
@@ -4838,8 +4920,33 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 	}
 
 	confirmed := sm.activateVirtualViewerLocked(node, matchedViewer)
+	id := matchedViewer.ID
 	sm.mu.Unlock()
+	if confirmed {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, activateErr := sm.ActivateNodeBandwidth(ctx, id, nodeID)
+		reportBandwidthError("activate viewer", nodeID, activateErr)
+	}
 	return confirmed
+}
+
+// RejectUnconfirmedVirtualViewer abandons PLAY_REWRITE intent when USER_NEW
+// refuses it. Already admitted Mist connections keep their shared viewer.
+func (sm *StreamStateManager) RejectUnconfirmedVirtualViewer(viewerID, nodeID, streamName string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	viewer := sm.virtualViewerForNodeLocked(viewerID, nodeID)
+	if viewer == nil || viewer.StreamName != streamName || viewer.MistSessionID != "" || len(viewer.MistSessionIDs) > 0 {
+		return false
+	}
+	if viewer.State != VirtualViewerActive && viewer.State != VirtualViewerPending {
+		return false
+	}
+	viewer.State = VirtualViewerAbandoned
+	viewer.DisconnectTime = time.Now()
+	sm.reconcilePendingViewersLocked(nodeID)
+	return true
 }
 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
@@ -4939,8 +5046,9 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 }
 
 // ReconcileVirtualViewers is called on NODE_LIFECYCLE_UPDATE to reconcile state with reality.
-// It updates the bandwidth estimate, times out stale PENDING viewers, and recalculates AddBandwidth.
+// It updates the bandwidth estimate and times out stale local pending viewers.
 func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalConnections int, realUpSpeed uint64) {
+	sm.expireVirtualViewerLeases(nodeID)
 	sm.mu.Lock()
 
 	node := sm.nodes[nodeID]
@@ -4949,8 +5057,7 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 		return
 	}
 
-	// 1. Update real metrics (already done by UpdateNodeMetrics, but capture here too)
-	node.UpSpeed = float64(realUpSpeed)
+	// Metrics are applied once by ApplyNodeLifecycle, which preserves invalid observations.
 	node.LastPollTime = time.Now()
 
 	// 2. Update bandwidth estimate for future redirects
@@ -4958,8 +5065,7 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 		node.EstBandwidthPerUser = sm.clampBandwidth(realUpSpeed / uint64(realTotalConnections))
 	}
 
-	// 3. Time out stale pending redirects and recount the bandwidth the
-	// remaining ones reserve.
+	// Pending correlations expire independently of the shared reservation ledger.
 	sm.reconcilePendingViewersLocked(nodeID)
 
 	// 5. Recompute scores
@@ -4973,7 +5079,7 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 const pendingViewerTimeout = 30 * time.Second
 
 // reconcilePendingViewersLocked times out stale pending redirects to nodeID
-// and recomputes the bandwidth they reserve. It runs on the node's
+// without overwriting the shared reservation sums. It runs on the node's
 // lifecycle update: directly on the replica holding the node's control
 // stream, and on every other replica when that update's node state is
 // replicated to it (applyRedisChange). Without the second path a replica's
@@ -4985,16 +5091,13 @@ func (sm *StreamStateManager) reconcilePendingViewersLocked(nodeID string) {
 	}
 	sm.timeoutStalePendingViewersLocked(nodeID, pendingViewerTimeout)
 	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
-	var pendingBandwidth uint64
 	pending := 0
 	for _, viewerID := range sm.viewersByNode[nodeID] {
 		if viewer := sm.virtualViewers[viewerID]; viewer != nil && viewer.State == VirtualViewerPending {
-			pendingBandwidth += viewer.EstBandwidth
 			pending++
 		}
 	}
 	node.PendingRedirects = pending
-	node.AddBandwidth = pendingBandwidth
 }
 
 func (sm *StreamStateManager) timeoutStalePendingViewersLocked(nodeID string, maxAge time.Duration) {
@@ -5041,7 +5144,7 @@ func (sm *StreamStateManager) cleanupOldViewersLocked(nodeID string, retention t
 func (sm *StreamStateManager) calculateEstBandwidthPerUserLocked(node *NodeState) uint64 {
 	// Priority 1: Use cached estimate if recent
 	if node.EstBandwidthPerUser > 0 {
-		return node.EstBandwidthPerUser
+		return sm.clampBandwidth(node.EstBandwidthPerUser)
 	}
 
 	// Priority 2: Calculate from this node's current metrics
@@ -5086,15 +5189,11 @@ func (sm *StreamStateManager) getClusterTotalsLocked() (totalUp uint64, totalVie
 	return
 }
 
-// clampBandwidth ensures bandwidth estimate is within reasonable bounds
+// clampBandwidth retains a minimum estimate without capping high-bitrate streams.
 func (sm *StreamStateManager) clampBandwidth(bw uint64) uint64 {
-	const minBW = 64 * 1024   // 0.5 Mbps (64 KB/s)
-	const maxBW = 1024 * 1024 // 8 Mbps (1 MB/s)
+	const minBW = 64 * 1024 // 0.5 Mbps (64 KB/s)
 	if bw < minBW {
 		return minBW
-	}
-	if bw > maxBW {
-		return maxBW
 	}
 	return bw
 }

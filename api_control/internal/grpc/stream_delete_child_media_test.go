@@ -7,22 +7,30 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/DATA-DOG/go-sqlmock"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
-// expectStreamDeletePhaseOne queues the phase-1 transaction of DeleteStream: drop keys, soft-delete, retain the
+func expectStreamDeleteIngestStop(mock sqlmock.Sqlmock, streamID, tenantID string) {
+	target := commodoredb.LiveStreamMediaAuthorityTarget(streamID)
+	mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+		WithArgs(commodoredb.MediaAuthorityLaneIngestRevocation, target.Key, target.Kind, tenantID,
+			"stream_deleted", "commodore", "stream-deleted-stop:"+streamID, nil, nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+// expectStreamDeletePhaseOne queues the phase-1 transaction of DeleteStream: soft-delete, retain the
 // placement policy and enqueue the durable stream-cleanup obligation.
 func expectStreamDeletePhaseOne(mock sqlmock.Sqlmock, streamID string) {
 	mock.ExpectQuery("SELECT internal_name, title FROM commodore.streams").
 		WithArgs(streamID, "u1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"internal_name", "title"}).AddRow("live+abc", "My Stream"))
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM commodore.stream_keys").
-		WithArgs(streamID, testTenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE commodore.streams SET deleted_at").
 		WithArgs(streamID, testTenantID).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectStreamDeleteIngestStop(mock, streamID, testTenantID)
 	mock.ExpectExec("INSERT INTO commodore.media_placement_policies").
 		WithArgs(testTenantID, streamID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("INSERT INTO commodore.stream_cleanup_outbox").
@@ -89,8 +97,8 @@ func TestDeleteStream_ManyChildClipsReturnsPromptlyAsPending(t *testing.T) {
 	}
 }
 
-// A stream without child media still finalizes inside the call once every owning cell acked the thumbnail tombstone.
-func TestDeleteStream_NoChildMediaFinalizesInline(t *testing.T) {
+// A stream without child media can finalize inline after ingest revocation and thumbnail cleanup are confirmed.
+func TestDeleteStream_NoChildMediaAndConfirmedStopFinalizesInline(t *testing.T) {
 	const streamID = "s1"
 	s, mock, done := newMockServer(t)
 	defer done()
@@ -106,13 +114,18 @@ func TestDeleteStream_NoChildMediaFinalizesInline(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE commodore.stream_cleanup_outbox").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(testTenantID))
+	mock.ExpectQuery("SELECT EXISTS.*FROM commodore.media_authority_refresh_obligations").
+		WithArgs(testTenantID, "media_object:live_stream:"+streamID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT COALESCE\\(user_id").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO commodore.media_placement_policies").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM commodore.streams").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	s.streamThumbnailDeleteFn = func(context.Context, string, string, string) error { return nil }
-	s.streamCleanupKickFn = func() { t.Error("a stream without child media must not need the cleanup worker") }
+	s.streamCleanupKickFn = func() {
+		t.Error("a stream without child media and with confirmed ingest stop must not need the cleanup worker")
+	}
 
 	resp, err := s.DeleteStream(ctxAs("u1", testTenantID, "owner"), &commodorepb.DeleteStreamRequest{StreamId: streamID})
 	if err != nil {

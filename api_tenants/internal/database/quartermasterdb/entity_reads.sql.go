@@ -15,7 +15,7 @@ import (
 const getInfrastructureCluster = `-- name: GetInfrastructureCluster :one
 SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
        base_url, database_url, periscope_url, kafka_brokers,
-       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+       max_concurrent_streams, max_concurrent_viewers,
        health_status, is_active, is_default_cluster, is_platform_official, public_topology,
        created_at, updated_at, visibility, requires_approval, short_description,
        COALESCE(s3_bucket, '')::text AS s3_bucket,
@@ -27,45 +27,46 @@ SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_m
        COALESCE(cell_id, '')::text AS cell_id,
        COALESCE(cluster_class, '')::text AS cluster_class,
        COALESCE(control_cell_id, '')::text AS control_cell_id,
-       COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[])::text[] AS eligible_serving_cell_ids
+       COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[])::text[] AS eligible_serving_cell_ids,
+       allow_private_pull_sources
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = $1
 `
 
 type GetInfrastructureClusterRow struct {
-	ID                     string         `db:"id" json:"id"`
-	ClusterID              string         `db:"cluster_id" json:"cluster_id"`
-	ClusterName            string         `db:"cluster_name" json:"cluster_name"`
-	ClusterType            string         `db:"cluster_type" json:"cluster_type"`
-	OwnerTenantID          sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
-	DeploymentModel        sql.NullString `db:"deployment_model" json:"deployment_model"`
-	BaseUrl                string         `db:"base_url" json:"base_url"`
-	DatabaseUrl            sql.NullString `db:"database_url" json:"database_url"`
-	PeriscopeUrl           sql.NullString `db:"periscope_url" json:"periscope_url"`
-	KafkaBrokers           []string       `db:"kafka_brokers" json:"kafka_brokers"`
-	MaxConcurrentStreams   sql.NullInt32  `db:"max_concurrent_streams" json:"max_concurrent_streams"`
-	MaxConcurrentViewers   sql.NullInt32  `db:"max_concurrent_viewers" json:"max_concurrent_viewers"`
-	MaxBandwidthMbps       sql.NullInt32  `db:"max_bandwidth_mbps" json:"max_bandwidth_mbps"`
-	HealthStatus           sql.NullString `db:"health_status" json:"health_status"`
-	IsActive               sql.NullBool   `db:"is_active" json:"is_active"`
-	IsDefaultCluster       sql.NullBool   `db:"is_default_cluster" json:"is_default_cluster"`
-	IsPlatformOfficial     sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
-	PublicTopology         bool           `db:"public_topology" json:"public_topology"`
-	CreatedAt              sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt              sql.NullTime   `db:"updated_at" json:"updated_at"`
-	Visibility             sql.NullString `db:"visibility" json:"visibility"`
-	RequiresApproval       sql.NullBool   `db:"requires_approval" json:"requires_approval"`
-	ShortDescription       sql.NullString `db:"short_description" json:"short_description"`
-	S3Bucket               string         `db:"s3_bucket" json:"s3_bucket"`
-	S3Endpoint             string         `db:"s3_endpoint" json:"s3_endpoint"`
-	S3Region               string         `db:"s3_region" json:"s3_region"`
-	S3Prefix               string         `db:"s3_prefix" json:"s3_prefix"`
-	S3PrefixPresent        bool           `db:"s3_prefix_present" json:"s3_prefix_present"`
-	RegionID               string         `db:"region_id" json:"region_id"`
-	CellID                 string         `db:"cell_id" json:"cell_id"`
-	ClusterClass           string         `db:"cluster_class" json:"cluster_class"`
-	ControlCellID          string         `db:"control_cell_id" json:"control_cell_id"`
-	EligibleServingCellIds []string       `db:"eligible_serving_cell_ids" json:"eligible_serving_cell_ids"`
+	ID                      string         `db:"id" json:"id"`
+	ClusterID               string         `db:"cluster_id" json:"cluster_id"`
+	ClusterName             string         `db:"cluster_name" json:"cluster_name"`
+	ClusterType             string         `db:"cluster_type" json:"cluster_type"`
+	OwnerTenantID           sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
+	DeploymentModel         sql.NullString `db:"deployment_model" json:"deployment_model"`
+	BaseUrl                 string         `db:"base_url" json:"base_url"`
+	DatabaseUrl             sql.NullString `db:"database_url" json:"database_url"`
+	PeriscopeUrl            sql.NullString `db:"periscope_url" json:"periscope_url"`
+	KafkaBrokers            []string       `db:"kafka_brokers" json:"kafka_brokers"`
+	MaxConcurrentStreams    sql.NullInt32  `db:"max_concurrent_streams" json:"max_concurrent_streams"`
+	MaxConcurrentViewers    sql.NullInt32  `db:"max_concurrent_viewers" json:"max_concurrent_viewers"`
+	HealthStatus            sql.NullString `db:"health_status" json:"health_status"`
+	IsActive                sql.NullBool   `db:"is_active" json:"is_active"`
+	IsDefaultCluster        sql.NullBool   `db:"is_default_cluster" json:"is_default_cluster"`
+	IsPlatformOfficial      sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
+	PublicTopology          bool           `db:"public_topology" json:"public_topology"`
+	CreatedAt               sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt               sql.NullTime   `db:"updated_at" json:"updated_at"`
+	Visibility              sql.NullString `db:"visibility" json:"visibility"`
+	RequiresApproval        sql.NullBool   `db:"requires_approval" json:"requires_approval"`
+	ShortDescription        sql.NullString `db:"short_description" json:"short_description"`
+	S3Bucket                string         `db:"s3_bucket" json:"s3_bucket"`
+	S3Endpoint              string         `db:"s3_endpoint" json:"s3_endpoint"`
+	S3Region                string         `db:"s3_region" json:"s3_region"`
+	S3Prefix                string         `db:"s3_prefix" json:"s3_prefix"`
+	S3PrefixPresent         bool           `db:"s3_prefix_present" json:"s3_prefix_present"`
+	RegionID                string         `db:"region_id" json:"region_id"`
+	CellID                  string         `db:"cell_id" json:"cell_id"`
+	ClusterClass            string         `db:"cluster_class" json:"cluster_class"`
+	ControlCellID           string         `db:"control_cell_id" json:"control_cell_id"`
+	EligibleServingCellIds  []string       `db:"eligible_serving_cell_ids" json:"eligible_serving_cell_ids"`
+	AllowPrivatePullSources bool           `db:"allow_private_pull_sources" json:"allow_private_pull_sources"`
 }
 
 func (q *Queries) GetInfrastructureCluster(ctx context.Context, clusterID string) (GetInfrastructureClusterRow, error) {
@@ -84,7 +85,6 @@ func (q *Queries) GetInfrastructureCluster(ctx context.Context, clusterID string
 		pq.Array(&i.KafkaBrokers),
 		&i.MaxConcurrentStreams,
 		&i.MaxConcurrentViewers,
-		&i.MaxBandwidthMbps,
 		&i.HealthStatus,
 		&i.IsActive,
 		&i.IsDefaultCluster,
@@ -105,6 +105,7 @@ func (q *Queries) GetInfrastructureCluster(ctx context.Context, clusterID string
 		&i.ClusterClass,
 		&i.ControlCellID,
 		pq.Array(&i.EligibleServingCellIds),
+		&i.AllowPrivatePullSources,
 	)
 	return i, err
 }
@@ -116,43 +117,51 @@ SELECT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n
        n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at,
        COALESCE((SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = n.cluster_id), '')::text AS owner_tenant_id,
        n.snapshot_cpu_percent, n.snapshot_ram_used_bytes, n.snapshot_ram_total_bytes,
-       n.snapshot_disk_used_bytes, n.snapshot_disk_total_bytes, n.snapshot_uptime_seconds, n.snapshot_at
+       n.snapshot_disk_used_bytes, n.snapshot_disk_total_bytes, n.snapshot_uptime_seconds, n.snapshot_at,
+       b.egress_budget_bytes_per_sec, b.ingress_budget_bytes_per_sec,
+       b.revision AS capacity_revision, b.updated_by AS capacity_updated_by, b.updated_at AS capacity_updated_at
 FROM quartermaster.infrastructure_nodes n
+LEFT JOIN quartermaster.infrastructure_node_capacity b ON b.node_id = n.node_id
 WHERE n.node_id = $1 OR n.id::text = $1
 `
 
 type GetInfrastructureNodeRow struct {
-	ID                     string          `db:"id" json:"id"`
-	NodeID                 string          `db:"node_id" json:"node_id"`
-	ClusterID              string          `db:"cluster_id" json:"cluster_id"`
-	NodeName               string          `db:"node_name" json:"node_name"`
-	NodeType               string          `db:"node_type" json:"node_type"`
-	InternalIp             sql.NullString  `db:"internal_ip" json:"internal_ip"`
-	ExternalIp             sql.NullString  `db:"external_ip" json:"external_ip"`
-	WireguardIp            sql.NullString  `db:"wireguard_ip" json:"wireguard_ip"`
-	WireguardPublicKey     sql.NullString  `db:"wireguard_public_key" json:"wireguard_public_key"`
-	WireguardListenPort    sql.NullInt32   `db:"wireguard_listen_port" json:"wireguard_listen_port"`
-	Region                 sql.NullString  `db:"region" json:"region"`
-	AvailabilityZone       sql.NullString  `db:"availability_zone" json:"availability_zone"`
-	Latitude               sql.NullFloat64 `db:"latitude" json:"latitude"`
-	Longitude              sql.NullFloat64 `db:"longitude" json:"longitude"`
-	CpuCores               sql.NullInt32   `db:"cpu_cores" json:"cpu_cores"`
-	MemoryGb               sql.NullInt32   `db:"memory_gb" json:"memory_gb"`
-	DiskGb                 sql.NullInt32   `db:"disk_gb" json:"disk_gb"`
-	LastHeartbeat          sql.NullTime    `db:"last_heartbeat" json:"last_heartbeat"`
-	EnrollmentOrigin       string          `db:"enrollment_origin" json:"enrollment_origin"`
-	AppliedMeshRevision    sql.NullString  `db:"applied_mesh_revision" json:"applied_mesh_revision"`
-	Status                 sql.NullString  `db:"status" json:"status"`
-	CreatedAt              sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt              sql.NullTime    `db:"updated_at" json:"updated_at"`
-	OwnerTenantID          string          `db:"owner_tenant_id" json:"owner_tenant_id"`
-	SnapshotCpuPercent     sql.NullFloat64 `db:"snapshot_cpu_percent" json:"snapshot_cpu_percent"`
-	SnapshotRamUsedBytes   sql.NullInt64   `db:"snapshot_ram_used_bytes" json:"snapshot_ram_used_bytes"`
-	SnapshotRamTotalBytes  sql.NullInt64   `db:"snapshot_ram_total_bytes" json:"snapshot_ram_total_bytes"`
-	SnapshotDiskUsedBytes  sql.NullInt64   `db:"snapshot_disk_used_bytes" json:"snapshot_disk_used_bytes"`
-	SnapshotDiskTotalBytes sql.NullInt64   `db:"snapshot_disk_total_bytes" json:"snapshot_disk_total_bytes"`
-	SnapshotUptimeSeconds  sql.NullInt64   `db:"snapshot_uptime_seconds" json:"snapshot_uptime_seconds"`
-	SnapshotAt             sql.NullTime    `db:"snapshot_at" json:"snapshot_at"`
+	ID                       string          `db:"id" json:"id"`
+	NodeID                   string          `db:"node_id" json:"node_id"`
+	ClusterID                string          `db:"cluster_id" json:"cluster_id"`
+	NodeName                 string          `db:"node_name" json:"node_name"`
+	NodeType                 string          `db:"node_type" json:"node_type"`
+	InternalIp               sql.NullString  `db:"internal_ip" json:"internal_ip"`
+	ExternalIp               sql.NullString  `db:"external_ip" json:"external_ip"`
+	WireguardIp              sql.NullString  `db:"wireguard_ip" json:"wireguard_ip"`
+	WireguardPublicKey       sql.NullString  `db:"wireguard_public_key" json:"wireguard_public_key"`
+	WireguardListenPort      sql.NullInt32   `db:"wireguard_listen_port" json:"wireguard_listen_port"`
+	Region                   sql.NullString  `db:"region" json:"region"`
+	AvailabilityZone         sql.NullString  `db:"availability_zone" json:"availability_zone"`
+	Latitude                 sql.NullFloat64 `db:"latitude" json:"latitude"`
+	Longitude                sql.NullFloat64 `db:"longitude" json:"longitude"`
+	CpuCores                 sql.NullInt32   `db:"cpu_cores" json:"cpu_cores"`
+	MemoryGb                 sql.NullInt32   `db:"memory_gb" json:"memory_gb"`
+	DiskGb                   sql.NullInt32   `db:"disk_gb" json:"disk_gb"`
+	LastHeartbeat            sql.NullTime    `db:"last_heartbeat" json:"last_heartbeat"`
+	EnrollmentOrigin         string          `db:"enrollment_origin" json:"enrollment_origin"`
+	AppliedMeshRevision      sql.NullString  `db:"applied_mesh_revision" json:"applied_mesh_revision"`
+	Status                   sql.NullString  `db:"status" json:"status"`
+	CreatedAt                sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt                sql.NullTime    `db:"updated_at" json:"updated_at"`
+	OwnerTenantID            string          `db:"owner_tenant_id" json:"owner_tenant_id"`
+	SnapshotCpuPercent       sql.NullFloat64 `db:"snapshot_cpu_percent" json:"snapshot_cpu_percent"`
+	SnapshotRamUsedBytes     sql.NullInt64   `db:"snapshot_ram_used_bytes" json:"snapshot_ram_used_bytes"`
+	SnapshotRamTotalBytes    sql.NullInt64   `db:"snapshot_ram_total_bytes" json:"snapshot_ram_total_bytes"`
+	SnapshotDiskUsedBytes    sql.NullInt64   `db:"snapshot_disk_used_bytes" json:"snapshot_disk_used_bytes"`
+	SnapshotDiskTotalBytes   sql.NullInt64   `db:"snapshot_disk_total_bytes" json:"snapshot_disk_total_bytes"`
+	SnapshotUptimeSeconds    sql.NullInt64   `db:"snapshot_uptime_seconds" json:"snapshot_uptime_seconds"`
+	SnapshotAt               sql.NullTime    `db:"snapshot_at" json:"snapshot_at"`
+	EgressBudgetBytesPerSec  sql.NullInt64   `db:"egress_budget_bytes_per_sec" json:"egress_budget_bytes_per_sec"`
+	IngressBudgetBytesPerSec sql.NullInt64   `db:"ingress_budget_bytes_per_sec" json:"ingress_budget_bytes_per_sec"`
+	CapacityRevision         sql.NullInt64   `db:"capacity_revision" json:"capacity_revision"`
+	CapacityUpdatedBy        sql.NullString  `db:"capacity_updated_by" json:"capacity_updated_by"`
+	CapacityUpdatedAt        sql.NullTime    `db:"capacity_updated_at" json:"capacity_updated_at"`
 }
 
 func (q *Queries) GetInfrastructureNode(ctx context.Context, nodeID string) (GetInfrastructureNodeRow, error) {
@@ -190,6 +199,11 @@ func (q *Queries) GetInfrastructureNode(ctx context.Context, nodeID string) (Get
 		&i.SnapshotDiskTotalBytes,
 		&i.SnapshotUptimeSeconds,
 		&i.SnapshotAt,
+		&i.EgressBudgetBytesPerSec,
+		&i.IngressBudgetBytesPerSec,
+		&i.CapacityRevision,
+		&i.CapacityUpdatedBy,
+		&i.CapacityUpdatedAt,
 	)
 	return i, err
 }

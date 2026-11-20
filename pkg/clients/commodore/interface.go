@@ -8,6 +8,7 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
@@ -15,6 +16,13 @@ import (
 // that api_gateway can inject fakes for resolver real-path tests. The concrete
 // client satisfies it (asserted below).
 type Interface interface {
+	SetNodeCapacity(ctx context.Context, req *quartermasterpb.SetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error)
+	GetNodeCapacity(ctx context.Context, req *quartermasterpb.GetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error)
+	GetTranscodeLadderPolicy(ctx context.Context, req *commodorepb.GetTranscodeLadderPolicyRequest) (*commodorepb.TranscodeLadderPolicy, error)
+	SetTenantTranscodeLadder(ctx context.Context, req *commodorepb.SetTenantTranscodeLadderRequest) (*commodorepb.TranscodeLadderPolicy, error)
+	SetVodOriginalPolicy(ctx context.Context, req *commodorepb.SetVodOriginalPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
+	CreateVodOriginalDownload(ctx context.Context, req *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginal(ctx context.Context, req *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error)
 	Close() error
 	InvalidateTenantCacheKeys(tenantID string)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
@@ -68,10 +76,13 @@ type Interface interface {
 	CreateStream(ctx context.Context, req *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error)
 	GetStream(ctx context.Context, streamID string) (*commodorepb.Stream, error)
 	GetStreamsBatch(ctx context.Context, streamIDs []string) (*commodorepb.GetStreamsBatchResponse, error)
+	GetStreamIngestStates(ctx context.Context, streamIDs []string) (*foghorncontrolpb.GetStreamIngestStatesResponse, error)
 	ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest, search string) (*commodorepb.ListStreamsResponse, error)
 	UpdateStream(ctx context.Context, req *commodorepb.UpdateStreamRequest) (*commodorepb.Stream, error)
 	DeleteStream(ctx context.Context, streamID string) (*commodorepb.DeleteStreamResponse, error)
 	RefreshStreamKey(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error)
+	RefreshStreamKeyAndEndIngest(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error)
+	DisconnectIngest(ctx context.Context, streamID string) (*commodorepb.DisconnectIngestResponse, error)
 	CreateStreamKey(ctx context.Context, streamID, keyName string) (*commodorepb.StreamKeyResponse, error)
 	ListStreamKeys(ctx context.Context, streamID string, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamKeysResponse, error)
 	DeactivateStreamKey(ctx context.Context, streamID, keyID string) error
@@ -115,6 +126,8 @@ type Interface interface {
 	DeleteDVR(ctx context.Context, dvrHash string) (bool, error)
 	RetrieveDVRChapter(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, error)
 	ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error)
+	ListStreamArtifacts(ctx context.Context, req *commodorepb.ListStreamArtifactsRequest) (*commodorepb.ListStreamArtifactsResponse, error)
+	GetDVRRecording(ctx context.Context, id string) (*sharedpb.DVRInfo, error)
 	ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
 	ResolveViewerEndpointWithProtocol(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error)

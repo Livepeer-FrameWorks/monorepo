@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -314,7 +315,7 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		// PLAY_REWRITE params: stream_name, ip, connector, request_url
 		trigger := &ipcpb.ViewerResolveTrigger{
 			RequestedStream: params[0],
-			ViewerHost:      params[1],
+			ViewerHost:      canonicalViewerHost(params[1]),
 			OutputType:      params[2],
 			RequestUrl:      params[3],
 		}
@@ -413,7 +414,7 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		}
 		viewer := &ipcpb.ViewerConnectTrigger{
 			StreamName:  params[0],
-			Host:        params[1],
+			Host:        canonicalViewerHost(params[1]),
 			ViewerToken: params[2],
 			Connector:   params[3],
 			RequestUrl:  params[4],
@@ -439,7 +440,7 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 			SessionId:  sessionID,
 			StreamName: params[1],
 			Connector:  params[2],
-			Host:       params[3],
+			Host:       canonicalViewerHost(params[3]),
 		}
 		if params[0] != "" && params[0] != sessionID {
 			trigger.SessionIdentifier = &params[0]
@@ -1034,4 +1035,12 @@ func int64FromAny(v any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func canonicalViewerHost(host string) string {
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	return address.Unmap().String()
 }

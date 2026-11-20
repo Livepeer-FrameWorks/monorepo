@@ -319,7 +319,7 @@ importers. See [operator setup and retention](/operators/network-observations).
 
 ## Live event firehose
 
-For dashboards that want the raw event stream (every viewer connect/disconnect, every track change, every storage event), subscribe to the firehose. Be deliberate — this is high-volume.
+For dashboards that want the raw event stream (every viewer connect/disconnect, every track change, every storage event), subscribe to the firehose. API tokens need `streams:read`, `analytics:read`, `infrastructure:read`, and `consultant:use` because it combines stream, viewer, system, and AI channels. Prefer a narrower subscription when those scopes are unnecessary. Be deliberate — this is high-volume.
 
 ```graphql
 subscription Firehose {

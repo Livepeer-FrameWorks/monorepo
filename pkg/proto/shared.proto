@@ -118,6 +118,7 @@ message ClipInfo {
   optional bool is_finalized = 27;
   reserved 12, 19, 28;                // 28 was is_frozen
   reserved "access_count", "last_accessed";
+  optional string error_message = 29;
 }
 
 // GetClipRequest - request to get a single clip
@@ -528,6 +529,8 @@ message CreateVodUploadRequest {
   // Principal the calling service creates the upload for; Foghorn attributes
   // upload.created to it.
   common.RequestActor actor = 14;
+  string transcode_ladder = 15; // Empty inherits the account ladder, then the plan default.
+  optional bool keep_original = 16; // Commodore resolves upload -> tenant -> true; absent at Foghorn means false.
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -540,6 +543,8 @@ message CreateVodUploadResponse {
   repeated VodUploadPart parts = 5;  // Presigned URLs for each part
   google.protobuf.Timestamp expires_at = 6;  // When URLs expire
   string playback_id = 7;        // Public playback key (artifact playback ID)
+  // Effective policy accepted for this upload; absent on older Foghorn replicas.
+  optional bool keep_original = 8;
 }
 
 // VodUploadPart - presigned URL for a single part
@@ -573,6 +578,7 @@ message ImportVodAssetRequest {
   common.RequestActor actor = 13;
   // Processing spec (JSON) the import's completion dispatches, as a completed upload's.
   optional string processes_json = 14;
+  string transcode_ladder = 15; // Empty inherits the account ladder, then the plan default.
 }
 
 message ImportVodAssetResponse {
@@ -713,6 +719,7 @@ message VodAssetInfo {
   bool is_synced = 29;
   bool is_finalized = 30;
   reserved 31;                       // was is_frozen
+  optional int64 original_size_bytes = 32; // Size in bytes of the byte-identical retained upload.
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -829,4 +836,29 @@ message AckArtifactCreationCommandResponse {
   reserved 1;                       // was 'acked' bool, superseded by outcome
   reserved "acked";
   ArtifactCreationOutcome outcome = 2; // explicit ledger outcome; only COMMITTED/REJECTED discharge the ack
+}
+
+
+// Original access is tenant-owner authenticated, independent of playback policy.
+message CreateVodOriginalDownloadRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+  common.RequestActor actor = 3;
+}
+
+message CreateVodOriginalDownloadResponse {
+  string url = 1; // Signed attachment GET; never a public playback URL.
+  google.protobuf.Timestamp expires_at = 2;
+  int64 size_bytes = 3;
+  string filename = 4;
+}
+
+message DeleteVodOriginalRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+  common.RequestActor actor = 3;
+}
+
+message DeleteVodOriginalResponse {
+  bool success = 1;
 }

@@ -185,12 +185,21 @@ struct StreamNode: Codable {
   let id: String
   let name: String
   let metrics: StreamNodeMetrics?
+  let ingest: StreamNodeIngest?
 
-  var isActive: Bool { metrics?.isLive ?? false }
+  var isActive: Bool { ingest?.isLive ?? false }
   var viewerCount: Int? { metrics?.currentViewers }
+  var summary: StreamSummary {
+    StreamSummary(id: id, name: name, isActive: isActive,
+      viewerCount: viewerCount, ingestState: ingest?.state)
+  }
+}
+
+struct StreamNodeIngest: Codable {
+  let state: String
+  let isLive: Bool
 }
 
 struct StreamNodeMetrics: Codable {
-  let isLive: Bool
   let currentViewers: Int
 }

@@ -16,6 +16,7 @@ import (
 )
 
 const StopSessionsAckProtocolMin int32 = 10
+const ClaimedPublisherStopProtocolMin int32 = 12
 
 type stopSessionsWaiter struct {
 	connection *conn
@@ -93,6 +94,28 @@ func acceptStopSessionsResult(result *ipcpb.StopSessionsResult, session NodeSess
 
 // SendLocalStopSessionsContext waits for the edge's verified effect, rather than transport acceptance.
 func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest) error {
+	return sendLocalStopSessionsContext(ctx, nodeID, req, false)
+}
+
+func SendLocalClaimedStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest) error {
+	if len(req.GetTargets()) != len(req.GetStreamNames()) || len(req.GetTargets()) == 0 {
+		return errors.New("claim-fenced stop requires exact generation targets")
+	}
+	for index, target := range req.GetTargets() {
+		if target.GetInternalName() != req.GetStreamNames()[index] {
+			return errors.New("claim-fenced stop target differs from stream scope")
+		}
+		if _, err := uuid.Parse(target.GetSourceGeneration()); err != nil {
+			return errors.New("claim-fenced stop requires a session generation")
+		}
+		if !target.GetFenceAdmission() || target.GetConnectorPid() <= 0 {
+			return errors.New("claim-fenced stop requires durable admission rejection and connector identity")
+		}
+	}
+	return sendLocalStopSessionsContext(ctx, nodeID, req, true)
+}
+
+func sendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest, claimed bool) error {
 	if registry == nil {
 		return ErrNotConnected
 	}
@@ -105,9 +128,15 @@ func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 	if req.GetTenantId() == "" || len(req.GetStreamNames()) == 0 {
 		return errors.New("session termination requires tenant and stream scope")
 	}
+	if claimed && !c.features().ClaimedPublisherStop {
+		return errors.New("claimed publisher stop requires an edge with durable admission rejection")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	if !c.features().ConfirmedSessionStop {
+		if claimed {
+			return errors.New("claim-fenced stop requires a generation-aware edge")
+		}
 		// Old edges can still perform their best-effort stop during rollout,
 		// but its transport acceptance cannot complete a durable revocation.
 		legacy := &ipcpb.StopSessionsRequest{TenantId: req.TenantId, StreamNames: slices.Clone(req.StreamNames), Reason: req.Reason}
@@ -126,21 +155,24 @@ func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 	}
 	command.RemainingTimeoutMs = uint32(remaining)
 	command.AuthorizationNonce = ""
-	command.Targets = nil
-	for _, name := range command.StreamNames {
-		if name == "" {
-			return errors.New("empty stream in session termination scope")
-		}
-		generation := ""
-		if db != nil {
-			var err error
-			generation, err = foghorndb.New(db).GetStopSessionsGeneration(ctx, foghorndb.GetStopSessionsGenerationParams{TenantID: command.TenantId, NodeID: nodeID, InternalName: name})
-			if err != nil {
-				return fmt.Errorf("capture session termination generation: %w", err)
+	if !claimed {
+		command.Targets = nil
+		for _, name := range command.StreamNames {
+			if name == "" {
+				return errors.New("empty stream in session termination scope")
 			}
+			generation := ""
+			if db != nil {
+				var err error
+				generation, err = foghorndb.New(db).GetStopSessionsGeneration(ctx, foghorndb.GetStopSessionsGenerationParams{TenantID: command.TenantId, NodeID: nodeID, InternalName: name})
+				if err != nil {
+					return fmt.Errorf("capture session termination generation: %w", err)
+				}
+			}
+			command.Targets = append(command.Targets, &ipcpb.StopSessionsTarget{InternalName: name, SourceGeneration: generation})
 		}
-		command.Targets = append(command.Targets, &ipcpb.StopSessionsTarget{InternalName: name, SourceGeneration: generation})
 	}
+
 	waiter := stopSessionsWaiter{connection: c, tenant: command.TenantId, names: slices.Clone(command.StreamNames), result: make(chan error, 1), ctx: ctx, command: command}
 	stopSessionsWaiters.Lock()
 	stopSessionsWaiters.byID[command.RequestId] = waiter

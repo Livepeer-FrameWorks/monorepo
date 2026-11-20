@@ -47,6 +47,7 @@ message StreamConnected {
   IngestProtocol protocol = 2;
   // playback_id is the stream's public playback ID.
   string playback_id = 3;
+  string session_id = 4;
 }
 
 // StreamLive reports that the stream became playable.
@@ -56,6 +57,7 @@ message StreamLive {
   // playback_id is the stream's public playback ID; empty when Foghorn could
   // not resolve the stream while the control plane was unreachable.
   string playback_id = 2;
+  string session_id = 3;
 }
 
 // StreamIdle reports that the stream's ingest session ended.
@@ -65,4 +67,21 @@ message StreamIdle {
   // playback_id is the stream's public playback ID; empty when Foghorn could
   // not resolve the stream while the control plane was unreachable.
   string playback_id = 2;
+  string session_id = 3;
+}
+
+// StreamEnded reports that the origin unloaded the latest ingest buffer.
+message StreamEnded {
+  option (frameworks.events.event) = {type: "stream.ended", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+  string playback_id = 2;
+  string session_id = 3;
+}
+
+// StreamIngestDisconnected reports an explicitly requested publisher disconnect.
+message StreamIngestDisconnected {
+  option (frameworks.events.event) = {type: "stream.ingest_disconnected", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+  string session_id = 2;
+  string reason = 3;
 }

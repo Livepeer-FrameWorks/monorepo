@@ -687,6 +687,12 @@ func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetN
 	return resp, trailers, err
 }
 
+func (c *GRPCClient) PushNodeCapacity(ctx context.Context, nodeID string) (*foghornpb.PushNodeCapacityResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.nodeMgmt.PushNodeCapacity(ctx, &foghornpb.PushNodeCapacityRequest{NodeId: nodeID})
+}
+
 // GetNodeHealth returns real-time health and routing state for a node.
 func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -706,4 +712,33 @@ func (c *GRPCClient) ListNodeUpdateStatus(ctx context.Context, clusterID string)
 
 func (c *GRPCClient) DiagnoseStream(ctx context.Context, req *foghornpb.DiagnoseStreamRequest) (*foghornpb.DiagnoseStreamResponse, error) {
 	return c.placement.DiagnoseStream(ctx, req)
+}
+
+func (c *GRPCClient) CreateVodOriginalDownload(ctx context.Context, req *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.vod.CreateVodOriginalDownload(ctx, req)
+}
+func (c *GRPCClient) DeleteVodOriginal(ctx context.Context, req *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.vod.DeleteVodOriginal(ctx, req)
+}
+
+// GetStreamIngestStates reads current session state from the owning cell.
+func (c *GRPCClient) GetStreamIngestStates(ctx context.Context, req *foghorncontrolpb.GetStreamIngestStatesRequest) (*foghorncontrolpb.GetStreamIngestStatesResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.tenant.GetStreamIngestStates(ctx, req)
+}
+
+func (c *GRPCClient) TerminateClaimedTenantStream(ctx context.Context, tenantID, streamID, reason, internalName, claimID string) (*foghorncontrolpb.TerminateTenantStreamsResponse, metadata.MD, error) {
+	if internalName == "" || claimID == "" || streamID == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "stream and publisher claim are required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var trailers metadata.MD
+	response, err := c.tenant.TerminateClaimedStreamSessions(ctx, &foghorncontrolpb.TerminateStreamSessionsRequest{TenantId: tenantID, StreamId: streamID, Reason: reason, StreamNames: []string{internalName}, ClaimFences: map[string]string{internalName: claimID}}, grpc.Trailer(&trailers))
+	return response, trailers, err
 }

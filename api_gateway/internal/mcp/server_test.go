@@ -75,8 +75,6 @@ func TestAuthorizeMCPToolUsesExistingTokenScopes(t *testing.T) {
 		wantDeny bool
 	}{
 		{name: "matching API scope", ctx: apiToken, tool: "list_push_targets"},
-		{name: "stream keys need streams:write", ctx: apiToken, tool: "list_stream_keys", wantDeny: true},
-		{name: "stream keys with streams:write", ctx: context.WithValue(apiToken, ctxkeys.KeyPermissions, []string{"streams:write"}), tool: "list_stream_keys"},
 		{name: "missing API scope", ctx: apiToken, tool: "create_stream", wantDeny: true},
 		{name: "interactive user", ctx: jwt, tool: "create_stream"},
 		{name: "anonymous public tool", ctx: context.Background(), tool: "browse_marketplace"},
@@ -188,7 +186,7 @@ func TestAuthorizeMCPPrivateInfrastructureRequiresTenantOwnerOrAdmin(t *testing.
 	member = context.WithValue(member, ctxkeys.KeyRole, "member")
 	owner := context.WithValue(member, ctxkeys.KeyRole, "owner")
 
-	for _, tool := range []string{"get_node_health", "get_node_info", "set_node_mode", "create_edge_cluster"} {
+	for _, tool := range []string{"get_node_health", "get_node_info", "set_node_mode", "set_node_capacity", "create_edge_cluster"} {
 		if err := authorizeMCPTool(member, tool); err == nil {
 			t.Fatalf("member authorized for %s", tool)
 		}
@@ -237,26 +235,26 @@ func TestAuthorizeMCPSettingsWritesUseCanonicalScopeAndPrivilegedRole(t *testing
 	}
 }
 
-func TestAuthorizeMCPRetentionOverridesUseBillingManagement(t *testing.T) {
-	base := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
-	base = context.WithValue(base, ctxkeys.KeyTenantID, "tenant-1")
-	base = context.WithValue(base, ctxkeys.KeyPermissions, []string{"billing:write", "mcp:high-risk"})
-	member := context.WithValue(base, ctxkeys.KeyRole, "member")
-	owner := context.WithValue(base, ctxkeys.KeyRole, "owner")
-
-	for _, tool := range []string{"set_stream_retention_overrides", "update_asset_retention", "reset_asset_retention"} {
-		policy, ok := tools.ToolPolicyForName(tool)
-		if !ok {
-			t.Fatalf("policy missing for %s", tool)
-		}
-		if policy.Scope != "billing:write" {
-			t.Fatalf("%s scope = %q, want billing:write", tool, policy.Scope)
-		}
-		if err := authorizeMCPTool(member, tool); err == nil {
-			t.Fatalf("member authorized for %s", tool)
-		}
-		if err := authorizeMCPTool(owner, tool); err != nil {
-			t.Fatalf("owner billing token denied for %s: %v", tool, err)
+func TestAuthorizeMCPRetentionOverridesUseStreamsWrite(t *testing.T) {
+	for _, scope := range []string{"streams:write", "billing:write"} {
+		for _, role := range []string{"member", "owner"} {
+			ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+			ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+			ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{scope, "mcp:high-risk"})
+			ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+			for _, tool := range []string{"set_stream_retention_overrides", "update_asset_retention", "reset_asset_retention"} {
+				policy, ok := tools.ToolPolicyForName(tool)
+				if !ok || policy.Scope != "streams:write" {
+					t.Errorf("%s scope=%q, want streams:write", tool, policy.Scope)
+				}
+				err := authorizeMCPTool(ctx, tool)
+				if scope == "streams:write" && err != nil {
+					t.Errorf("%s/%s denied %s: %v", scope, role, tool, err)
+				}
+				if scope == "billing:write" && err == nil {
+					t.Errorf("billing-only %s authorized %s", role, tool)
+				}
+			}
 		}
 	}
 }
@@ -276,7 +274,6 @@ func TestFilterToolsByPolicyOnlyPublishesCallableTools(t *testing.T) {
 	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
 	result := &mcp.ListToolsResult{Tools: []*mcp.Tool{
 		{Name: "list_push_targets"},
-		{Name: "list_stream_keys"},
 		{Name: "create_stream"},
 		{Name: "browse_marketplace"},
 		{Name: "not_registered"},
@@ -717,5 +714,21 @@ func TestPaidMCPMutationOversizedResultBecomesReplayableTerminalEnvelope(t *test
 	}
 	if !strings.Contains(mcpTextResult(second.(*mcp.CallToolResult)), "exceeded the durable replay limit") {
 		t.Fatalf("unexpected replay result: %v", second)
+	}
+}
+
+func TestAuthorizeIngestStopMCPScopes(t *testing.T) {
+	for _, scope := range []string{"streams:write", "streams:read", "billing:write", "analytics:write"} {
+		for _, role := range []string{"member", "owner"} {
+			ctx := context.WithValue(t.Context(), ctxkeys.KeyAuthType, "api_token")
+			ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{scope, "mcp:high-risk"})
+			ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant")
+			ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+			for _, tool := range []string{"refresh_stream_key", "disconnect_ingest"} {
+				if err := authorizeMCPTool(ctx, tool); (err == nil) != (scope == "streams:write") {
+					t.Errorf("%s %s authorized=%v for %s: %v", scope, role, err == nil, tool, err)
+				}
+			}
+		}
 	}
 }

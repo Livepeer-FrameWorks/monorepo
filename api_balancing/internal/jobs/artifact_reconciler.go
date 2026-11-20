@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -757,20 +758,21 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			tracks = parsed
 		}
 		snapshot := &commodorepb.UpdateArtifactCatalogSnapshotRequest{
-			TenantId:         tenantID,
-			AssetType:        assetType,
-			AssetKey:         hash,
-			SourceRevision:   revision,
-			SizeBytes:        nullInt64Ptr(sizeBytes),
-			DurationMs:       nullInt64Ptr(durationMs),
-			TracksPresent:    tracksPresent,
-			Tracks:           tracks,
-			SyncStatus:       nullStringPtr(syncStatus),
-			IsSynced:         boolPtr(syncStatus.Valid && syncStatus.String == "synced"),
-			IsFinalized:      catalogIsFinalized(artifactType, dtshSynced),
-			StorageLocation:  nullStringPtr(storageLocation),
-			StorageClusterId: nullStringPtr(storageCluster),
-			HasThumbnails:    boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
+			TenantId:          tenantID,
+			AssetType:         assetType,
+			AssetKey:          hash,
+			SourceRevision:    revision,
+			SizeBytes:         nullInt64Ptr(sizeBytes),
+			OriginalSizeBytes: nullInt64Ptr(row.OriginalSizeBytes),
+			DurationMs:        nullInt64Ptr(durationMs),
+			TracksPresent:     tracksPresent,
+			Tracks:            tracks,
+			SyncStatus:        nullStringPtr(syncStatus),
+			IsSynced:          boolPtr(syncStatus.Valid && syncStatus.String == "synced"),
+			IsFinalized:       catalogIsFinalized(artifactType, dtshSynced),
+			StorageLocation:   nullStringPtr(storageLocation),
+			StorageClusterId:  nullStringPtr(storageCluster),
+			HasThumbnails:     boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
 			// Authoritative thumbnail serving cluster (the origin cluster the thumbnail was stored on);
 			// Commodore prefers it over storage/origin when building the Chandler URL. Absent → NULL, readers fall back.
 			ThumbnailServingClusterId: nullStringPtr(thumbServingCluster),
@@ -782,6 +784,15 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			// Retention horizon → catalog, so /library shows accurate expiry for every kind
 			// (chapters included). Absent = keep-forever (NULL).
 			RetentionUntilUnix: nullInt64Ptr(retentionUnix),
+		}
+		if artifactType == "dvr" {
+			snapshot.RecordingTimesPresent = true
+			if row.StartedAt.Valid {
+				snapshot.StartedAt = timestamppb.New(row.StartedAt.Time)
+			}
+			if row.EndedAt.Valid {
+				snapshot.EndedAt = timestamppb.New(row.EndedAt.Time)
+			}
 		}
 		resp, err := r.commodore.UpdateArtifactCatalogSnapshot(ctx, snapshot)
 		if err != nil {
@@ -803,6 +814,11 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			// insert landed between the guarded UPDATE and the readback, or the guard rejected a
 			// stale attempt. Coverage is NOT proven for this revision — back off and retry.
 			r.logCatalogNotCovered(hash, artifactType, revision, resp, "catalog_revision_behind")
+			r.backoffCatalogRow(ctx, hash)
+			continue
+		}
+		if snapshot.GetRecordingTimesPresent() && !resp.GetRecordingTimesPresent() {
+			r.logCatalogNotCovered(hash, artifactType, revision, resp, "recording_capture_times_not_acked")
 			r.backoffCatalogRow(ctx, hash)
 			continue
 		}

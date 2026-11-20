@@ -473,6 +473,7 @@ export const scalarFields = {
         "storagePath",
         "sizeBytes",
         "status",
+        "errorMessage",
         "createdAt",
         "updatedAt",
         "clipMode",
@@ -559,6 +560,14 @@ export const scalarFields = {
         "clusterName",
         "role",
         "accessLevel",
+        "__typename"
+    ],
+    "ClusterCapacity": [
+        "egressBudgetBytesPerSec",
+        "ingressBudgetBytesPerSec",
+        "egressUsableBytesPerSec",
+        "ingressUsableBytesPerSec",
+        "defaultBudgetNodes",
         "__typename"
     ],
     "ClusterEdge": [
@@ -868,6 +877,7 @@ export const scalarFields = {
         "record",
         "liveVideoAbr",
         "ingestMode",
+        "transcodeLadder",
         "__typename"
     ],
     "CreateStreamKeyInput": [
@@ -880,12 +890,17 @@ export const scalarFields = {
     "CreateStreamResult": [
         "__typename"
     ],
+    "CreateVodOriginalDownloadResult": [
+        "__typename"
+    ],
     "CreateVodUploadInput": [
         "filename",
         "sizeBytes",
         "contentType",
         "title",
         "description",
+        "transcodeLadder",
+        "keepOriginal",
         "__typename"
     ],
     "CreateVodUploadResult": [
@@ -976,6 +991,14 @@ export const scalarFields = {
         "lastFailureReason",
         "__typename"
     ],
+    "DVRChapterConnection": [
+        "totalCount",
+        "__typename"
+    ],
+    "DVRChapterEdge": [
+        "cursor",
+        "__typename"
+    ],
     "DVRChapterRef": [
         "chapterId",
         "mode",
@@ -1043,6 +1066,9 @@ export const scalarFields = {
     "DeleteVodAssetResult": [
         "__typename"
     ],
+    "DeleteVodOriginalResult": [
+        "__typename"
+    ],
     "DeleteWebhookEndpointResult": [
         "__typename"
     ],
@@ -1063,6 +1089,9 @@ export const scalarFields = {
     ],
     "DeveloperTokensConnection": [
         "totalCount",
+        "__typename"
+    ],
+    "DisconnectIngestResult": [
         "__typename"
     ],
     "EdgeTelemetrySetup": [
@@ -1169,6 +1198,7 @@ export const scalarFields = {
         "filename",
         "title",
         "description",
+        "transcodeLadder",
         "__typename"
     ],
     "ImportVodAssetResult": [
@@ -1274,6 +1304,11 @@ export const scalarFields = {
         "createdAt",
         "updatedAt",
         "effectiveMode",
+        "__typename"
+    ],
+    "IngestDisconnectSuccess": [
+        "streamId",
+        "stopRequested",
         "__typename"
     ],
     "IngestEndpoint": [
@@ -1785,6 +1820,8 @@ export const scalarFields = {
         "effectiveVodRetentionDays",
         "effectiveDvrRetentionDays",
         "effectiveClipRetentionDays",
+        "keepVodOriginals",
+        "effectiveKeepVodOriginals",
         "__typename"
     ],
     "Message": [
@@ -1872,6 +1909,8 @@ export const scalarFields = {
         "currentViewers",
         "egressMbps",
         "egressCapacityMbps",
+        "egressUsableMbps",
+        "defaultBudgetNodes",
         "ingressMbps",
         "services",
         "__typename"
@@ -1910,6 +1949,16 @@ export const scalarFields = {
     ],
     "Node": [
         "id",
+        "__typename"
+    ],
+    "NodeCapacity": [
+        "egressBudgetBytesPerSec",
+        "ingressBudgetBytesPerSec",
+        "egressSource",
+        "ingressSource",
+        "revision",
+        "updatedAt",
+        "appliedRevision",
         "__typename"
     ],
     "NodeEdge": [
@@ -2525,6 +2574,13 @@ export const scalarFields = {
         "reason",
         "__typename"
     ],
+    "RecordingChapterReady": [
+        "chapterId",
+        "startMs",
+        "endMs",
+        "sizeBytes",
+        "__typename"
+    ],
     "RecordingFailed": [
         "reason",
         "__typename"
@@ -2751,6 +2807,16 @@ export const scalarFields = {
     "SetMediaRetentionPolicyResult": [
         "__typename"
     ],
+    "SetNodeCapacityInput": [
+        "nodeId",
+        "egressBudgetBytesPerSec",
+        "ingressBudgetBytesPerSec",
+        "expectedRevision",
+        "__typename"
+    ],
+    "SetNodeCapacityResult": [
+        "__typename"
+    ],
     "SetNodeModeInput": [
         "nodeId",
         "mode",
@@ -2781,6 +2847,13 @@ export const scalarFields = {
         "__typename"
     ],
     "SetStreamRetentionOverridesResult": [
+        "__typename"
+    ],
+    "SetTranscodeLadderPolicyInput": [
+        "ladder",
+        "__typename"
+    ],
+    "SetTranscodeLadderPolicyResult": [
         "__typename"
     ],
     "SigningKey": [
@@ -2930,6 +3003,8 @@ export const scalarFields = {
         "__typename"
     ],
     "StorageArtifact": [
+        "originType",
+        "parentRecordingId",
         "key",
         "kind",
         "id",
@@ -3068,6 +3143,7 @@ export const scalarFields = {
         "dvrChapterMode",
         "dvrChapterIntervalSeconds",
         "monitoring",
+        "transcodeLadder",
         "__typename"
     ],
     "StreamAnalyticsDaily": [
@@ -3122,10 +3198,19 @@ export const scalarFields = {
         "cursor",
         "__typename"
     ],
+    "StreamArtifactEdge": [
+        "cursor",
+        "__typename"
+    ],
+    "StreamArtifactsConnection": [
+        "totalCount",
+        "__typename"
+    ],
     "StreamConnected": [
         "streamId",
         "protocol",
         "playbackId",
+        "sessionId",
         "__typename"
     ],
     "StreamConnectionHourly": [
@@ -3157,6 +3242,12 @@ export const scalarFields = {
     ],
     "StreamEdge": [
         "cursor",
+        "__typename"
+    ],
+    "StreamEnded": [
+        "streamId",
+        "playbackId",
+        "sessionId",
         "__typename"
     ],
     "StreamEvent": [
@@ -3285,6 +3376,23 @@ export const scalarFields = {
     "StreamIdle": [
         "streamId",
         "playbackId",
+        "sessionId",
+        "__typename"
+    ],
+    "StreamIngest": [
+        "state",
+        "isLive",
+        "sessionId",
+        "connectedAt",
+        "liveSince",
+        "endedAt",
+        "resumableUntil",
+        "__typename"
+    ],
+    "StreamIngestDisconnected": [
+        "streamId",
+        "sessionId",
+        "reason",
         "__typename"
     ],
     "StreamKey": [
@@ -3312,6 +3420,7 @@ export const scalarFields = {
     "StreamLive": [
         "streamId",
         "playbackId",
+        "sessionId",
         "__typename"
     ],
     "StreamMetrics": [
@@ -3612,6 +3721,19 @@ export const scalarFields = {
         "primaryAudioSampleRate",
         "__typename"
     ],
+    "TranscodeLadder": [
+        "name",
+        "displayName",
+        "description",
+        "renditionNames",
+        "__typename"
+    ],
+    "TranscodeLadderPolicy": [
+        "planDefault",
+        "tenantLadder",
+        "effectiveLadder",
+        "__typename"
+    ],
     "UnlinkWalletResult": [
         "__typename"
     ],
@@ -3660,6 +3782,7 @@ export const scalarFields = {
         "dvrChapterMode",
         "dvrChapterIntervalSeconds",
         "monitoring",
+        "transcodeLadder",
         "__typename"
     ],
     "UpdateStreamResult": [
@@ -3923,6 +4046,17 @@ export const scalarFields = {
         "errorMessage",
         "__typename"
     ],
+    "VodOriginalDownload": [
+        "url",
+        "expiresAt",
+        "sizeBytes",
+        "filename",
+        "__typename"
+    ],
+    "VodOriginalFile": [
+        "sizeBytes",
+        "__typename"
+    ],
     "VodRetention": [
         "bucketWidthS",
         "assetDurationS",
@@ -3969,6 +4103,7 @@ export const scalarFields = {
         "playbackId",
         "partSize",
         "expiresAt",
+        "keepOriginal",
         "__typename"
     ],
     "VodUploadStatus": [
@@ -4121,14 +4256,17 @@ export interface PossibleTypes {
     CreateSigningKeyResult: 'AuthError' | 'CreateSigningKeySuccess' | 'RateLimitError' | 'ValidationError'
     CreateStreamKeyResult: 'AuthError' | 'NotFoundError' | 'StreamKey' | 'ValidationError'
     CreateStreamResult: 'AuthError' | 'Stream' | 'ValidationError'
+    CreateVodOriginalDownloadResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'VodOriginalDownload'
     CreateVodUploadResult: 'AuthError' | 'ValidationError' | 'VodUploadSession'
     CreateWebhookEndpointResult: 'AuthError' | 'ValidationError' | 'WebhookEndpointSecret'
     DeleteClipResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     DeleteDVRResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
-    DeleteStreamKeyResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
+    DeleteStreamKeyResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError' | 'ValidationError'
     DeleteStreamResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     DeleteVodAssetResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
+    DeleteVodOriginalResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError' | 'ValidationError'
     DeleteWebhookEndpointResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
+    DisconnectIngestResult: 'AuthError' | 'IngestDisconnectSuccess' | 'NotFoundError' | 'ValidationError'
     Error: 'AuthError' | 'NotFoundError' | 'RateLimitError' | 'ValidationError'
     ImportVodAssetResult: 'AuthError' | 'ValidationError' | 'VodAsset'
     IncidentMutationResult: 'AuthError' | 'Incident' | 'NotFoundError' | 'ValidationError'
@@ -4146,7 +4284,7 @@ export interface PossibleTypes {
     Node: 'APIUsageRecord' | 'ArtifactEvent' | 'BufferEvent' | 'ClientMetrics5m' | 'Clip' | 'Cluster' | 'ConnectionEvent' | 'Conversation' | 'InfrastructureNode' | 'Message' | 'NodeMetric' | 'NodeMetricHourly' | 'NodePerformance5m' | 'ProcessingUsageRecord' | 'QualityTierDaily' | 'SigningKey' | 'StorageEvent' | 'StorageUsageRecord' | 'Stream' | 'StreamAnalyticsDaily' | 'StreamConnectionHourly' | 'StreamEvent' | 'StreamHealth5m' | 'StreamHealthMetric' | 'TenantDailyStat' | 'TrackListEvent' | 'ViewerGeoHourly' | 'ViewerHoursHourly' | 'ViewerSession' | 'VodAsset'
     OpenMistAdminSessionResult: 'AuthError' | 'MistAdminSession' | 'NotFoundError' | 'ValidationError'
     PromoteToPaidResult: 'AuthError' | 'PromoteToPaidPayload' | 'ValidationError'
-    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingChapterFailed' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
+    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingChapterFailed' | 'RecordingChapterReady' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamEnded' | 'StreamIdle' | 'StreamIngestDisconnected' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
     RenameAuthSessionResult: 'AuthError' | 'AuthSession' | 'NotFoundError' | 'ValidationError'
     ReplayWebhookDeliveriesResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookReplayResult'
     ReplayWebhookDeliveryResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookDelivery'
@@ -4158,10 +4296,12 @@ export interface PossibleTypes {
     RotateWebhookEndpointSecretResult: 'AuthError' | 'NotFoundError' | 'WebhookEndpointSecret'
     SendMessageResult: 'AuthError' | 'Message' | 'NotFoundError' | 'ValidationError'
     SetMediaRetentionPolicyResult: 'AuthError' | 'MediaRetentionPolicy' | 'ValidationError'
+    SetNodeCapacityResult: 'AuthError' | 'InfrastructureNode' | 'NotFoundError' | 'ValidationError'
     SetNodeModeResult: 'AuthError' | 'InfrastructureNode' | 'NotFoundError' | 'ValidationError'
     SetPlaybackPolicyResult: 'AuthError' | 'Clip' | 'NotFoundError' | 'Stream' | 'ValidationError' | 'VodAsset'
     SetPreferredClusterResult: 'AuthError' | 'Cluster' | 'NotFoundError' | 'ValidationError'
     SetStreamRetentionOverridesResult: 'AuthError' | 'NotFoundError' | 'StreamRetentionOverrides' | 'ValidationError'
+    SetTranscodeLadderPolicyResult: 'AuthError' | 'TranscodeLadderPolicy' | 'ValidationError'
     SkipperChatEvent: 'SkipperDone' | 'SkipperMeta' | 'SkipperToken' | 'SkipperToolEndEvent' | 'SkipperToolStartEvent'
     StartDVRResult: 'AuthError' | 'DVRRequest' | 'NotFoundError' | 'ValidationError'
     StopDVRResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'

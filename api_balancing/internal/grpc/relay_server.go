@@ -75,6 +75,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 		err = control.SendLocalDtshSyncRequest(req.TargetNodeId, cmd.DtshSync)
 	case *foghornrelaypb.ForwardCommandRequest_StopSessions:
 		err = control.SendLocalStopSessionsContext(ctx, req.TargetNodeId, cmd.StopSessions)
+	case *foghornrelaypb.ForwardCommandRequest_StopClaimedSessions:
+		err = control.SendLocalClaimedStopSessionsContext(ctx, req.TargetNodeId, cmd.StopClaimedSessions)
 	case *foghornrelaypb.ForwardCommandRequest_InvalidateSessions:
 		err = control.SendLocalInvalidateSessions(req.TargetNodeId, cmd.InvalidateSessions)
 	case *foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets:
@@ -99,8 +101,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 
 	if err != nil {
 		log.WithError(err).Warn("Relay local dispatch failed")
-		return &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: err.Error(), OwnerMissing: req.GetStopSessions() != nil && errors.Is(err, control.ErrNotConnected)}, nil
+		return &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: err.Error(), OwnerMissing: (req.GetStopSessions() != nil || req.GetStopClaimedSessions() != nil) && errors.Is(err, control.ErrNotConnected)}, nil
 	}
 	log.Debug("Relay local dispatch delivered")
-	return &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: req.GetStopSessions() != nil}, nil
+	return &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: (req.GetStopSessions() != nil || req.GetStopClaimedSessions() != nil)}, nil
 }

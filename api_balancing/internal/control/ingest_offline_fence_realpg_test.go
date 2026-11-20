@@ -469,8 +469,8 @@ func TestOfflineAckWaitHasIndependentBackoffAndDeadLetters_RealPG(t *testing.T) 
 		Scan(&state, &attempts, &ackWaitAttempts, &nextAttemptAt); err != nil {
 		t.Fatal(err)
 	}
-	if state != "failed" || attempts != 0 || ackWaitAttempts != 12 {
-		t.Fatalf("ack wait state=%q attempts=%d ack_wait_attempts=%d, want failed/0/12", state, attempts, ackWaitAttempts)
+	if state != "failed" || attempts != 12 || ackWaitAttempts != 12 {
+		t.Fatalf("ack wait state=%q attempts=%d ack_wait_attempts=%d, want failed/12/12", state, attempts, ackWaitAttempts)
 	}
 	if !nextAttemptAt.After(time.Now().Add(3 * time.Minute)) {
 		t.Fatalf("ack wait backoff did not grow toward the cap: %s", nextAttemptAt)

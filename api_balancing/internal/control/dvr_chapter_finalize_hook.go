@@ -15,7 +15,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -397,7 +396,7 @@ func finalizeChapterArtifactTx(
 		if ctxErr != nil {
 			return fmt.Errorf("read chapter recording context: %w", ctxErr)
 		}
-		chapterReady := &internalv1.RecordingChapterReady{
+		chapterReady := &publicv1.RecordingChapterReady{
 			Artifact:  artifactoutbox.RecordingArtifact(recording.RecordingHash, recording.StreamID),
 			ChapterId: chapterID,
 			StartMs:   recording.StartMs,

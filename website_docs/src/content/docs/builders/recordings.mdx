@@ -124,6 +124,40 @@ mutation StopRecording {
 }
 ```
 
+### Browse saved recordings
+
+With `streams:read`, use `Stream.recordings` to page through one stream's recordings.
+The catalog includes lifecycle state even when the token cannot read analytics.
+Pass the returned `endCursor` as `after` for the next page; pages contain up to 100 items.
+
+```graphql
+query Recordings($streamId: ID!, $after: String) {
+  stream(id: $streamId) {
+    recordings(page: { first: 20, after: $after }) {
+      nodes {
+        id
+        hash
+        playbackId
+        status
+        createdAt
+        durationSeconds
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+}
+```
+
+`dvrRecording(id:)` accepts the catalog recording UUID or its `hash`. Its `startedAt`
+and `endedAt` describe the recording's capture lifetime; `endedAt` is null while active.
+Use its `chapters` connection for saved chapter playback. MCP provides
+`list_stream_recordings` and `get_dvr_recording`; SDK 0.6 provides `ListStreamRecordings`,
+`GetDvrRecording` and `ListRecordingChapters` on a v0.3.16 server.
+
 ### Playback
 
 Recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
@@ -135,7 +169,7 @@ Recordings get their own `playbackId`, separate from the live stream's. This mea
 After the broadcast ends, the recording's own `dvrPlaybackId` plays its most recent finalized
 chapter. Until the first chapter has finalized (or for a live-rewind-only recording, which has no
 chapters) `/play/{dvrPlaybackId}` answers `409` with code `DVR_CHAPTERS_PENDING`; list the
-recording's chapters with `dvrChapters` to play a specific one.
+recording's saved `dvrRecording(id:) { chapters }` to play a specific one.
 
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
@@ -186,6 +220,8 @@ A new stream saves window-sized chapters (`WINDOW_SIZED`). Chapter shapes:
 All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should convert them to a UTC range and list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
 #### Chapter API
+
+For a recording catalog, use `dvrRecording(id:)` and its `chapters(page:)` connection. It lists the saved chapters belonging to that recording with keyset pagination. The range API below selects UTC chapter boundaries for playback and uses a separate page token.
 
 Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD and supply whatever authorization the parent DVR policy requires.
 
@@ -330,7 +366,10 @@ every event type.
 
 ## VOD Uploads
 
-Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compatible multipart uploads for reliable handling of large files.
+Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compatible multipart uploads for reliable handling of large files. Supported upload filename extensions are `mp4`, `mov`, `mkv`, `webm`, `ts`,
+`m2ts`, `mts`, `avi`, `flv`, and `m4v`. Playlists are refused before an upload session is
+created. The installed media engine determines which codecs it can decode. Rotated sources
+are rendered upright when the edge media engine supports rotation.
 
 <Aside type="note" title="Separate upload path">
   User-uploaded VOD goes through a different S3 multipart upload, validation, and processing path
@@ -435,7 +474,7 @@ emits `upload.failed` without `upload.completed` (see [Events](/builders/events)
 - **Range requests**: the server must support HTTP range requests, as S3, CDNs, and IPFS
   gateways do. The file is read in blocks, not in one download.
 - **Filename**: the extension tells FrameWorks how to read the file: `mp4`, `mov`, `mkv`, `webm`,
-  or `ts`. When the URL path does not end in one, pass `filename`. Formats that must be read from
+  `ts`, `m2ts`, or `mts`. When the URL path does not end in one, pass `filename`. Formats that must be read from
   a local file (`avi`, `flv`, `m4v`) are not importable; upload them instead.
 - **Reachability**: the URL must be publicly reachable. Private, loopback, and cloud-metadata
   addresses are refused on every connection, including after a redirect. Up to 5 http(s)
@@ -453,6 +492,30 @@ After upload completion, the asset goes through validation:
 Poll `vodUploadStatus(uploadId)` for the state of an upload, or subscribe to `tenantEvents` with
 `types: ["upload.completed", "upload.ready", "upload.failed"]` to learn when processing finishes.
 Events carry no progress percentage; see [Events](/builders/events).
+
+### Original uploads
+
+Successful file uploads keep a byte-identical original by default, alongside the processed video.
+The account setting is under **Account → Storage & retention → Keep original uploads**.
+`setVodOriginalPolicy(keepVodOriginals: false)` changes the default for future uploads; passing
+`null` restores the system default (keep). An upload's optional `keepOriginal` overrides it.
+URL imports and failed uploads keep no original. Existing assets cannot recover an original that
+was already removed.
+
+Request `originalFile { sizeBytes }` on a `VodAsset` or library `StorageArtifact` to see whether
+an original is retained. **Download original** in the library, or `createVodOriginalDownload(id)`,
+returns an authenticated attachment link valid for 15 minutes. It requires `streams:read`, is
+limited to 20 grants per minute with a burst of 5 per account per gateway, and is not metered as
+playback. **Download MP4 (processed)** downloads the rendition output.
+
+`deleteVodOriginal(id)` permanently removes only the original, keeping processed playback. It
+requires `streams:write`; the library asks for confirmation. Wait until processed storage sync
+finishes before deleting the original. Deleting the video or reaching its retention deadline
+removes both files. Originals count at the normal storage rate and toward the plan storage cap.
+
+Set `transcodeLadder` on `CreateVodUploadInput` or `ImportVodAssetInput` to choose an allowed named
+ladder for that upload. Omit it to inherit the account and plan defaults; a saved upload choice is
+used when multipart completion starts processing. See [ladder choices](/builders/encoder-setup#custom-transcoding-profiles).
 
 ### VOD Playback
 

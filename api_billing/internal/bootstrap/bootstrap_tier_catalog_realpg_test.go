@@ -118,6 +118,33 @@ func TestBootstrapTierCatalogRepository_RealPG(t *testing.T) { //nolint:funlen /
 	if meter != "delivered_minutes" || included != "250.000000" || unitPrice != "0.000700000" || config != `{"rounding": "up"}` {
 		t.Fatalf("pricing rule state = %q %q %q %q", meter, included, unitPrice, config)
 	}
+	// Allowed ladder metadata participates in drift repair, independently of price/provider IDs.
+	tiers, parseErr := EmbeddedTiers()
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	for _, embedded := range tiers {
+		if embedded.TierName == "payg" {
+			tier.TranscodeLadders = embedded.TranscodeLadders
+			tier.DefaultTranscodeLadder = embedded.DefaultTranscodeLadder
+		}
+	}
+	laddersChanged := reconcileTierCatalogRealPG(t, db, tier)
+	if len(laddersChanged.Updated) != 1 {
+		t.Fatalf("ladder metadata not reconciled: %+v", laddersChanged)
+	}
+	var ladderCount int
+	var defaultLadder string
+	if readErr := db.QueryRowContext(ctx, `SELECT jsonb_array_length(transcode_ladders),default_transcode_ladder FROM purser.billing_tiers WHERE tier_name=$1`, tier.TierName).Scan(&ladderCount, &defaultLadder); readErr != nil {
+		t.Fatal(readErr)
+	}
+	if ladderCount != 3 || defaultLadder != "standard" {
+		t.Fatalf("stored ladder count/default %d/%s", ladderCount, defaultLadder)
+	}
+	if replay := reconcileTierCatalogRealPG(t, db, tier); len(replay.Noop) != 1 {
+		t.Fatalf("ladder replay changed state: %+v", replay)
+	}
+
 }
 
 func reconcileTierCatalogRealPG(t *testing.T, db *sql.DB, tier CatalogTier) Result {

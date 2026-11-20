@@ -7,6 +7,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -54,6 +55,13 @@ func (runtime *LiveIngestPreparationRuntime) Reconcile(ctx context.Context, req 
 	listener, err := runtime.observe(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	ok, err := state.DefaultManager().ReserveNodeBandwidth(ctx, "ingest:"+req.Query.InternalName, req.NodeId, req.Query.InternalName, state.BandwidthIngress, capacity.DefaultIngestEstimate)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, status.Error(codes.ResourceExhausted, "node ingress capacity exhausted")
 	}
 	q := req.Query
 	return &placementpb.Preparation{Outcome: placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED,

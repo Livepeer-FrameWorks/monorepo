@@ -981,11 +981,6 @@ func main() {
           parts: [{ partNumber: 1, etag: "etag-value" }],
         };
 
-      case "CreateStreamKeyInput":
-        return {
-          name: "primary-key",
-        };
-
       case "CreateDeveloperTokenInput":
         return {
           name: "example-api-token",

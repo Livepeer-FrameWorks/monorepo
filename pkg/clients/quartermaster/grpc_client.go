@@ -27,6 +27,24 @@ import (
 
 const DefaultServerName = "quartermaster.internal"
 
+// SetNodeCapacity atomically replaces both directional overrides using the expected revision.
+func (c *GRPCClient) SetNodeCapacity(ctx context.Context, req *quartermasterpb.SetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error) {
+	return c.node.SetNodeCapacity(ctx, req)
+}
+
+func (c *GRPCClient) GetNodeCapacity(ctx context.Context, nodeID string) (*quartermasterpb.NodeCapacity, error) {
+	return c.node.GetNodeCapacity(ctx, &quartermasterpb.GetNodeCapacityRequest{NodeId: nodeID})
+}
+
+// GetNodeCapacityForOwner keeps a proxy's ownership snapshot valid through the read.
+func (c *GRPCClient) GetNodeCapacityForOwner(ctx context.Context, nodeID, ownerTenantID string) (*quartermasterpb.NodeCapacity, error) {
+	return c.node.GetNodeCapacity(ctx, &quartermasterpb.GetNodeCapacityRequest{NodeId: nodeID, ExpectedOwnerTenantId: &ownerTenantID})
+}
+
+func (c *GRPCClient) ListNodeCapacities(ctx context.Context, req *quartermasterpb.ListNodeCapacitiesRequest) (*quartermasterpb.ListNodeCapacitiesResponse, error) {
+	return c.node.ListNodeCapacities(ctx, req)
+}
+
 // GRPCClient is the gRPC client for Quartermaster
 type GRPCClient struct {
 	conn            *grpc.ClientConn

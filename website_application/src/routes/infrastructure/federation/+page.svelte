@@ -155,6 +155,8 @@
       currentViewers: c.currentViewers ?? undefined,
       egressMbps: c.egressMbps ?? undefined,
       egressCapacityMbps: c.egressCapacityMbps ?? undefined,
+      egressUsableMbps: c.egressUsableMbps ?? undefined,
+      defaultBudgetNodes: c.defaultBudgetNodes ?? undefined,
       ingressMbps: c.ingressMbps ?? undefined,
       services: c.services ?? [],
     }))

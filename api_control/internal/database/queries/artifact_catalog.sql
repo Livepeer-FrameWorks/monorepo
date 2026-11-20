@@ -114,7 +114,8 @@ SET size_bytes = sqlc.narg(size_bytes), duration = sqlc.narg(duration_ms),
     retention_until = to_timestamp(sqlc.narg(retention_until_unix)::bigint),
     error_message = sqlc.narg(error_message),
     thumbnail_serving_cluster_id = COALESCE(sqlc.narg(thumbnail_serving_cluster_id)::varchar, thumbnail_serving_cluster_id),
-    catalog_revision = sqlc.arg(source_revision)::bigint, updated_at = NOW()
+    catalog_revision = sqlc.arg(source_revision)::bigint, updated_at = NOW(),
+    original_size_bytes = sqlc.narg(original_size_bytes)::bigint
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND vod_hash = sqlc.arg(asset_key)
   AND (catalog_revision IS NULL OR catalog_revision < sqlc.arg(source_revision)::bigint
        OR (catalog_revision = sqlc.arg(source_revision)::bigint

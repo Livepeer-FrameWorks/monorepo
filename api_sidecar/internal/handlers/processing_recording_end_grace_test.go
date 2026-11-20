@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,12 +37,25 @@ func setRecordingEndGraceForTest(t *testing.T, grace time.Duration) {
 	t.Cleanup(func() { processingRecordingEndGrace = previous })
 }
 
-func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingGraceHarness {
+type recordingGeometry struct {
+	width, height int
+	rotation      int
+	noAudio       bool
+	completedEnd  float64
+	sourceEnd     float64
+	processes     string
+}
+
+func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ...recordingGeometry) *recordingGraceHarness {
 	t.Helper()
 	isolateProcessingOverrideState(t)
 	hx := &recordingGraceHarness{
 		streamName: "processing+" + artifactHash,
 		results:    make(chan *ipcpb.ProcessingJobResult, 4),
+	}
+	shape := recordingGeometry{width: 640, height: 360, sourceEnd: 10000}
+	if len(geometry) > 0 {
+		shape = geometry[0]
 	}
 	var booted atomic.Bool
 	var startupListed sync.Once
@@ -79,10 +94,17 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 		active := map[string]any{}
 		if booted.Load() {
 			active[hx.streamName] = map[string]any{
+				"lastms": shape.sourceEnd,
 				"health": map[string]any{
-					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "id": 0.0, "idx": 0.0, "width": 640.0, "height": 360.0},
+					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "id": 0.0, "idx": 0.0, "width": float64(shape.width), "height": float64(shape.height), "rotation": float64(shape.rotation)},
 					"audio_AAC_1ch_48000hz_1":    map[string]any{"codec": "AAC", "id": 1.0, "idx": 1.0, "channels": 1.0, "rate": 48000.0},
 				},
+			}
+			if shape.noAudio {
+				delete(active[hx.streamName].(map[string]any)["health"].(map[string]any), "audio_AAC_1ch_48000hz_1")
+			}
+			if hx.pushStarted.Load() && shape.completedEnd > 0 {
+				active[hx.streamName].(map[string]any)["lastms"] = shape.completedEnd
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"authorize": map[string]any{"status": "OK"}, "active_streams": active})
@@ -103,7 +125,7 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 		t.Fatal("the handler never listed Mist streams for its startup orphan sweep")
 	}
 	send := func(msg *ipcpb.ControlMessage) {
-		if result := msg.GetProcessingJobResult(); result != nil {
+		if result := msg.GetProcessingJobResult(); result != nil && result.GetStatus() != "cache_update" {
 			hx.results <- result
 		}
 	}
@@ -128,11 +150,19 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 	case "vod":
 		hx.outputPath = filepath.Join(storage, "vod", artifactHash+".mkv")
 		req := &ipcpb.ProcessingJobRequest{
-			JobId:         "vod-" + artifactHash,
-			JobType:       "process",
-			ArtifactHash:  artifactHash,
-			SourceUrl:     srv.URL + "/source.mkv",
-			ProcessesJson: "[]",
+			JobId:        "vod-" + artifactHash,
+			JobType:      "process",
+			ArtifactHash: artifactHash,
+			SourceUrl:    srv.URL + "/source.mkv",
+			ProcessesJson: func() string {
+				if shape.processes != "" {
+					return shape.processes
+				}
+				return "[]"
+			}(),
+		}
+		if shape.processes != "" {
+			req.ProcessesJson = shape.processes
 		}
 		run(h.Handle, req)
 	case "clip":
@@ -317,5 +347,85 @@ func TestPushFailureWithRecordingEndStaysFailed(t *testing.T) {
 				t.Fatalf("error = %q: a recording that reported its end is not a vanished output", result.GetError())
 			}
 		})
+	}
+}
+
+func TestLocalVODCompletesForOffLadderSource(t *testing.T) {
+	for _, dims := range [][2]int{{2560, 1440}, {3840, 2160}, {1920, 1200}, {960, 540}, {1080, 1080}} {
+		t.Run(fmt.Sprintf("%dx%d", dims[0], dims[1]), func(t *testing.T) {
+			hx := startRecordingGraceJob(t, "vod", "offladder", recordingGeometry{width: dims[0], height: dims[1], sourceEnd: 10000,
+				processes: `[{"process":"AV","codec":"H264","resolution":"0x360"}]`})
+			if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			evt := hx.cleanRecordingEnd()
+			evt.Tracks = []processingMetaVideoTrack{renditionTrack(2, 360*dims[0]/dims[1], 360, 10000)}
+			SignalProcessingRecordingEnd(evt)
+			hx.pushEnd(`{"active_seconds":10}`)
+			result := hx.awaitResult(t, 30*time.Second)
+			if result.GetStatus() != "completed" {
+				t.Fatalf("status = %q (%s), want completed", result.GetStatus(), result.GetError())
+			}
+		})
+	}
+}
+
+func TestLocalVODRefusesMissingOrTruncatedRung(t *testing.T) {
+	for _, truncated := range []bool{false, true} {
+		t.Run(fmt.Sprint(truncated), func(t *testing.T) {
+			hx := startRecordingGraceJob(t, "vod", "incompletelocal", recordingGeometry{width: 1280, height: 720, sourceEnd: 1000, completedEnd: 10000, noAudio: true,
+				processes: `[{"process":"AV","codec":"H264","resolution":"0x360"},{"process":"AV","codec":"H264","resolution":"0x720"}]`})
+			if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			evt := hx.cleanRecordingEnd()
+			evt.Tracks = []processingMetaVideoTrack{renditionTrack(2, 1280, 720, 10000)}
+			if truncated {
+				evt.Tracks = append(evt.Tracks, renditionTrack(3, 640, 360, 2000))
+			}
+			SignalProcessingRecordingEnd(evt)
+			hx.pushEnd(`{"active_seconds":10}`)
+			result := hx.awaitResult(t, 30*time.Second)
+			if result.GetStatus() != "failed" || !strings.Contains(result.GetError(), "renditions incomplete") {
+				t.Fatalf("status = %q (%s), want failed/incomplete", result.GetStatus(), result.GetError())
+			}
+		})
+	}
+}
+
+func TestSmallRotatedVODRunsSourceSizeAV(t *testing.T) {
+	hx := startRecordingGraceJob(t, "vod", "smallrotated", recordingGeometry{width: 320, height: 180, rotation: 90, sourceEnd: 10000,
+		processes: `[{"process":"AV","codec":"H264","resolution":"x360","track_inhibit":"video=<640x360"}]`})
+	policy, ok := getProcessingProcessOverride(hx.streamName)
+	expected, err := mist.ExpectedVideoRenditions(policy, mist.SourceMediaInfo{Width: 320, Height: 180, Rotation: 90})
+	if !ok || err != nil || len(expected) != 1 || expected[0].Width != 180 || expected[0].Height != 320 {
+		t.Errorf("source-size policy = %s, expected %v, error %v", policy, expected, err)
+	}
+	if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evt := hx.cleanRecordingEnd()
+	evt.Tracks = []processingMetaVideoTrack{renditionTrack(2, 180, 320, 10000)}
+	SignalProcessingRecordingEnd(evt)
+	hx.pushEnd(`{"active_seconds":10}`)
+	result := hx.awaitResult(t, 30*time.Second)
+	if result.GetStatus() != "completed" {
+		t.Fatalf("status = %q (%s)", result.GetStatus(), result.GetError())
+	}
+}
+
+func TestLocalVODRefusesUnknownSourceEnd(t *testing.T) {
+	hx := startRecordingGraceJob(t, "vod", "unknownsourceend", recordingGeometry{width: 1280, height: 720,
+		processes: `[{"process":"AV","codec":"H264","resolution":"x360"}]`})
+	if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evt := hx.cleanRecordingEnd()
+	evt.Tracks = []processingMetaVideoTrack{renditionTrack(2, 640, 360, 10000)}
+	SignalProcessingRecordingEnd(evt)
+	hx.pushEnd(`{"active_seconds":10}`)
+	result := hx.awaitResult(t, 30*time.Second)
+	if result.GetStatus() != "failed" || !strings.Contains(result.GetError(), "renditions incomplete") {
+		t.Fatalf("status = %q (%s), want incomplete", result.GetStatus(), result.GetError())
 	}
 }

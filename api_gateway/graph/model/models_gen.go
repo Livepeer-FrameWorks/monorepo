@@ -78,12 +78,17 @@ type CreateSigningKeyResult interface {
 	IsCreateSigningKeyResult()
 }
 
+// Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 type CreateStreamKeyResult interface {
 	IsCreateStreamKeyResult()
 }
 
 type CreateStreamResult interface {
 	IsCreateStreamResult()
+}
+
+type CreateVodOriginalDownloadResult interface {
+	IsCreateVodOriginalDownloadResult()
 }
 
 type CreateVodUploadResult interface {
@@ -102,6 +107,7 @@ type DeleteDVRResult interface {
 	IsDeleteDVRResult()
 }
 
+// Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 type DeleteStreamKeyResult interface {
 	IsDeleteStreamKeyResult()
 }
@@ -114,8 +120,16 @@ type DeleteVodAssetResult interface {
 	IsDeleteVodAssetResult()
 }
 
+type DeleteVodOriginalResult interface {
+	IsDeleteVodOriginalResult()
+}
+
 type DeleteWebhookEndpointResult interface {
 	IsDeleteWebhookEndpointResult()
+}
+
+type DisconnectIngestResult interface {
+	IsDisconnectIngestResult()
 }
 
 type Error interface {
@@ -232,6 +246,10 @@ type SetMediaRetentionPolicyResult interface {
 	IsSetMediaRetentionPolicyResult()
 }
 
+type SetNodeCapacityResult interface {
+	IsSetNodeCapacityResult()
+}
+
 type SetNodeModeResult interface {
 	IsSetNodeModeResult()
 }
@@ -246,6 +264,10 @@ type SetPreferredClusterResult interface {
 
 type SetStreamRetentionOverridesResult interface {
 	IsSetStreamRetentionOverridesResult()
+}
+
+type SetTranscodeLadderPolicyResult interface {
+	IsSetTranscodeLadderPolicyResult()
 }
 
 type StartDVRResult interface {
@@ -421,6 +443,8 @@ func (AuthError) IsCreateStreamResult() {}
 
 func (AuthError) IsUpdateStreamResult() {}
 
+func (AuthError) IsDisconnectIngestResult() {}
+
 func (AuthError) IsDeleteStreamResult() {}
 
 func (AuthError) IsCreateClipResult() {}
@@ -449,6 +473,12 @@ func (AuthError) IsDeleteVodAssetResult() {}
 
 func (AuthError) IsVodUploadStatusResult() {}
 
+func (AuthError) IsSetTranscodeLadderPolicyResult() {}
+
+func (AuthError) IsCreateVodOriginalDownloadResult() {}
+
+func (AuthError) IsDeleteVodOriginalResult() {}
+
 func (AuthError) IsSetMediaRetentionPolicyResult() {}
 
 func (AuthError) IsUpdateMediaRetentionResult() {}
@@ -456,6 +486,8 @@ func (AuthError) IsUpdateMediaRetentionResult() {}
 func (AuthError) IsSetStreamRetentionOverridesResult() {}
 
 func (AuthError) IsSetNodeModeResult() {}
+
+func (AuthError) IsSetNodeCapacityResult() {}
 
 func (AuthError) IsOpenMistAdminSessionResult() {}
 
@@ -791,6 +823,14 @@ type ClusterAccessEdge struct {
 	Node   *ClusterAccess `json:"node"`
 }
 
+type ClusterCapacity struct {
+	EgressBudgetBytesPerSec  float64 `json:"egressBudgetBytesPerSec"`
+	IngressBudgetBytesPerSec float64 `json:"ingressBudgetBytesPerSec"`
+	EgressUsableBytesPerSec  float64 `json:"egressUsableBytesPerSec"`
+	IngressUsableBytesPerSec float64 `json:"ingressUsableBytesPerSec"`
+	DefaultBudgetNodes       int     `json:"defaultBudgetNodes"`
+}
+
 type ClusterEdge struct {
 	Cursor string                                 `json:"cursor"`
 	Node   *quartermasterpb.InfrastructureCluster `json:"node"`
@@ -810,13 +850,17 @@ type ClusterInviteEdge struct {
 
 // Per-cluster live snapshot from Periscope GetNetworkLiveStats.
 type ClusterLiveStats struct {
-	ClusterID           string  `json:"clusterId"`
-	ActiveStreams       int     `json:"activeStreams"`
-	CurrentViewers      int     `json:"currentViewers"`
-	UploadBytesPerSec   float64 `json:"uploadBytesPerSec"`
-	DownloadBytesPerSec float64 `json:"downloadBytesPerSec"`
-	ActiveNodes         int     `json:"activeNodes"`
-	EgressCapacityBps   float64 `json:"egressCapacityBps"`
+	ClusterID                 string  `json:"clusterId"`
+	ActiveStreams             int     `json:"activeStreams"`
+	CurrentViewers            int     `json:"currentViewers"`
+	UploadBytesPerSec         float64 `json:"uploadBytesPerSec"`
+	DownloadBytesPerSec       float64 `json:"downloadBytesPerSec"`
+	ActiveNodes               int     `json:"activeNodes"`
+	EgressCapacityBps         float64 `json:"egressCapacityBps"`
+	EgressBudgetBytesPerSec   float64 `json:"egressBudgetBytesPerSec"`
+	EgressUsableBytesPerSec   float64 `json:"egressUsableBytesPerSec"`
+	EgressObservedBytesPerSec float64 `json:"egressObservedBytesPerSec"`
+	DefaultBudgetNodes        int     `json:"defaultBudgetNodes"`
 }
 
 type ClusterPivotRow struct {
@@ -1122,9 +1166,11 @@ type CreateStreamInput struct {
 	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
 	// Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.
 	SourceLocation *SourceLocationInput `json:"sourceLocation,omitempty"`
+	// Ladder name allowed by the plan. Empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder,omitempty"`
 }
 
-// Input for creating an additional stream key.
+// Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 type CreateStreamKeyInput struct {
 	// Human-readable name for the key.
 	Name string `json:"name"`
@@ -1133,7 +1179,7 @@ type CreateStreamKeyInput struct {
 // Input for initiating a multipart VOD upload.
 // Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
-	// Original filename (for metadata and content-type detection).
+	// Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused.
 	Filename string `json:"filename"`
 	// Total file size in bytes (required for part calculation).
 	SizeBytes float64 `json:"sizeBytes"`
@@ -1143,6 +1189,10 @@ type CreateVodUploadInput struct {
 	Title *string `json:"title,omitempty"`
 	// Optional description for the asset.
 	Description *string `json:"description,omitempty"`
+	// Video ladder for this upload; empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder,omitempty"`
+	// Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default.
+	KeepOriginal *bool `json:"keepOriginal,omitempty"`
 }
 
 type CreateWebhookEndpointInput struct {
@@ -1277,6 +1327,19 @@ type DVRChapter struct {
 	LastFailureReason *string `json:"lastFailureReason,omitempty"`
 }
 
+// A keyset-paginated view of a recording's saved chapters.
+type DVRChapterConnection struct {
+	Edges      []*DVRChapterEdge `json:"edges"`
+	Nodes      []*DVRChapterRef  `json:"nodes"`
+	PageInfo   *PageInfo         `json:"pageInfo"`
+	TotalCount int               `json:"totalCount"`
+}
+
+type DVRChapterEdge struct {
+	Cursor string         `json:"cursor"`
+	Node   *DVRChapterRef `json:"node"`
+}
+
 // A reference to a chapter for the chapter list UI. Same shape as
 // DVRChapter without the timeline-zero derivations.
 type DVRChapterRef struct {
@@ -1322,6 +1385,8 @@ func (DeleteSuccess) IsDeleteDVRResult() {}
 func (DeleteSuccess) IsAbortVodUploadResult() {}
 
 func (DeleteSuccess) IsDeleteVodAssetResult() {}
+
+func (DeleteSuccess) IsDeleteVodOriginalResult() {}
 
 func (DeleteSuccess) IsRevokeDeveloperTokenResult() {}
 
@@ -1393,12 +1458,14 @@ type ImportVodAssetInput struct {
 	// range requests; private and internal addresses are refused.
 	URL string `json:"url"`
 	// Filename to store the video under. Required when the URL path does not end
-	// in a supported video extension (mp4, mov, mkv, webm, ts).
+	// in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
 	Filename *string `json:"filename,omitempty"`
 	// Optional display title for the asset.
 	Title *string `json:"title,omitempty"`
 	// Optional description for the asset.
 	Description *string `json:"description,omitempty"`
+	// Video ladder for this import; empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder,omitempty"`
 }
 
 type Incident struct {
@@ -1499,6 +1566,14 @@ type IncidentsConnection struct {
 	PageInfo   *PageInfo       `json:"pageInfo"`
 	TotalCount int             `json:"totalCount"`
 }
+
+// An accepted request to stop the currently claimed push publisher.
+type IngestDisconnectSuccess struct {
+	StreamID      string `json:"streamId"`
+	StopRequested bool   `json:"stopRequested"`
+}
+
+func (IngestDisconnectSuccess) IsDisconnectIngestResult() {}
 
 type InvoiceEdge struct {
 	Cursor string            `json:"cursor"`
@@ -1916,6 +1991,10 @@ type MediaRetentionPolicy struct {
 	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
 	// Effective clip horizon the cascade resolves to today (0 = keep forever).
 	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
+	// Account default for new uploads. Null inherits the system default (keep).
+	KeepVodOriginals *bool `json:"keepVodOriginals,omitempty"`
+	// Effective original-retention default for new uploads.
+	EffectiveKeepVodOriginals bool `json:"effectiveKeepVodOriginals"`
 }
 
 func (MediaRetentionPolicy) IsSetMediaRetentionPolicyResult() {}
@@ -2036,6 +2115,8 @@ type NetworkClusterStatus struct {
 	CurrentViewers     int      `json:"currentViewers"`
 	EgressMbps         int      `json:"egressMbps"`
 	EgressCapacityMbps int      `json:"egressCapacityMbps"`
+	EgressUsableMbps   int      `json:"egressUsableMbps"`
+	DefaultBudgetNodes int      `json:"defaultBudgetNodes"`
 	IngressMbps        int      `json:"ingressMbps"`
 	Services           []string `json:"services"`
 }
@@ -2074,6 +2155,19 @@ type NetworkStatus struct {
 	TotalNodes       int                       `json:"totalNodes"`
 	HealthyNodes     int                       `json:"healthyNodes"`
 	UpdatedAt        time.Time                 `json:"updatedAt"`
+}
+
+type NodeCapacity struct {
+	// Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	EgressBudgetBytesPerSec float64 `json:"egressBudgetBytesPerSec"`
+	// Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	IngressBudgetBytesPerSec float64              `json:"ingressBudgetBytesPerSec"`
+	EgressSource             CapacityBudgetSource `json:"egressSource"`
+	IngressSource            CapacityBudgetSource `json:"ingressSource"`
+	Revision                 int                  `json:"revision"`
+	UpdatedAt                *time.Time           `json:"updatedAt,omitempty"`
+	// Last revision applied by Helmsman; null when the node does not report one.
+	AppliedRevision *int `json:"appliedRevision,omitempty"`
 }
 
 type NodeEdge struct {
@@ -2137,6 +2231,8 @@ func (this NotFoundError) GetCode() *string   { return this.Code }
 
 func (NotFoundError) IsUpdateStreamResult() {}
 
+func (NotFoundError) IsDisconnectIngestResult() {}
+
 func (NotFoundError) IsDeleteStreamResult() {}
 
 func (NotFoundError) IsCreateClipResult() {}
@@ -2161,11 +2257,17 @@ func (NotFoundError) IsDeleteVodAssetResult() {}
 
 func (NotFoundError) IsVodUploadStatusResult() {}
 
+func (NotFoundError) IsCreateVodOriginalDownloadResult() {}
+
+func (NotFoundError) IsDeleteVodOriginalResult() {}
+
 func (NotFoundError) IsUpdateMediaRetentionResult() {}
 
 func (NotFoundError) IsSetStreamRetentionOverridesResult() {}
 
 func (NotFoundError) IsSetNodeModeResult() {}
+
+func (NotFoundError) IsSetNodeCapacityResult() {}
 
 func (NotFoundError) IsOpenMistAdminSessionResult() {}
 
@@ -2601,6 +2703,16 @@ type SetMediaRetentionPolicyInput struct {
 	Clear *bool `json:"clear,omitempty"`
 }
 
+type SetNodeCapacityInput struct {
+	NodeID string `json:"nodeId"`
+	// Positive whole bytes per second, or null to restore the default.
+	EgressBudgetBytesPerSec *float64 `json:"egressBudgetBytesPerSec,omitempty"`
+	// Positive whole bytes per second, or null to restore the default.
+	IngressBudgetBytesPerSec *float64 `json:"ingressBudgetBytesPerSec,omitempty"`
+	// Revision from the current capacity; a stale revision rejects the write.
+	ExpectedRevision int `json:"expectedRevision"`
+}
+
 type SetNodeModeInput struct {
 	// Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
 	NodeID string              `json:"nodeId"`
@@ -2627,6 +2739,10 @@ type SetStreamRetentionOverridesInput struct {
 	ClipRetentionDaysOverride  *int  `json:"clipRetentionDaysOverride,omitempty"`
 	ClearDvrRetentionOverride  *bool `json:"clearDvrRetentionOverride,omitempty"`
 	ClearClipRetentionOverride *bool `json:"clearClipRetentionOverride,omitempty"`
+}
+
+type SetTranscodeLadderPolicyInput struct {
+	Ladder *string `json:"ladder,omitempty"`
 }
 
 type SigningKeyEdge struct {
@@ -2673,15 +2789,19 @@ type SourceLocationInput struct {
 }
 
 type StorageArtifact struct {
-	Key            string              `json:"key"`
-	Kind           StorageArtifactKind `json:"kind"`
-	ID             string              `json:"id"`
-	Hash           string              `json:"hash"`
-	PlaybackID     *string             `json:"playbackId,omitempty"`
-	StreamID       *string             `json:"streamId,omitempty"`
-	StreamTitle    string              `json:"streamTitle"`
-	Title          string              `json:"title"`
-	SecondaryLabel string              `json:"secondaryLabel"`
+	// How the artifact was produced, such as dvr_chapter.
+	OriginType *string `json:"originType,omitempty"`
+	// Catalog ID of the parent DVR recording, present on saved chapters.
+	ParentRecordingID *string             `json:"parentRecordingId,omitempty"`
+	Key               string              `json:"key"`
+	Kind              StorageArtifactKind `json:"kind"`
+	ID                string              `json:"id"`
+	Hash              string              `json:"hash"`
+	PlaybackID        *string             `json:"playbackId,omitempty"`
+	StreamID          *string             `json:"streamId,omitempty"`
+	StreamTitle       string              `json:"streamTitle"`
+	Title             string              `json:"title"`
+	SecondaryLabel    string              `json:"secondaryLabel"`
 	// User-provided description (VOD uploads and clips); null when unset.
 	Description *string `json:"description,omitempty"`
 	// Processing failure detail for a failed artifact; null when not failed.
@@ -2710,6 +2830,8 @@ type StorageArtifact struct {
 	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
 	// Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
 	Tracks []*ArtifactTrack `json:"tracks"`
+	// Retained original upload, when this VOD has one.
+	OriginalFile *VodOriginalFile `json:"originalFile,omitempty"`
 }
 
 // Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles.
@@ -2813,6 +2935,19 @@ type StreamAnalyticsSummaryEdge struct {
 	Node   *periscopepb.StreamAnalyticsSummary `json:"node"`
 }
 
+type StreamArtifactEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *StorageArtifact `json:"node"`
+}
+
+// A keyset-paginated collection of one stream's saved recordings or clips.
+type StreamArtifactsConnection struct {
+	Edges      []*StreamArtifactEdge `json:"edges"`
+	Nodes      []*StorageArtifact    `json:"nodes"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
+}
+
 type StreamConnectionHourlyConnection struct {
 	Edges      []*StreamConnectionHourlyEdge         `json:"edges"`
 	Nodes      []*periscopepb.StreamConnectionHourly `json:"nodes"`
@@ -2866,11 +3001,24 @@ type StreamHealthMetricsConnection struct {
 	TotalCount int                               `json:"totalCount"`
 }
 
+// Current ingest-session state, readable with streams:read.
+type StreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionID      *string           `json:"sessionId,omitempty"`
+	ConnectedAt    *time.Time        `json:"connectedAt,omitempty"`
+	LiveSince      *time.Time        `json:"liveSince,omitempty"`
+	EndedAt        *time.Time        `json:"endedAt,omitempty"`
+	ResumableUntil *time.Time        `json:"resumableUntil,omitempty"`
+}
+
+// Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 type StreamKeyEdge struct {
 	Cursor string                 `json:"cursor"`
 	Node   *commodorepb.StreamKey `json:"node"`
 }
 
+// Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 type StreamKeysConnection struct {
 	Edges      []*StreamKeyEdge         `json:"edges"`
 	Nodes      []*commodorepb.StreamKey `json:"nodes"`
@@ -3075,6 +3223,23 @@ type TrackListEventsConnection struct {
 	TotalCount int                           `json:"totalCount"`
 }
 
+// A named video rendition ladder, with rungs skipped for smaller sources.
+type TranscodeLadder struct {
+	Name           string   `json:"name"`
+	DisplayName    string   `json:"displayName"`
+	Description    string   `json:"description"`
+	RenditionNames []string `json:"renditionNames"`
+}
+
+type TranscodeLadderPolicy struct {
+	Ladders         []*TranscodeLadder `json:"ladders"`
+	PlanDefault     string             `json:"planDefault"`
+	TenantLadder    *string            `json:"tenantLadder,omitempty"`
+	EffectiveLadder string             `json:"effectiveLadder"`
+}
+
+func (TranscodeLadderPolicy) IsSetTranscodeLadderPolicyResult() {}
+
 // Input for updating billing details.
 type UpdateBillingDetailsInput struct {
 	// consumer or business. Omitted preserves the saved classification.
@@ -3153,6 +3318,8 @@ type UpdateStreamInput struct {
 	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds,omitempty"`
 	// Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 	Monitoring *MonitoringToggle `json:"monitoring,omitempty"`
+	// Ladder name; empty inherits the account, then plan. Applies from the next broadcast.
+	TranscodeLadder *string `json:"transcodeLadder,omitempty"`
 }
 
 // Input for updating enterprise subscription custom terms.
@@ -3219,9 +3386,13 @@ func (ValidationError) IsCreateStreamResult() {}
 
 func (ValidationError) IsUpdateStreamResult() {}
 
+func (ValidationError) IsDisconnectIngestResult() {}
+
 func (ValidationError) IsCreateClipResult() {}
 
 func (ValidationError) IsCreateStreamKeyResult() {}
+
+func (ValidationError) IsDeleteStreamKeyResult() {}
 
 func (ValidationError) IsStartDVRResult() {}
 
@@ -3233,6 +3404,12 @@ func (ValidationError) IsCompleteVodUploadResult() {}
 
 func (ValidationError) IsVodUploadStatusResult() {}
 
+func (ValidationError) IsSetTranscodeLadderPolicyResult() {}
+
+func (ValidationError) IsCreateVodOriginalDownloadResult() {}
+
+func (ValidationError) IsDeleteVodOriginalResult() {}
+
 func (ValidationError) IsSetMediaRetentionPolicyResult() {}
 
 func (ValidationError) IsUpdateMediaRetentionResult() {}
@@ -3240,6 +3417,8 @@ func (ValidationError) IsUpdateMediaRetentionResult() {}
 func (ValidationError) IsSetStreamRetentionOverridesResult() {}
 
 func (ValidationError) IsSetNodeModeResult() {}
+
+func (ValidationError) IsSetNodeCapacityResult() {}
 
 func (ValidationError) IsOpenMistAdminSessionResult() {}
 
@@ -3439,6 +3618,8 @@ type VodAsset struct {
 	// the tenant has no storage meter (self-hosted, fully tenant-private
 	// cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
 	StorageCost *StorageCostProjection `json:"storageCost,omitempty"`
+	// Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original.
+	OriginalFile *VodOriginalFile `json:"originalFile,omitempty"`
 }
 
 func (VodAsset) IsImportVodAssetResult() {}
@@ -3448,6 +3629,21 @@ func (VodAsset) IsCompleteVodUploadResult() {}
 func (VodAsset) IsSetPlaybackPolicyResult() {}
 
 func (VodAsset) IsNode() {}
+
+// Short-lived download of the byte-identical original upload, without playback metering.
+type VodOriginalDownload struct {
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	SizeBytes float64   `json:"sizeBytes"`
+	Filename  string    `json:"filename"`
+}
+
+func (VodOriginalDownload) IsCreateVodOriginalDownloadResult() {}
+
+// Metadata of the byte-identical retained upload.
+type VodOriginalFile struct {
+	SizeBytes float64 `json:"sizeBytes"`
+}
 
 type VodRetentionAssetConnection struct {
 	Edges      []*VodRetentionAssetEdge `json:"edges"`
@@ -3486,6 +3682,8 @@ type VodUploadSession struct {
 	Parts []*sharedpb.VodUploadPart `json:"parts"`
 	// When presigned URLs expire (typically 2 hours).
 	ExpiresAt time.Time `json:"expiresAt"`
+	// Effective original-retention policy accepted for this upload. Null when an older server cannot report it.
+	KeepOriginal *bool `json:"keepOriginal,omitempty"`
 }
 
 func (VodUploadSession) IsCreateVodUploadResult() {}
@@ -3915,6 +4113,61 @@ func (e *BufferState) UnmarshalJSON(b []byte) error {
 }
 
 func (e BufferState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type CapacityBudgetSource string
+
+const (
+	CapacityBudgetSourceDefault  CapacityBudgetSource = "DEFAULT"
+	CapacityBudgetSourceOperator CapacityBudgetSource = "OPERATOR"
+)
+
+var AllCapacityBudgetSource = []CapacityBudgetSource{
+	CapacityBudgetSourceDefault,
+	CapacityBudgetSourceOperator,
+}
+
+func (e CapacityBudgetSource) IsValid() bool {
+	switch e {
+	case CapacityBudgetSourceDefault, CapacityBudgetSourceOperator:
+		return true
+	}
+	return false
+}
+
+func (e CapacityBudgetSource) String() string {
+	return string(e)
+}
+
+func (e *CapacityBudgetSource) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CapacityBudgetSource(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CapacityBudgetSource", str)
+	}
+	return nil
+}
+
+func (e CapacityBudgetSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CapacityBudgetSource) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CapacityBudgetSource) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
@@ -5442,6 +5695,7 @@ func (e MediaPlacementWarningSeverity) MarshalJSON() ([]byte, error) {
 type MediaViewerProtocol string
 
 const (
+	MediaViewerProtocolWebvtt          MediaViewerProtocol = "WEBVTT"
 	MediaViewerProtocolWebrtc          MediaViewerProtocol = "WEBRTC"
 	MediaViewerProtocolWhep            MediaViewerProtocol = "WHEP"
 	MediaViewerProtocolHls             MediaViewerProtocol = "HLS"
@@ -5470,6 +5724,7 @@ const (
 )
 
 var AllMediaViewerProtocol = []MediaViewerProtocol{
+	MediaViewerProtocolWebvtt,
 	MediaViewerProtocolWebrtc,
 	MediaViewerProtocolWhep,
 	MediaViewerProtocolHls,
@@ -5499,7 +5754,7 @@ var AllMediaViewerProtocol = []MediaViewerProtocol{
 
 func (e MediaViewerProtocol) IsValid() bool {
 	switch e {
-	case MediaViewerProtocolWebrtc, MediaViewerProtocolWhep, MediaViewerProtocolHls, MediaViewerProtocolDash, MediaViewerProtocolHlsCmaf, MediaViewerProtocolMews, MediaViewerProtocolMewsWebm, MediaViewerProtocolMp4, MediaViewerProtocolWebm, MediaViewerProtocolMkv, MediaViewerProtocolTs, MediaViewerProtocolAac, MediaViewerProtocolH264, MediaViewerProtocolH264Ws, MediaViewerProtocolRawWs, MediaViewerProtocolJSONWs, MediaViewerProtocolFlv, MediaViewerProtocolHds, MediaViewerProtocolSmoothstreaming, MediaViewerProtocolSdp, MediaViewerProtocolMistHTML, MediaViewerProtocolRtmp, MediaViewerProtocolRtsp, MediaViewerProtocolSrt, MediaViewerProtocolDtsc:
+	case MediaViewerProtocolWebvtt, MediaViewerProtocolWebrtc, MediaViewerProtocolWhep, MediaViewerProtocolHls, MediaViewerProtocolDash, MediaViewerProtocolHlsCmaf, MediaViewerProtocolMews, MediaViewerProtocolMewsWebm, MediaViewerProtocolMp4, MediaViewerProtocolWebm, MediaViewerProtocolMkv, MediaViewerProtocolTs, MediaViewerProtocolAac, MediaViewerProtocolH264, MediaViewerProtocolH264Ws, MediaViewerProtocolRawWs, MediaViewerProtocolJSONWs, MediaViewerProtocolFlv, MediaViewerProtocolHds, MediaViewerProtocolSmoothstreaming, MediaViewerProtocolSdp, MediaViewerProtocolMistHTML, MediaViewerProtocolRtmp, MediaViewerProtocolRtsp, MediaViewerProtocolSrt, MediaViewerProtocolDtsc:
 		return true
 	}
 	return false
@@ -6427,6 +6682,63 @@ func (e *StreamEventType) UnmarshalJSON(b []byte) error {
 }
 
 func (e StreamEventType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type StreamIngestState string
+
+const (
+	StreamIngestStateIdle      StreamIngestState = "IDLE"
+	StreamIngestStateConnected StreamIngestState = "CONNECTED"
+	StreamIngestStateLive      StreamIngestState = "LIVE"
+)
+
+var AllStreamIngestState = []StreamIngestState{
+	StreamIngestStateIdle,
+	StreamIngestStateConnected,
+	StreamIngestStateLive,
+}
+
+func (e StreamIngestState) IsValid() bool {
+	switch e {
+	case StreamIngestStateIdle, StreamIngestStateConnected, StreamIngestStateLive:
+		return true
+	}
+	return false
+}
+
+func (e StreamIngestState) String() string {
+	return string(e)
+}
+
+func (e *StreamIngestState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = StreamIngestState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid StreamIngestState", str)
+	}
+	return nil
+}
+
+func (e StreamIngestState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *StreamIngestState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e StreamIngestState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

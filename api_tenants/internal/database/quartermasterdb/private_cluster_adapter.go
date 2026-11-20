@@ -77,14 +77,14 @@ func (q *Queries) CreatePrivateInfrastructureCluster(ctx context.Context, arg Cr
 		INSERT INTO quartermaster.infrastructure_clusters (
 			id, cluster_id, cluster_name, cluster_type, deployment_model,
 			owner_tenant_id, base_url,
-			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+			max_concurrent_streams, max_concurrent_viewers,
 			visibility, pricing_model, short_description,
 			region_id, cell_id, cluster_class, control_cell_id, eligible_serving_cell_ids,
 			health_status, is_active, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
 			$4, $9,
-			0, 0, 0,
+			0, 0,
 			'private', 'free_unmetered', $5,
 			NULLIF($8::text, ''), $2, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
 			'unknown', true, $6, $6

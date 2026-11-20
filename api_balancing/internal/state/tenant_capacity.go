@@ -15,7 +15,7 @@ import (
 var ErrViewerAdmissionExpired = errors.New("viewer placement admission expired")
 
 const (
-	// Helmsman emits Mist's current client inventory every ten seconds. Viewer
+	// Helmsman emits Mist's current client inventory every sixty seconds. Viewer
 	// leases survive several missed polls but recover promptly after a missing
 	// USER_END or a dead media process.
 	tenantViewerCapacityLease = 2 * time.Minute

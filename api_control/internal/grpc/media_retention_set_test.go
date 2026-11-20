@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func expectPolicyReadback(mock sqlmock.Sqlmock, tenant string, dvr int32) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"default_vod_retention_days", "default_dvr_retention_days",
 			"default_clip_retention_days", "updated_by", "updated_at",
-		}).AddRow(nil, dvr, nil, "user-1", time.Unix(1_700_000_000, 0)))
+			"keep_vod_originals"}).AddRow(nil, dvr, nil, "user-1", time.Unix(1_700_000_000, 0), nil))
 }
 
 func TestSetMediaRetentionPolicy_SetUnderCap(t *testing.T) {
@@ -171,59 +172,57 @@ func TestSetMediaRetentionPolicy_AcceptsOwnerAPITokenWithBillingWrite(t *testing
 	}
 }
 
-func TestRetentionOverrideWritersRequireBillingManagement(t *testing.T) {
+func TestRetentionOverrideWritersUseStreamsWrite(t *testing.T) {
 	tests := []struct {
 		name string
 		call func(*CommodoreServer, context.Context) error
 	}{
-		{
-			name: "stream overrides",
-			call: func(s *CommodoreServer, ctx context.Context) error {
-				_, err := s.SetStreamRetentionOverrides(ctx, &commodorepb.SetStreamRetentionOverridesRequest{StreamId: "stream-1"})
-				return err
-			},
-		},
-		{
-			name: "asset override",
-			call: func(s *CommodoreServer, ctx context.Context) error {
-				_, err := s.UpdateAssetRetention(ctx, &commodorepb.UpdateAssetRetentionRequest{TargetType: tgtDVR, TargetId: "dvr-1"})
-				return err
-			},
-		},
-		{
-			name: "asset reset",
-			call: func(s *CommodoreServer, ctx context.Context) error {
-				_, err := s.ResetAssetRetention(ctx, &commodorepb.ResetAssetRetentionRequest{TargetType: tgtDVR, TargetId: "dvr-1"})
-				return err
-			},
-		},
+		{"stream", func(s *CommodoreServer, ctx context.Context) error {
+			_, err := s.SetStreamRetentionOverrides(ctx, &commodorepb.SetStreamRetentionOverridesRequest{StreamId: "stream-1"})
+			return err
+		}},
 	}
-	actors := []struct {
-		name string
-		ctx  context.Context
-	}{
-		{
-			name: "tenant member",
-			ctx:  context.WithValue(retentionAuthCtx("tenant-a"), ctxkeys.KeyRole, "member"),
-		},
-		{
-			name: "owner token without billing write",
-			ctx: context.WithValue(
-				context.WithValue(retentionAuthCtx("tenant-a"), ctxkeys.KeyAuthType, "api_token"),
-				ctxkeys.KeyPermissions,
-				[]string{"streams:write"},
-			),
-		},
+	for _, target := range []commodorepb.MediaRetentionTarget{tgtDVR, tgtVOD, tgtClip} {
+		tests = append(tests, struct {
+			name string
+			call func(*CommodoreServer, context.Context) error
+		}{"override/" + target.String(), func(s *CommodoreServer, ctx context.Context) error {
+			_, err := s.UpdateAssetRetention(ctx, &commodorepb.UpdateAssetRetentionRequest{TargetType: target, TargetId: "asset-1"})
+			return err
+		}})
+		tests = append(tests, struct {
+			name string
+			call func(*CommodoreServer, context.Context) error
+		}{"reset/" + target.String(), func(s *CommodoreServer, ctx context.Context) error {
+			_, err := s.ResetAssetRetention(ctx, &commodorepb.ResetAssetRetentionRequest{TargetType: target, TargetId: "asset-1"})
+			return err
+		}})
 	}
-	for _, actor := range actors {
-		for _, tt := range tests {
-			t.Run(actor.name+"/"+tt.name, func(t *testing.T) {
-				s, _, done := newRetentionServer(t)
-				defer done()
-				if err := tt.call(s, actor.ctx); status.Code(err) != codes.PermissionDenied {
-					t.Fatalf("status = %v, want PermissionDenied", status.Code(err))
-				}
-			})
+	for _, scope := range []string{"streams:write", "billing:write"} {
+		for _, role := range []string{"member", "owner"} {
+			for _, test := range tests {
+				t.Run(scope+"/"+role+"/"+test.name, func(t *testing.T) {
+					server, mock, done := newRetentionServer(t)
+					defer done()
+					ctx := context.WithValue(retentionAuthCtx("tenant-a"), ctxkeys.KeyAuthType, "api_token")
+					ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{scope})
+					if scope == "streams:write" {
+						mock.ExpectQuery("SELECT").WillReturnError(errors.New("catalog proof"))
+					}
+					err := test.call(server, ctx)
+					if scope == "streams:write" {
+						if status.Code(err) != codes.Internal {
+							t.Fatalf("media token did not reach catalog: %v", err)
+						}
+					} else if status.Code(err) != codes.PermissionDenied {
+						t.Fatalf("billing-only token authorized media write: %v", err)
+					}
+					if err := mock.ExpectationsWereMet(); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
 		}
 	}
 }

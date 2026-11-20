@@ -9,13 +9,15 @@ WHERE id = sqlc.arg(effect_id) AND state = 'pending'
 INSERT INTO foghorn.ingest_offline_effects
     (tenant_id, stream_internal_name, source_node_id, source_generation, source_revision,
      set_node_offline, set_node_offline_done, teardown_stream, teardown_done,
-     broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done)
+     broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done,
+     drain_publisher, drain_done, drain_runtime_name)
 VALUES (sqlc.arg(tenant_id)::text::uuid, sqlc.arg(stream_internal_name), sqlc.arg(source_node_id),
         NULLIF(sqlc.arg(source_generation)::text, '')::uuid, sqlc.arg(source_revision),
         sqlc.arg(set_node_offline), NOT sqlc.arg(set_node_offline),
         sqlc.arg(teardown_stream), NOT sqlc.arg(teardown_stream),
         sqlc.arg(broadcast_offline), NOT sqlc.arg(broadcast_offline),
-        sqlc.arg(decklog_trigger), COALESCE(octet_length(sqlc.arg(decklog_trigger)::bytea), 0) = 0)
+        sqlc.arg(decklog_trigger), COALESCE(octet_length(sqlc.arg(decklog_trigger)::bytea), 0) = 0,
+        sqlc.arg(drain_publisher)::boolean, NOT sqlc.arg(drain_publisher)::boolean, sqlc.arg(drain_runtime_name)::text)
 ON CONFLICT (tenant_id, stream_internal_name, source_revision) DO NOTHING;
 
 -- name: FailExhaustedOfflineEffects :many
@@ -31,7 +33,7 @@ RETURNING id, tenant_id::text AS tenant_id, stream_internal_name, source_revisio
 WITH candidates AS (
     SELECT e.id FROM foghorn.ingest_offline_effects e
     WHERE e.state = 'pending' AND e.next_attempt_at <= NOW()
-      AND e.attempts < 12 AND e.ack_wait_attempts < 12
+      AND (e.attempts < 12 AND e.ack_wait_attempts < 12)
       AND (e.leased_until IS NULL OR e.leased_until < NOW())
       AND (e.claim_affinity IS NULL OR e.claim_affinity = sqlc.arg(instance_id)
            OR e.updated_at <= NOW() - INTERVAL '10 seconds')
@@ -48,12 +50,12 @@ WITH candidates AS (
               COALESCE(o.source_generation::text, '')::text AS source_generation, o.source_revision,
               o.set_node_offline, o.set_node_offline_done, o.teardown_stream, o.teardown_done,
               o.broadcast_offline, o.broadcast_offline_done, o.decklog_trigger, o.decklog_done,
-              o.lease_token::text AS lease_token
+              o.lease_token::text AS lease_token, o.drain_publisher, o.drain_done, o.drain_runtime_name, o.state_superseded
 )
 SELECT * FROM leased ORDER BY id;
 
 -- name: ReadOfflineEffectLegsLocked :one
-SELECT set_node_offline_done, teardown_done, broadcast_offline_done, decklog_done
+SELECT set_node_offline_done, teardown_done, broadcast_offline_done, decklog_done, drain_done, state_superseded
 FROM foghorn.ingest_offline_effects
 WHERE id = sqlc.arg(effect_id) AND state = 'pending'
   AND lease_token = sqlc.arg(lease_token)::text::uuid
@@ -85,88 +87,74 @@ ORDER BY s.started_at_unix_millis DESC, s.id DESC
 LIMIT 1;
 
 -- name: HasActiveIngestSession :one
-SELECT EXISTS (
-    SELECT 1 FROM foghorn.ingest_sessions
-    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-      AND stream_internal_name = sqlc.arg(stream_internal_name) AND ended_at IS NULL
-);
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions s
+ WHERE s.tenant_id=sqlc.arg(tenant_id)::text::uuid AND s.stream_internal_name=sqlc.arg(stream_internal_name) AND s.ended_at IS NULL
+ UNION ALL SELECT 1 FROM foghorn.pull_ingest_sessions p
+ WHERE p.tenant_id=sqlc.arg(tenant_id)::text::uuid AND p.stream_internal_name=sqlc.arg(stream_internal_name) AND p.ended_at IS NULL);
 
 -- name: SupersedeOfflineEffect :execrows
 UPDATE foghorn.ingest_offline_effects
 SET state = 'superseded', applied_at = NOW(), updated_at = NOW(), leased_until = NULL, lease_token = NULL
 WHERE id = sqlc.arg(effect_id) AND state = 'pending'
+  AND (NOT drain_publisher OR drain_done)
   AND lease_token = sqlc.arg(lease_token)::text::uuid;
 
 -- name: SettleOfflineEffect :execrows
-UPDATE foghorn.ingest_offline_effects
+WITH progress AS (
+    SELECT owed.id,
+        drain_done OR sqlc.arg(drain_done)::boolean AS drain_complete,
+        state_superseded OR sqlc.arg(state_superseded)::boolean AS source_superseded,
+        (NOT set_node_offline OR sqlc.arg(set_node_offline_done)::boolean)
+          AND (NOT teardown_stream OR sqlc.arg(teardown_done)::boolean)
+          AND (NOT broadcast_offline OR sqlc.arg(broadcast_offline_done)::boolean)
+          AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR sqlc.arg(decklog_done)::boolean)
+          AND (NOT drain_publisher OR drain_done OR sqlc.arg(drain_done)::boolean) AS complete,
+        (teardown_stream AND NOT sqlc.arg(teardown_done)::boolean)
+          OR (drain_publisher AND NOT (drain_done OR sqlc.arg(drain_done)::boolean)) AS awaiting_ack,
+        drain_publisher AND NOT (drain_done OR sqlc.arg(drain_done)::boolean) AS drain_pending
+    FROM foghorn.ingest_offline_effects owed
+    WHERE owed.id = sqlc.arg(effect_id) AND owed.state = 'pending'
+      AND owed.lease_token = sqlc.arg(lease_token)::text::uuid
+)
+UPDATE foghorn.ingest_offline_effects e
 SET set_node_offline_done = sqlc.arg(set_node_offline_done),
     teardown_done = sqlc.arg(teardown_done),
     broadcast_offline_done = sqlc.arg(broadcast_offline_done),
     decklog_done = sqlc.arg(decklog_done),
-	attempts = CASE
-		WHEN sqlc.arg(release_lease)::boolean
-		 AND NOT ((NOT set_node_offline OR sqlc.arg(set_node_offline_done))
-		  AND (NOT teardown_stream OR sqlc.arg(teardown_done))
-		  AND (NOT broadcast_offline OR sqlc.arg(broadcast_offline_done))
-		  AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR sqlc.arg(decklog_done)))
-		THEN 0 ELSE attempts END,
-    ack_wait_attempts = CASE
-        WHEN sqlc.arg(release_lease)::boolean
-         AND teardown_stream AND NOT sqlc.arg(teardown_done)
-         AND NOT ((NOT set_node_offline OR sqlc.arg(set_node_offline_done))
-          AND (NOT teardown_stream OR sqlc.arg(teardown_done))
-          AND (NOT broadcast_offline OR sqlc.arg(broadcast_offline_done))
-          AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR sqlc.arg(decklog_done)))
-        THEN ack_wait_attempts + 1 ELSE ack_wait_attempts END,
+    drain_done = p.drain_complete, state_superseded = p.source_superseded,
+    ack_wait_attempts = CASE WHEN sqlc.arg(release_lease)::boolean AND p.awaiting_ack
+        THEN e.ack_wait_attempts + 1 ELSE e.ack_wait_attempts END,
     state = CASE
-        WHEN (NOT set_node_offline OR sqlc.arg(set_node_offline_done))
-         AND (NOT teardown_stream OR sqlc.arg(teardown_done))
-         AND (NOT broadcast_offline OR sqlc.arg(broadcast_offline_done))
-         AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR sqlc.arg(decklog_done))
-        THEN 'applied'
+        WHEN p.complete THEN CASE WHEN p.source_superseded THEN 'superseded' ELSE 'applied' END
         WHEN sqlc.arg(release_lease)::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT sqlc.arg(teardown_done) AND ack_wait_attempts + 1 >= 12))
-        THEN 'failed'
-        ELSE 'pending'
-    END,
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN 'failed'
+        ELSE 'pending' END,
     applied_at = CASE
-        WHEN (NOT set_node_offline OR sqlc.arg(set_node_offline_done))
-         AND (NOT teardown_stream OR sqlc.arg(teardown_done))
-         AND (NOT broadcast_offline OR sqlc.arg(broadcast_offline_done))
-         AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR sqlc.arg(decklog_done))
-        THEN NOW()
+        WHEN p.complete THEN NOW()
         WHEN sqlc.arg(release_lease)::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT sqlc.arg(teardown_done) AND ack_wait_attempts + 1 >= 12))
-        THEN NOW()
-        ELSE applied_at
-    END,
-    next_attempt_at = CASE WHEN sqlc.arg(release_lease)::boolean
-        THEN NOW() + LEAST(
-            INTERVAL '5 minutes',
-            INTERVAL '1 second' * power(2, LEAST(
-                CASE WHEN teardown_stream AND NOT sqlc.arg(teardown_done)
-                     THEN ack_wait_attempts + 1 ELSE attempts END,
-                8
-            ))
-        )
-        ELSE next_attempt_at END,
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN NOW()
+        ELSE e.applied_at END,
+    next_attempt_at = CASE WHEN sqlc.arg(release_lease)::boolean THEN
+        NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2,
+            LEAST(CASE WHEN p.awaiting_ack THEN e.ack_wait_attempts + 1 ELSE e.attempts END, 8)))
+        ELSE e.next_attempt_at END,
     updated_at = NOW(),
-    leased_until = CASE WHEN sqlc.arg(release_lease)::boolean THEN NULL ELSE leased_until END,
-    lease_token = CASE WHEN sqlc.arg(release_lease)::boolean THEN NULL ELSE lease_token END,
+    leased_until = CASE WHEN sqlc.arg(release_lease)::boolean THEN NULL ELSE e.leased_until END,
+    lease_token = CASE WHEN sqlc.arg(release_lease)::boolean THEN NULL ELSE e.lease_token END,
     last_error = CASE
         WHEN sqlc.arg(release_lease)::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT sqlc.arg(teardown_done) AND ack_wait_attempts + 1 >= 12))
-        THEN COALESCE(NULLIF(last_error, ''), 'offline obligation exhausted retry budget')
-        WHEN sqlc.arg(release_lease)::boolean THEN NULL
-        ELSE last_error END
-WHERE id = sqlc.arg(effect_id) AND state = 'pending'
-  AND lease_token = sqlc.arg(lease_token)::text::uuid;
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12))
+          THEN COALESCE(NULLIF(e.last_error, ''), 'offline obligation exhausted retry budget')
+        WHEN sqlc.arg(release_lease)::boolean THEN NULL ELSE e.last_error END
+FROM progress p
+WHERE e.id = p.id AND e.state = 'pending' AND e.lease_token = sqlc.arg(lease_token)::text::uuid;
 
 -- name: MarkOfflineTeardownDone :execrows
 UPDATE foghorn.ingest_offline_effects
 SET teardown_done = TRUE,
     next_attempt_at = NOW(), claim_affinity = NULL, updated_at = NOW()
-WHERE source_node_id = sqlc.arg(source_node_id)
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND source_node_id = sqlc.arg(source_node_id)
   AND source_generation = sqlc.arg(source_generation)::text::uuid
   AND state = 'pending' AND teardown_stream AND NOT teardown_done;
 
@@ -176,14 +164,15 @@ SET teardown_done = TRUE,
     state = 'pending', attempts = 0, ack_wait_attempts = 0, next_attempt_at = NOW(),
     claim_affinity = NULL, applied_at = NULL, leased_until = NULL, lease_token = NULL,
     last_error = NULL, updated_at = NOW()
-WHERE source_node_id = sqlc.arg(source_node_id)
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND source_node_id = sqlc.arg(source_node_id)
   AND source_generation = sqlc.arg(source_generation)::text::uuid
   AND state = 'failed' AND teardown_stream AND NOT teardown_done;
 
 -- name: FailOfflineEffect :exec
 UPDATE foghorn.ingest_offline_effects
-SET state = CASE WHEN attempts >= 12 OR ack_wait_attempts >= 12 THEN 'failed' ELSE 'pending' END,
-    applied_at = CASE WHEN attempts >= 12 OR ack_wait_attempts >= 12 THEN NOW() ELSE applied_at END,
+SET state = CASE WHEN (attempts >= 12 OR ack_wait_attempts >= 12) THEN 'failed' ELSE 'pending' END,
+    applied_at = CASE WHEN (attempts >= 12 OR ack_wait_attempts >= 12) THEN NOW() ELSE applied_at END,
     leased_until = NULL, lease_token = NULL, last_error = sqlc.arg(error_message)::text, updated_at = NOW(),
     next_attempt_at = NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2, LEAST(attempts, 8)))
 WHERE id = sqlc.arg(effect_id) AND state = 'pending'
@@ -198,3 +187,28 @@ WHERE id IN (
        OR (state = 'failed' AND updated_at < NOW() - INTERVAL '30 days'))
     ORDER BY updated_at LIMIT 1000
 );
+
+-- name: MarkOfflinePublisherDrainDone :execrows
+UPDATE foghorn.ingest_offline_effects
+SET drain_done=TRUE, next_attempt_at=NOW(), claim_affinity=NULL, updated_at=NOW(),
+    state=CASE WHEN state='failed' THEN 'pending' ELSE state END,
+    attempts=CASE WHEN state='failed' THEN 0 ELSE attempts END,
+    ack_wait_attempts=CASE WHEN state='failed' THEN 0 ELSE ack_wait_attempts END,
+    applied_at=CASE WHEN state='failed' THEN NULL ELSE applied_at END,
+    leased_until=CASE WHEN state='failed' THEN NULL ELSE leased_until END,
+    lease_token=CASE WHEN state='failed' THEN NULL ELSE lease_token END
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND source_node_id=sqlc.arg(source_node_id)
+  AND source_generation=sqlc.arg(source_generation)::text::uuid
+  AND drain_publisher AND NOT drain_done AND state IN ('pending','failed');
+
+-- name: ListOfflineAcknowledgementTenants :many
+-- Legacy edge replies carry the authenticated node and generation, not a tenant.
+-- Resolve only that immutable identity; every following mutation remains tenant-scoped.
+SELECT tenant_id::text AS tenant_id
+FROM foghorn.ingest_offline_effects
+WHERE source_node_id = sqlc.arg(source_node_id)
+  AND source_generation = sqlc.arg(source_generation)::text::uuid
+  AND state IN ('pending', 'failed')
+  AND ((drain_publisher AND NOT drain_done) OR (teardown_stream AND NOT teardown_done))
+GROUP BY tenant_id
+LIMIT 2;

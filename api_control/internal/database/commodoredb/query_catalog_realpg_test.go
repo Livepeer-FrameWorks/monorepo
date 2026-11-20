@@ -587,8 +587,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareCommodoreQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := commodoreGeneratedQueries(t)
-	if len(queries) != 491 {
-		t.Fatalf("found %d generated Commodore queries, want 491", len(queries))
+	if len(queries) != 503 {
+		t.Fatalf("found %d generated Commodore queries, want 503", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -910,6 +910,13 @@ func commodoreGeneratedQueries(t *testing.T) []commodoreGeneratedQuery {
 
 func startCommodoreQueryCatalogRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	schema, err := dbsql.Content.ReadFile("schema/commodore.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn, _, ok := dockerpg.OpenNativePostgresBaseline(t, "commodore", schema); ok {
+		return conn
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -932,10 +939,6 @@ func startCommodoreQueryCatalogRealPG(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if err := dockerpg.WaitReady(db, name); err != nil {
-		t.Fatal(err)
-	}
-	schema, err := dbsql.Content.ReadFile("schema/commodore.sql")
-	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(string(schema)); err != nil {

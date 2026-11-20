@@ -64,21 +64,19 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("settings:write", ToolRiskWrite, "update_tenant_settings")
 	add("billing:read", ToolRiskRead, "check_topup", "get_payment_options", "get_retention_policy")
 	add("billing:write", ToolRiskHigh, "change_billing_tier", "complete_mollie_postpaid_setup", "pay_invoice", "start_postpaid_setup", "submit_payment", "topup_balance", "update_billing_details")
-	add("billing:write", ToolRiskWrite, "set_retention_policy", "set_stream_retention_overrides", "update_asset_retention")
-	add("billing:write", ToolRiskHigh, "reset_asset_retention")
+	add("billing:write", ToolRiskWrite, "set_retention_policy")
+	add("streams:write", ToolRiskWrite, "set_stream_retention_overrides", "update_asset_retention")
+	add("streams:write", ToolRiskHigh, "reset_asset_retention")
 	add("streams:read", ToolRiskRead,
-		"get_vod_upload_status", "list_push_targets", "list_signing_keys",
-		"resolve_playback_endpoint", "test_playback_access", "validate_stream_key")
-	// Stream keys are publishing credentials: Commodore lists them only to
-	// streams:write, even though this tool redacts the key values.
-	add("streams:write", ToolRiskRead, "list_stream_keys")
+		"get_vod_original_download", "get_transcode_ladder_policy", "get_vod_upload_status", "list_push_targets", "list_signing_keys",
+		"resolve_playback_endpoint", "test_playback_access", "validate_stream_key", "get_stream_ingest", "list_stream_recordings", "list_stream_clips", "get_dvr_recording")
 	add("streams:write", ToolRiskWrite,
 		"complete_vod_upload", "create_clip", "create_push_target", "create_stream", "create_vod_upload",
-		"import_vod_asset", "start_dvr", "stop_dvr", "update_push_target", "update_stream")
+		"set_transcode_ladder_policy", "import_vod_asset", "start_dvr", "stop_dvr", "update_push_target", "update_stream")
 	add("streams:write", ToolRiskHigh,
-		"abort_vod_upload", "clear_playback_policy", "create_signing_key", "create_stream_key", "delete_clip",
-		"delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset",
-		"refresh_stream_key", "revoke_signing_key", "set_playback_policy")
+		"abort_vod_upload", "clear_playback_policy", "create_signing_key", "delete_clip",
+		"delete_dvr", "delete_push_target", "delete_stream", "delete_vod_asset", "delete_vod_original",
+		"refresh_stream_key", "disconnect_ingest", "revoke_signing_key", "set_playback_policy")
 	add("analytics:read", ToolRiskRead,
 		"diagnose_buffer_health", "diagnose_packet_loss", "diagnose_rebuffering", "diagnose_routing",
 		"get_anomaly_report", "get_stream_health_summary")
@@ -87,7 +85,7 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("infrastructure:write", ToolRiskWrite, "acknowledge_incident", "assign_incident", "resolve_incident", "add_incident_note")
 	add("infrastructure:write", ToolRiskWrite,
 		"accept_cluster_invite", "approve_subscription_request", "create_cluster_invite", "create_edge_cluster",
-		"create_enrollment_token", "request_cluster_subscription", "set_node_mode", "subscribe_to_cluster")
+		"create_enrollment_token", "request_cluster_subscription", "set_node_capacity", "set_node_mode", "subscribe_to_cluster")
 	add("settings:write", ToolRiskWrite, "set_preferred_cluster")
 	add("infrastructure:write", ToolRiskHigh,
 		"manage_node", "reject_subscription_request", "revoke_cluster_invite", "unsubscribe_from_cluster", "update_cluster_marketplace")
@@ -105,12 +103,12 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("security:write", ToolRiskWrite, "link_email", "request_wallet_challenge")
 	add("billing:write", ToolRiskWrite, "activate_free_tier")
 
-	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "delete_webhook_endpoint", "disable_webhook_endpoint", "execute_query", "manage_node", "refresh_stream_key", "reject_subscription_request", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "rotate_webhook_secret", "set_playback_policy", "unlink_wallet", "unsubscribe_from_cluster", "update_cluster_marketplace"} {
+	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_vod_asset", "delete_vod_original", "delete_webhook_endpoint", "disable_webhook_endpoint", "execute_query", "manage_node", "refresh_stream_key", "disconnect_ingest", "reject_subscription_request", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "rotate_webhook_secret", "set_playback_policy", "unlink_wallet", "unsubscribe_from_cluster", "update_cluster_marketplace"} {
 		policy := policies[name]
 		policy.Destructive = true
 		policies[name] = policy
 	}
-	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "complete_mollie_postpaid_setup", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_node_mode", "set_playback_policy", "set_preferred_cluster", "set_retention_policy", "set_stream_retention_overrides", "stop_dvr", "unlink_wallet", "unsubscribe_from_cluster", "update_asset_retention", "update_billing_details", "update_cluster_marketplace", "update_push_target", "update_stream", "update_tenant_settings", "update_webhook_endpoint", "delete_webhook_endpoint", "enable_webhook_endpoint", "disable_webhook_endpoint"} {
+	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "complete_mollie_postpaid_setup", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_vod_asset", "delete_vod_original", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_node_mode", "set_playback_policy", "set_preferred_cluster", "set_transcode_ladder_policy", "set_retention_policy", "set_stream_retention_overrides", "stop_dvr", "unlink_wallet", "unsubscribe_from_cluster", "update_asset_retention", "update_billing_details", "update_cluster_marketplace", "update_push_target", "update_stream", "update_tenant_settings", "update_webhook_endpoint", "delete_webhook_endpoint", "enable_webhook_endpoint", "disable_webhook_endpoint"} {
 		policy := policies[name]
 		policy.Idempotent = true
 		policies[name] = policy
@@ -183,15 +181,14 @@ func addTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHa
 }
 
 var toolEnums = map[string]map[string][]any{
+	"delete_vod_original":       {"confirm": {"DELETE ORIGINAL"}},
 	"ask_consultant":            {"mode": {"full", "docs"}},
 	"browse_marketplace":        {"pricing_model": {"FREE_UNMETERED", "TIER_INHERIT", "METERED", "MONTHLY"}},
 	"create_cluster_invite":     {"access_level": {"viewer", "subscriber", "admin"}},
 	"create_push_target":        {"platform": {"twitch", "youtube", "facebook", "kick", "x", "custom"}},
 	"create_signing_key":        {"confirm": {"CREATE SIGNING KEY"}},
 	"create_stream":             {"ingest_mode": {"push", "pull"}},
-	"create_stream_key":         {"confirm": {"CREATE STREAM KEY"}},
 	"delete_dvr":                {"confirm": {"DELETE DVR"}},
-	"delete_stream_key":         {"confirm": {"DELETE STREAM KEY"}},
 	"diagnose_buffer_health":    {"time_range": {"last_1h", "last_6h", "last_24h", "last_7d"}},
 	"diagnose_packet_loss":      {"time_range": {"last_1h", "last_6h", "last_24h", "last_7d"}},
 	"diagnose_rebuffering":      {"time_range": {"last_1h", "last_6h", "last_24h", "last_7d"}},
@@ -202,6 +199,7 @@ var toolEnums = map[string]map[string][]any{
 	"manage_node":               {"action": {"drain", "maintenance", "restore", "status", "diagnose", "logs"}},
 	"pay_invoice":               {"method": {"card", "crypto_usdc", "crypto_eth"}},
 	"refresh_stream_key":        {"confirm": {"ROTATE STREAM KEY"}},
+	"disconnect_ingest":         {"confirm": {"DISCONNECT INGEST"}},
 	"reset_asset_retention":     {"target_type": {"dvr", "clip", "vod"}},
 	"revoke_signing_key":        {"confirm": {"REVOKE SIGNING KEY"}},
 	"set_node_mode":             {"mode": {"normal", "draining", "maintenance"}},

@@ -199,6 +199,26 @@
           subtitle: "Publisher + peer inbound",
           value: `${ingressMbps.toLocaleString()} Mbps`,
           tone: "text-warning",
+        },
+        {
+          key: "bandwidth-budget",
+          label: "Node budgets",
+          subtitle: cluster?.capacity
+            ? `${cluster.capacity.defaultBudgetNodes} nodes using defaults`
+            : "Capacity unavailable",
+          value: cluster?.capacity
+            ? `${(cluster.capacity.egressBudgetBytesPerSec / 125_000).toLocaleString()} Mbit/s`
+            : "—",
+          tone: "text-info",
+        },
+        {
+          key: "bandwidth-usable",
+          label: "Usable egress",
+          subtitle: "85% of node budgets",
+          value: cluster?.capacity
+            ? `${(cluster.capacity.egressUsableBytesPerSec / 125_000).toLocaleString()} Mbit/s`
+            : "—",
+          tone: "text-info",
         }
       );
     }

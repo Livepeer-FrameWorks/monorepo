@@ -7,18 +7,7 @@ package frameworks.events.internal.v1;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
 
 import "events/options.proto";
-import "events/public/v1/common.proto";
 
-// RecordingChapterReady reports that one chapter of a recording became
-// playable.
-message RecordingChapterReady {
-  option (frameworks.events.event) = {type: "recording.chapter_ready", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "artifacts"};
-  frameworks.events.public.v1.Artifact artifact = 1;
-  string chapter_id = 2;
-  int64 start_ms = 3;
-  int64 end_ms = 4;
-  int64 size_bytes = 5;
-}
 
 enum NodeCopyTransition {
   NODE_COPY_TRANSITION_UNSPECIFIED = 0;

@@ -240,6 +240,18 @@ mutation CreateStripeCheckout(
   }
 }
 
+mutation CreateVodOriginalDownload(
+  $id: ID!
+) {
+  createVodOriginalDownload(id: $id) {
+    __typename
+    ...VodOriginalDownloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation CreateWebhookEndpoint(
   $input: CreateWebhookEndpointInput!
 ) {
@@ -265,6 +277,18 @@ mutation DeleteSkipperConversation(
   deleteSkipperConversation(id: $id)
 }
 
+mutation DeleteVodOriginal(
+  $id: ID!
+) {
+  deleteVodOriginal(id: $id) {
+    __typename
+    ...DeleteSuccessDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation DeleteWebhookEndpoint(
   $id: ID!
 ) {
@@ -282,6 +306,18 @@ mutation DisableWebhookEndpoint(
   disableWebhookEndpoint(id: $id) {
     __typename
     ...WebhookEndpointDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
+mutation DisconnectIngest(
+  $streamId: ID!
+) {
+  disconnectIngest(streamId: $streamId) {
+    __typename
+    ...IngestDisconnectSuccessDefaultFields
+    ...ValidationErrorDefaultFields
     ...NotFoundErrorDefaultFields
     ...AuthErrorDefaultFields
   }
@@ -506,6 +542,18 @@ mutation SetMediaRetentionPolicy(
   }
 }
 
+mutation SetNodeCapacity(
+  $input: SetNodeCapacityInput!
+) {
+  setNodeCapacity(input: $input) {
+    __typename
+    ...InfrastructureNodeDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation SetNodeMode(
   $input: SetNodeModeInput!
 ) {
@@ -538,6 +586,28 @@ mutation SetStreamRetentionOverrides(
     ...StreamRetentionOverridesDefaultFields
     ...ValidationErrorDefaultFields
     ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
+mutation SetTranscodeLadderPolicy(
+  $input: SetTranscodeLadderPolicyInput!
+) {
+  setTranscodeLadderPolicy(input: $input) {
+    __typename
+    ...TranscodeLadderPolicyDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
+mutation SetVodOriginalPolicy(
+  $keepVodOriginals: Boolean
+) {
+  setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+    __typename
+    ...MediaRetentionPolicyDefaultFields
+    ...ValidationErrorDefaultFields
     ...AuthErrorDefaultFields
   }
 }

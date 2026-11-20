@@ -105,6 +105,7 @@ type Querier interface {
 	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
 	CompleteTenantAccountClosure(ctx context.Context, tenantID string) error
 	ConsumeAuthorizationCode(ctx context.Context, id string) error
+	ConsumeVodOriginalDownloadGrant(ctx context.Context, arg ConsumeVodOriginalDownloadGrantParams) (string, error)
 	ConsumeWalletChallenge(ctx context.Context, arg ConsumeWalletChallengeParams) (string, error)
 	CountAPITokensForUser(ctx context.Context, arg CountAPITokensForUserParams) (int32, error)
 	// Platform operators belong to the system tenant, so its lock serializes this global guard.
@@ -115,7 +116,6 @@ type Querier interface {
 	CountFailedTenantAccountClosures(ctx context.Context) (int64, error)
 	// Platform-wide recovery metric; a single failed call may recover after backoff.
 	CountRepeatedTenantAccountClosureFailures(ctx context.Context) (int64, error)
-	CountStreamKeys(ctx context.Context, arg CountStreamKeysParams) (int32, error)
 	CountStreamsForUser(ctx context.Context, arg CountStreamsForUserParams) (int32, error)
 	CountStreamsForUserSearch(ctx context.Context, arg CountStreamsForUserSearchParams) (int32, error)
 	CountUserWallets(ctx context.Context, arg CountUserWalletsParams) (int32, error)
@@ -126,7 +126,6 @@ type Querier interface {
 	CreateBootstrapPullStream(ctx context.Context, arg CreateBootstrapPullStreamParams) (string, error)
 	CreateBootstrapUser(ctx context.Context, arg CreateBootstrapUserParams) error
 	CreateSigningKey(ctx context.Context, arg CreateSigningKeyParams) (CreateSigningKeyRow, error)
-	DeactivateStreamKey(ctx context.Context, arg DeactivateStreamKeyParams) (int64, error)
 	DeleteBootstrapStream(ctx context.Context, streamID string) error
 	DeleteBootstrapStreamProcessingConfig(ctx context.Context, streamID string) error
 	DeleteCatalogOnlyClip(ctx context.Context, arg DeleteCatalogOnlyClipParams) error
@@ -147,7 +146,6 @@ type Querier interface {
 	DeleteRetainedSessionToken(ctx context.Context, arg DeleteRetainedSessionTokenParams) (int64, error)
 	DeleteRetainedUnassignedToken(ctx context.Context, arg DeleteRetainedUnassignedTokenParams) (int64, error)
 	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)
-	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
 	DeleteTenantWalletIdentities(ctx context.Context, tenantID string) error
 	DeleteTerminalAccountEmail(ctx context.Context, arg DeleteTerminalAccountEmailParams) (int64, error)
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
@@ -155,6 +153,7 @@ type Querier interface {
 	// A new request restarts delivery: attempts and the 24h window reset, so a
 	// resend after an abandoned row is retried again.
 	EnqueueAccountEmail(ctx context.Context, arg EnqueueAccountEmailParams) error
+	EnqueueIngestStopObligation(ctx context.Context, arg EnqueueIngestStopObligationParams) error
 	EnqueueInvalidation(ctx context.Context, arg EnqueueInvalidationParams) (string, error)
 	// For a cell that does not hold what it acknowledged: every authority whose
 	// current version has run out while the cell may still hold a valid older one.
@@ -228,11 +227,15 @@ type Querier interface {
 	GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCurrentMediaAuthorityPayloadParams) (GetCurrentMediaAuthorityPayloadRow, error)
 	GetCurrentMediaAuthorityPublication(ctx context.Context, arg GetCurrentMediaAuthorityPublicationParams) (GetCurrentMediaAuthorityPublicationRow, error)
 	GetCurrentMediaAuthorityRevocationSnapshot(ctx context.Context, arg GetCurrentMediaAuthorityRevocationSnapshotParams) (GetCurrentMediaAuthorityRevocationSnapshotRow, error)
+	GetCurrentPrimaryStreamKey(ctx context.Context, arg GetCurrentPrimaryStreamKeyParams) (GetCurrentPrimaryStreamKeyRow, error)
 	GetDVRCatalogState(ctx context.Context, arg GetDVRCatalogStateParams) (GetDVRCatalogStateRow, error)
 	GetDVRDeletionRoute(ctx context.Context, arg GetDVRDeletionRouteParams) (GetDVRDeletionRouteRow, error)
+	GetDVRRecordingCaptureTimes(ctx context.Context, arg GetDVRRecordingCaptureTimesParams) (GetDVRRecordingCaptureTimesRow, error)
+	GetDVRRecordingForTenant(ctx context.Context, arg GetDVRRecordingForTenantParams) (GetDVRRecordingForTenantRow, error)
 	GetDVRRetentionStreamID(ctx context.Context, arg GetDVRRetentionStreamIDParams) (string, error)
 	GetDVRRetentionUntil(ctx context.Context, arg GetDVRRetentionUntilParams) (sql.NullTime, error)
 	GetDVRSourceRoute(ctx context.Context, arg GetDVRSourceRouteParams) (GetDVRSourceRouteRow, error)
+	GetIngestStopObligationPayload(ctx context.Context, arg GetIngestStopObligationPayloadParams) (json.RawMessage, error)
 	GetLiveClipCatalogStateForUpdate(ctx context.Context, arg GetLiveClipCatalogStateForUpdateParams) (GetLiveClipCatalogStateForUpdateRow, error)
 	GetLiveDVRCatalogStateForUpdate(ctx context.Context, arg GetLiveDVRCatalogStateForUpdateParams) (GetLiveDVRCatalogStateForUpdateRow, error)
 	GetLiveStreamIDByInternalName(ctx context.Context, arg GetLiveStreamIDByInternalNameParams) (string, error)
@@ -284,12 +287,14 @@ type Querier interface {
 	GetStreamForDeletion(ctx context.Context, arg GetStreamForDeletionParams) (GetStreamForDeletionRow, error)
 	GetStreamIDForDVRRegistration(ctx context.Context, arg GetStreamIDForDVRRegistrationParams) (string, error)
 	GetStreamIngestModeForUser(ctx context.Context, arg GetStreamIngestModeForUserParams) (string, error)
+	GetStreamIngestRoutes(ctx context.Context, arg GetStreamIngestRoutesParams) ([]GetStreamIngestRoutesRow, error)
 	GetStreamLiveVideoABR(ctx context.Context, arg GetStreamLiveVideoABRParams) (string, error)
 	GetStreamMistSourcePins(ctx context.Context, arg GetStreamMistSourcePinsParams) ([]string, error)
 	GetStreamPlaybackID(ctx context.Context, arg GetStreamPlaybackIDParams) (string, error)
 	GetStreamPolicyForBundle(ctx context.Context, streamID string) (GetStreamPolicyForBundleRow, error)
 	GetStreamPolicyScopeName(ctx context.Context, arg GetStreamPolicyScopeNameParams) (string, error)
-	GetStreamProcessingOverrides(ctx context.Context, streamID string) (GetStreamProcessingOverridesRow, error)
+	GetStreamProcessingChoices(ctx context.Context, arg GetStreamProcessingChoicesParams) (GetStreamProcessingChoicesRow, error)
+	GetStreamProcessingOverrides(ctx context.Context, arg GetStreamProcessingOverridesParams) (GetStreamProcessingOverridesRow, error)
 	GetStreamPullSourcePins(ctx context.Context, arg GetStreamPullSourcePinsParams) ([]string, error)
 	GetStreamRetentionOverrides(ctx context.Context, arg GetStreamRetentionOverridesParams) (GetStreamRetentionOverridesRow, error)
 	GetStreamRouteByInternalName(ctx context.Context, internalName string) (GetStreamRouteByInternalNameRow, error)
@@ -306,6 +311,7 @@ type Querier interface {
 	GetTenantMediaRetentionPolicy(ctx context.Context, tenantID string) (GetTenantMediaRetentionPolicyRow, error)
 	GetTenantPrimaryUser(ctx context.Context, tenantID string) (GetTenantPrimaryUserRow, error)
 	GetTenantProcessingOverrides(ctx context.Context, tenantID string) (GetTenantProcessingOverridesRow, error)
+	GetTenantTranscodeLadder(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantUserCounts(ctx context.Context, tenantID string) (GetTenantUserCountsRow, error)
 	GetUserEmail(ctx context.Context, arg GetUserEmailParams) (sql.NullString, error)
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
@@ -316,13 +322,16 @@ type Querier interface {
 	GetVODPolicyScopeName(ctx context.Context, arg GetVODPolicyScopeNameParams) (string, error)
 	GetVODRetentionUntil(ctx context.Context, arg GetVODRetentionUntilParams) (sql.NullTime, error)
 	GetVODTombstoneForUpdate(ctx context.Context, arg GetVODTombstoneForUpdateParams) (int64, error)
+	GetVODTranscodeLadder(ctx context.Context, arg GetVODTranscodeLadderParams) (string, error)
 	GetVODWebhookSecret(ctx context.Context, arg GetVODWebhookSecretParams) (sql.NullString, error)
 	GetVerificationResendUser(ctx context.Context, email sql.NullString) (GetVerificationResendUserRow, error)
 	GetVerificationUser(ctx context.Context, verificationToken sql.NullString) (GetVerificationUserRow, error)
+	GetVodOriginalPolicy(ctx context.Context, tenantID string) (sql.NullBool, error)
 	GetWalletIdentityByAddress(ctx context.Context, arg GetWalletIdentityByAddressParams) (GetWalletIdentityByAddressRow, error)
 	HardDeleteFinalizedStream(ctx context.Context, arg HardDeleteFinalizedStreamParams) (int64, error)
 	// A live legacy successor can depend on an older ancestor for its original age.
 	HasLiveUnassignedRefreshToken(ctx context.Context, arg HasLiveUnassignedRefreshTokenParams) (bool, error)
+	HasUnsettledStreamIngestRevocation(ctx context.Context, arg HasUnsettledStreamIngestRevocationParams) (bool, error)
 	HasUserWallet(ctx context.Context, arg HasUserWalletParams) (bool, error)
 	InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error
 	InsertAuthSession(ctx context.Context, arg InsertAuthSessionParams) (CommodoreAuthSession, error)
@@ -343,7 +352,6 @@ type Querier interface {
 	InsertRotatedRefreshToken(ctx context.Context, arg InsertRotatedRefreshTokenParams) (string, error)
 	InsertSessionRefreshToken(ctx context.Context, arg InsertSessionRefreshTokenParams) (string, error)
 	InsertSigningKeyAudit(ctx context.Context, arg InsertSigningKeyAuditParams) error
-	InsertStreamKey(ctx context.Context, arg InsertStreamKeyParams) error
 	InsertVODUploadRegistration(ctx context.Context, arg InsertVODUploadRegistrationParams) error
 	InsertVerifiedTenantUser(ctx context.Context, arg InsertVerifiedTenantUserParams) error
 	InsertWalletChallenge(ctx context.Context, arg InsertWalletChallengeParams) error
@@ -391,6 +399,7 @@ type Querier interface {
 	// index scan rather than a sort of every pending row once a second.
 	ListAuthoritiesAwaitingActivation(ctx context.Context, arg ListAuthoritiesAwaitingActivationParams) ([]ListAuthoritiesAwaitingActivationRow, error)
 	ListBootstrapMistNativeStreams(ctx context.Context, tenantID string) ([]ListBootstrapMistNativeStreamsRow, error)
+	ListChapterParentRecordings(ctx context.Context, arg ListChapterParentRecordingsParams) ([]ListChapterParentRecordingsRow, error)
 	// A consumed code is terminal even if its original expiry has not passed.
 	ListConsumedAuthorizationCodeKeys(ctx context.Context, batchSize int32) ([]ListConsumedAuthorizationCodeKeysRow, error)
 	// Current live authorities with no live renewal obligation. A settled row does
@@ -475,10 +484,6 @@ type Querier interface {
 	ListSigningKeysByStatusAfter(ctx context.Context, arg ListSigningKeysByStatusAfterParams) ([]ListSigningKeysByStatusAfterRow, error)
 	ListStreamCleanupClips(ctx context.Context, arg ListStreamCleanupClipsParams) ([]ListStreamCleanupClipsRow, error)
 	ListStreamCleanupDVRs(ctx context.Context, arg ListStreamCleanupDVRsParams) ([]ListStreamCleanupDVRsRow, error)
-	ListStreamKeysBackward(ctx context.Context, arg ListStreamKeysBackwardParams) ([]CommodoreStreamKey, error)
-	ListStreamKeysBackwardBefore(ctx context.Context, arg ListStreamKeysBackwardBeforeParams) ([]CommodoreStreamKey, error)
-	ListStreamKeysForward(ctx context.Context, arg ListStreamKeysForwardParams) ([]CommodoreStreamKey, error)
-	ListStreamKeysForwardAfter(ctx context.Context, arg ListStreamKeysForwardAfterParams) ([]CommodoreStreamKey, error)
 	ListStreamMediaPlacementPolicies(ctx context.Context, arg ListStreamMediaPlacementPoliciesParams) ([]ListStreamMediaPlacementPoliciesRow, error)
 	ListStreamMonitoring(ctx context.Context, dollar_1 string) ([]ListStreamMonitoringRow, error)
 	ListStreamsBackward(ctx context.Context, arg ListStreamsBackwardParams) ([]ListStreamsBackwardRow, error)
@@ -523,6 +528,7 @@ type Querier interface {
 	LockCurrentTenantMediaAuthority(ctx context.Context, tenantID string) (LockCurrentTenantMediaAuthorityRow, error)
 	LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeHash string) (LockDeviceAuthorizationByHashRow, error)
 	LockDeviceAuthorizationByUserCode(ctx context.Context, userCode string) (LockDeviceAuthorizationByUserCodeRow, error)
+	LockIngestStopTarget(ctx context.Context, arg LockIngestStopTargetParams) (LockIngestStopTargetRow, error)
 	// Serializes activation derivation for one authority. Acknowledgements for the
 	// same authority version are delivered concurrently, each in its own READ
 	// COMMITTED transaction, so without this every one of them can read the others'
@@ -589,6 +595,7 @@ type Querier interface {
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
 	ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error)
 	PublisherLeaseAbandoned(ctx context.Context, arg PublisherLeaseAbandonedParams) (bool, error)
+	PurgeCompletedIngestStops(ctx context.Context) (int64, error)
 	PurgeCompletedServiceEventOutbox(ctx context.Context, arg PurgeCompletedServiceEventOutboxParams) (int64, error)
 	PurgePublisherLeaseAbandonments(ctx context.Context) (int64, error)
 	RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error)
@@ -697,11 +704,13 @@ type Querier interface {
 	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (SetClipPlaybackPolicyRow, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
 	SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error
+	SetCreatedStreamTranscodeLadder(ctx context.Context, arg SetCreatedStreamTranscodeLadderParams) error
 	SetMediaAuthorityCompilerFingerprint(ctx context.Context, fingerprint string) error
 	SetMediaPlacementChangeRollout(ctx context.Context, arg SetMediaPlacementChangeRolloutParams) (int64, error)
 	SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error
 	SetPasswordResetTokenIfAllowed(ctx context.Context, arg SetPasswordResetTokenIfAllowedParams) (int64, error)
 	SetStreamPlaybackPolicy(ctx context.Context, arg SetStreamPlaybackPolicyParams) (string, error)
+	SetTenantTranscodeLadder(ctx context.Context, arg SetTenantTranscodeLadderParams) error
 	// Only the link in the most recent send is valid: each attempt rotates the
 	// stored hash before handing the raw token to SMTP.
 	SetUnverifiedUserVerificationToken(ctx context.Context, arg SetUnverifiedUserVerificationTokenParams) (int64, error)
@@ -718,6 +727,7 @@ type Querier interface {
 	StampResolvedPullStreamPlacement(ctx context.Context, arg StampResolvedPullStreamPlacementParams) error
 	StreamExistsForPushTargetManager(ctx context.Context, arg StreamExistsForPushTargetManagerParams) (bool, error)
 	StreamExistsForUser(ctx context.Context, arg StreamExistsForUserParams) (bool, error)
+	StreamMediaCatalogExists(ctx context.Context, arg StreamMediaCatalogExistsParams) (bool, error)
 	// The sweep starts from the unsettled deliveries, read through their partial
 	// index, so its cost follows the live queue. Starting from the current table
 	// instead reads every authority's whole delivery history, settled rows
@@ -737,6 +747,7 @@ type Querier interface {
 	UpdateBootstrapPullStream(ctx context.Context, arg UpdateBootstrapPullStreamParams) error
 	UpdateBootstrapUserProfile(ctx context.Context, arg UpdateBootstrapUserProfileParams) error
 	UpdateBootstrapUserWithCredentials(ctx context.Context, arg UpdateBootstrapUserWithCredentialsParams) error
+	UpdateDVRRecordingCaptureTimes(ctx context.Context, arg UpdateDVRRecordingCaptureTimesParams) (int64, error)
 	UpdateDVRRetention(ctx context.Context, arg UpdateDVRRetentionParams) (int64, error)
 	UpdateMediaPlacementPolicy(ctx context.Context, arg UpdateMediaPlacementPolicyParams) (int64, error)
 	UpdatePullSourceFields(ctx context.Context, arg UpdatePullSourceFieldsParams) (int64, error)
@@ -762,6 +773,7 @@ type Querier interface {
 	// row at most every five minutes, and returns no row when it does not.
 	UpsertMediaCellPlacementCapability(ctx context.Context, arg UpsertMediaCellPlacementCapabilityParams) (UpsertMediaCellPlacementCapabilityRow, error)
 	UpsertTenantMediaRetentionPolicy(ctx context.Context, arg UpsertTenantMediaRetentionPolicyParams) error
+	UpsertVodOriginalPolicy(ctx context.Context, arg UpsertVodOriginalPolicyParams) error
 	UserOwnsWallet(ctx context.Context, arg UserOwnsWalletParams) (bool, error)
 	ValidateAPITokenHash(ctx context.Context, tokenHash string) (ValidateAPITokenHashRow, error)
 	VerifyUserEmail(ctx context.Context, arg VerifyUserEmailParams) (int64, error)

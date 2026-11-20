@@ -14,6 +14,10 @@ import (
 // that api_gateway can inject fakes for resolver real-path tests. The concrete
 // client satisfies it (asserted below).
 type Interface interface {
+	GetNodeCapacityForOwner(ctx context.Context, nodeID, ownerTenantID string) (*quartermasterpb.NodeCapacity, error)
+	GetNodeCapacity(ctx context.Context, nodeID string) (*quartermasterpb.NodeCapacity, error)
+	ListNodeCapacities(ctx context.Context, req *quartermasterpb.ListNodeCapacitiesRequest) (*quartermasterpb.ListNodeCapacitiesResponse, error)
+	SetNodeCapacity(ctx context.Context, req *quartermasterpb.SetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error)
 	Conn() *grpc.ClientConn
 	Close() error
 	CheckHealth(ctx context.Context) error

@@ -183,7 +183,7 @@ mutation {
 
 PUT each part to its presigned URL, then call `completeVodUpload` with the returned ETags. Poll `vodUploadStatus` for the upload's state, or subscribe to `tenantEvents` with `types: ["upload.ready", "upload.failed"]` to learn when processing finishes.
 
-If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, or `.ts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, `.ts`, `.m2ts`, or `.mts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
 
 ### 4. (Live customers) Repoint your encoder
 

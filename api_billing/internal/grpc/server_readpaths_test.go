@@ -276,13 +276,13 @@ func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 		"features", "support_level", "sla_level", "metering_enabled",
 		"is_active", "tier_level", "is_enterprise", "created_at", "updated_at",
 		"is_default_prepaid", "is_default_postpaid",
-		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
+		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod", "transcode_ladders", "default_transcode_ladder",
 	}).AddRow(
 		tierID, "pro", "Pro", "Pro plan", 29.0, "EUR", "monthly",
 		[]byte(`{"processing_customizable":true}`), "premium", "gold", true,
 		true, int32(2), false, now, now,
 		false, true,
-		[]byte(`["livepeer"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
+		[]byte(`["livepeer"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), "",
 	)
 	mock.ExpectQuery(`FROM purser\.billing_tiers`).WillReturnRows(tierRows)
 

@@ -49,7 +49,7 @@ The shapes you know in Studio, mapped to FrameWorks:
 | Studio                                           | FrameWorks                                                                                                                          |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /clip`                                     | `createClip(input)` mutation                                                                                                        |
-| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                                                                |
+| `GET /session/{id}/clips`                        | `stream(id) { clips }` or `clip(id)`                                                                                                |
 | `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                                                                      |
 | `POST /asset/upload/url`                         | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
 | Tasks API for upload/transcode progress          | `vodUploadStatus`, `tenantEvents` (`upload.*`), or `liveProcessingEvents` depending on the workflow                                 |
@@ -148,6 +148,74 @@ Delivery differences:
 | Failing endpoint   | Email, never disabled                                                     | Email, and disabled after 20 failures in a row spanning 5 days; re-enable to resume                                                           |
 | History            | Per-webhook request log, resend one request                               | 30-day delivery log with attempt details, replay one delivery or a time range, test send                                                      |
 | Per-stream webhook | `streamId` field (not applied when delivering)                            | Filter in your receiver on `data.streamId`                                                                                                    |
+
+## Sessions, saved chapters, and live state
+
+Use the TypeScript, Go, or Python SDK line **0.6** with a **v0.3.16 or newer server**.
+SDK lines 0.3–0.5 remain frozen compatibility lines. The 0.6 operations expose ingest state,
+recordings, chapter pagination, and explicit disconnects.
+
+A Studio session is not a FrameWorks saved-media identifier. An ingest session describes one
+publisher connection (or one cell's pull lifecycle); its ID comes from `Stream.ingest.sessionId`.
+A DVR recording is an artifact with its own ID and playback ID. A recording can produce multiple
+saved chapters, each with a separate playback ID. Map Studio session recordings to a recording's
+ordered chapters rather than assuming one session equals one playable file.
+
+```graphql
+query {
+  stream(id: "stream-global-id") {
+    ingest {
+      state
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
+    recordings(page: { first: 25 }) {
+      nodes {
+        id
+        playbackId
+        status
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+    clips(page: { first: 25 }) {
+      nodes {
+        id
+        playbackId
+        status
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+  }
+}
+```
+
+Continue with `after: pageInfo.endCursor` when `hasNextPage` is true. Fetch a recording through
+`dvrRecording(id)` and page its `chapters`. Listen for `recording.chapter_ready`, then reconcile by
+reading the chapter connection. Ingest live state uses `streams:read`; it does not depend on an
+analytics token. An unavailable cell produces a null `ingest` field with a field error instead of
+inventing an offline state.
+
+Each push stream has one publishing key. `refreshStreamKey` rotates it while preserving the
+current publisher by default. Set `endActiveSession: true` to rotate and end that publisher, or call
+`disconnectIngest` to end it while retaining the key. The latter permits an encoder to reconnect
+with the same key. Both stops are durable requests: correlate `stream.ingest_disconnected` with
+the session ID rather than treating the mutation response as proof that an encoder has exited.
+Disable a pull upstream with `updateStream` and `pullSource.enabled: false`.
+
+One `streams:write` API token covers stream creation, live-state and saved-media reads, key
+rotation, disconnect, clips/DVR, and per-stream or per-asset retention writes. Add `analytics:read`
+only for viewer or quality analytics; tenant-wide retention policy changes still require
+`billing:write`. MCP high-risk tools additionally require `mcp:high-risk` and their confirmation
+phrase. See the [scope table](/builders/api-reference#token-scopes).
 
 ## Step-by-step
 

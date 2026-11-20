@@ -19,7 +19,7 @@ import (
 var clusterColumns = []string{
 	"id", "cluster_id", "cluster_name", "cluster_type", "owner_tenant_id", "deployment_model",
 	"base_url", "database_url", "periscope_url", "kafka_brokers",
-	"max_concurrent_streams", "max_concurrent_viewers", "max_bandwidth_mbps",
+	"max_concurrent_streams", "max_concurrent_viewers",
 	"health_status", "is_active", "is_default_cluster", "is_platform_official",
 	"public_topology", "allow_private_pull_sources", "created_at", "updated_at",
 }
@@ -39,7 +39,6 @@ func newClusterRow(id, clusterID, clusterName, clusterType string, isDefault boo
 		pq.StringArray{},
 		int32(1000),
 		int32(10000),
-		int32(100000),
 		"healthy",
 		true,
 		isDefault,

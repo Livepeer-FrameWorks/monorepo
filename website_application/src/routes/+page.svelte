@@ -254,7 +254,7 @@
   // Get primary stream (most recently active or first stream)
   let primaryStream = $derived(
     streams && streams.length > 0
-      ? streams.find((s) => s.metrics?.status === "LIVE") || streams[0]
+      ? streams.find((s) => s.ingest?.state === "LIVE") || streams[0]
       : null
   );
 
@@ -262,7 +262,7 @@
   let enhancedStreamStats = $derived({
     total: streams?.length || 0,
     live:
-      streams?.filter((s) => s.metrics?.status === "LIVE").length ||
+      streams?.filter((s) => s.ingest?.state === "LIVE").length ||
       realtimeData?.filter((s) => s.status === "live").length ||
       0,
     totalViewers:

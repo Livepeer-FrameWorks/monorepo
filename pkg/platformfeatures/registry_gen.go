@@ -35,10 +35,12 @@ var shipped = []string{
 	"streamcrafter",
 	"streams",
 	"tenant-events",
+	"transcode-ladders",
 	"vat-invoicing",
 	"viewer-protocol-selection",
 	"viewer-routing",
 	"vod",
+	"vod-original-retention",
 }
 
 // Shipped returns a copy of the sorted shipped product feature slugs.

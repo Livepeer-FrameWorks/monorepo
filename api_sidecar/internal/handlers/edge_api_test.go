@@ -58,7 +58,7 @@ func TestHandleEdgeStatus(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"node_id", "operational_mode", "tenant_id", "uptime_seconds", "version"} {
+	for _, key := range []string{"node_id", "operational_mode", "tenant_id", "uptime_seconds", "version", "capacity"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("status response missing %q: %v", key, body)
 		}

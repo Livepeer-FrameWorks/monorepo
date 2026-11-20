@@ -190,7 +190,8 @@ Errors use these statuses:
 | `503`  | Cluster unhealthy, no ingest-capable node available, or stream validation unavailable              |
 
 <Aside type="caution" title="Stream Key is Secret">
-  Your stream key grants permission to broadcast to your stream. Never share it publicly.
+  Your stream key grants permission to broadcast to your stream. Never share it publicly. Each push
+  stream has one key; rotate it to replace the credential.
 </Aside>
 
 ## Customization Levels

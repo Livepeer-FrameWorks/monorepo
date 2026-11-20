@@ -229,8 +229,10 @@ query DVRRetention($id: ID!) {
 
 Agents manage retention via five MCP tools (cost-affecting; destructive-adjacent for `update_asset_retention`):
 
-Retention writes require a tenant owner or admin with `billing:write`; reading
-the effective policy remains available with the retention read permission.
+Tenant-wide policy reads require `billing:read`; setting defaults requires a tenant
+owner or admin with `billing:write`. Per-stream and per-asset overrides, including
+resetting an override, require `streams:write`. These media writes follow the same
+authorization as the other stream and asset mutations.
 
 | Tool                             | Effect                                                                                                   |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -255,3 +257,12 @@ Tenant policy changes emit `media.retention_policy.changed`. Per-asset changes e
 - [Recordings, Clips & VOD](/builders/recordings) — DVR / clip / VOD lifecycle
 - [Billing](/builders/billing) — tier pricing and storage line items
 - [Platform capabilities](/platform/feature-matrix) — where retention is exposed
+
+## Original upload storage
+
+Successful file uploads keep their original by default. The original and processed file both
+count toward storage usage and the cap; the original is billed at the same storage rate.
+Change **Keep original uploads** in account storage settings or `keepOriginal` on an individual
+upload. This affects future uploads. `deleteVodOriginal` frees only the retained source;
+deleting or expiring the whole video removes both. URL imports and failed uploads retain no
+original. See [original upload access](/builders/recordings#original-uploads).

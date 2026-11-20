@@ -4,31 +4,31 @@ This document defines the authoritative units and semantics for all metrics in t
 
 ## Naming Conventions
 
-| Suffix            | Meaning                                                                   | Example                                  |
-| ----------------- | ------------------------------------------------------------------------- | ---------------------------------------- |
-| `_bytes`          | Byte quantity; metric type determines cumulative counter vs current gauge | `uploaded_bytes`, `control_outbox_bytes` |
-| `_bps`            | Bits per second (rate)                                                    | `bandwidthInBps`, `bandwidthOutBps`      |
-| `_bytes_per_sec`  | Bytes per second (rate)                                                   | `up_speed`, `down_speed`                 |
-| `_gb`             | **GiB** (bytes / 1024³)                                                   | `egress_gb`, `display_storage_gb`        |
-| `_gb_seconds`     | GiB-seconds for time-weighted storage meters                              | `storage_gb_seconds_cold`                |
-| `_mbps`           | **Mibps** (bps / 1024²) for billing rate fields                           | `peak_bandwidth_mbps`                    |
-| `_ms`             | Milliseconds                                                              | `stream_buffer_ms`, `latency_ms`         |
-| `_pct` or `_rate` | Ratio 0.0-1.0                                                             | `packet_loss_rate`, `buffer_health`      |
+| Suffix            | Meaning                                                                                            | Example                                  |
+| ----------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `_bytes`          | Byte quantity; metric type determines cumulative counter vs current gauge                          | `uploaded_bytes`, `control_outbox_bytes` |
+| `_bps`            | Bits per second (rate); legacy client fields below explicitly use bytes/s                          | `bitrate_bps`                            |
+| `_bytes_per_sec`  | Bytes per second (rate)                                                                            | `up_speed`, `down_speed`                 |
+| `_gb`             | **GiB** (bytes / 1024³)                                                                            | `egress_gb`, `display_storage_gb`        |
+| `_gb_seconds`     | GiB-seconds for time-weighted storage meters                                                       | `storage_gb_seconds_cold`                |
+| `_mbps`           | Decimal Mbit/s (bps / 1,000,000) for network rates; billing rate fields retain Mibps (bps / 1024²) | `peak_bandwidth_mbps`                    |
+| `_ms`             | Milliseconds                                                                                       | `stream_buffer_ms`, `latency_ms`         |
+| `_pct` or `_rate` | Ratio 0.0-1.0                                                                                      | `packet_loss_rate`, `buffer_health`      |
 
 ## Data Categories
 
 ### 1. Node Metrics (Infrastructure Health)
 
-**Source:** MistServer `/metrics.json` → Helmsman poller → ClickHouse `node_metrics_samples`
+**Source:** network-interface counters (NIC), with MistServer `/metrics.json` fallback (MIST) → Helmsman poller → ClickHouse `node_metrics_samples`
 
-**Important:** In ClickHouse, `node_metrics_samples.bandwidth_in` / `bandwidth_out` are **cumulative bytes** since node start (not a rate). Rates are stored separately as `up_speed` / `down_speed` (bytes/sec).
+**Important:** In ClickHouse, `node_metrics_samples.bandwidth_in` / `bandwidth_out` are legacy Mist **cumulative byte counters** (not rates). Admission uses `up_speed` / `down_speed` (bytes/sec), measured from the NIC when available. NIC egress includes S3 and relay traffic and excludes local DVR writes. Counter resets and invalid samples must not manufacture zero load.
 
 | Field (ClickHouse `node_metrics_samples`) | Unit      | Type    | Description                                          |
 | ----------------------------------------- | --------- | ------- | ---------------------------------------------------- |
 | `bandwidth_in`                            | bytes     | Counter | Cumulative bytes received (resets on server restart) |
 | `bandwidth_out`                           | bytes     | Counter | Cumulative bytes sent (resets on server restart)     |
-| `up_speed`                                | bytes/sec | Gauge   | Instantaneous upload rate (computed from delta)      |
-| `down_speed`                              | bytes/sec | Gauge   | Instantaneous download rate (computed from delta)    |
+| `up_speed`                                | bytes/sec | Gauge   | Measured node egress rate over the sample window     |
+| `down_speed`                              | bytes/sec | Gauge   | Measured node ingress rate over the sample window    |
 | `connections_current`                     | count     | Gauge   | Current active viewer connections                    |
 | `stream_count`                            | count     | Gauge   | Current active stream count on the node              |
 | `cpu_usage`                               | 0-100     | Gauge   | CPU utilization percentage                           |
@@ -41,6 +41,13 @@ This document defines the authoritative units and semantics for all metrics in t
 | `operational_mode`                        | enum      | Gauge   | Node mode: `normal`, `draining`, or `maintenance`    |
 
 **Note:** RAM fields are currently captured as **bytes** (from MistServer `mem_total`/`mem_used`) and stored as bytes. The proto comments still mention MiB, but the actual data path is bytes.
+
+`node_state_snapshots.egress_budget` is the effective node budget in bytes/s;
+`budget_source` is DEFAULT or OPERATOR. Node metadata carries NIC/MIST measurement
+provenance and validity. The default is 125,000,000 bytes/s (1 Gbit/s), and the
+shared capacity model admits up to 85% of that budget. Foghorn health RPC network
+fields ending in `_mbps` use decimal Mbit/s; its RAM `_mb` fields use MiB. Budget
+revisions composed and applied by the node are separate from measurement freshness.
 
 ### 2. Viewer Session Metrics (Billing Source)
 
@@ -153,10 +160,10 @@ labels.
 
 **Source:** Helmsman client poller → `ClientLifecycleUpdate` → Signalman subscription
 
-| Field             | Unit     | Type  | Description                   |
-| ----------------- | -------- | ----- | ----------------------------- |
-| `bandwidthInBps`  | bits/sec | Gauge | Viewer upload rate            |
-| `bandwidthOutBps` | bits/sec | Gauge | Viewer download rate (egress) |
+| Field             | Unit      | Type  | Description                             |
+| ----------------- | --------- | ----- | --------------------------------------- |
+| `bandwidthInBps`  | bytes/sec | Gauge | Sent to the viewer (Mist upbps)         |
+| `bandwidthOutBps` | bytes/sec | Gauge | Received from the viewer (Mist downbps) |
 
 ### 5. Platform Overview Metrics
 
@@ -295,7 +302,7 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 | Backend Field      | Unit      | Frontend Display | Conversion                  |
 | ------------------ | --------- | ---------------- | --------------------------- |
 | `totalUploadBytes` | bytes     | "1.2 GB"         | `formatBytes(value)`        |
-| `bandwidthOutBps`  | bits/sec  | "1.2 Mbps"       | `value / 1_000_000`         |
+| `bandwidthInBps`   | bytes/sec | "1.2 Mbps"       | `value * 8 / 1_000_000`     |
 | `up_speed`         | bytes/sec | "1.2 MB/s"       | `formatBytes(value) + '/s'` |
 | `primary_bitrate`  | kbps      | "6.0 Mbps"       | `value / 1000`              |
 | `buffer_health`    | 0.0-1.0   | "85%"            | `value * 100`               |

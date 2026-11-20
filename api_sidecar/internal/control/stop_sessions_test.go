@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"frameworks/api_sidecar/internal/storage"
 	"slices"
 	"testing"
 	"time"
@@ -168,4 +169,87 @@ func TestConfirmedSessionStopRejectsMissingBudgetAndReplacementGeneration(t *tes
 
 func stopFixtureEffect(ctx context.Context, logger logging.Logger, request *ipcpb.StopSessionsRequest, current func() bool) error {
 	return stopSessionsEffectWithAuthorization(ctx, logger, request, current, func(context.Context) (time.Duration, error) { return 5 * time.Second, nil })
+}
+
+func TestClaimedStopRejectsDelayedAdmissionAfterRestart(t *testing.T) {
+	resetControlState(t)
+	path := t.TempDir() + "/ingest"
+	store, err := storage.NewIngestGenerationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestGenerationStoreMu.Lock()
+	previous := ingestGenerationStore
+	ingestGenerationStore = store
+	ingestGenerationStoreMu.Unlock()
+	t.Cleanup(func() {
+		ingestGenerationStoreMu.Lock()
+		ingestGenerationStore = previous
+		ingestGenerationStoreMu.Unlock()
+	})
+	const generation = "10000000-0000-4000-8000-000000000009"
+	runtime, err := streamident.BoundRuntimeName("revoked", streamident.RuntimePublisher, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &sessionMist{sessions: map[string]string{}}
+	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: m.serve(t)})
+	req := stopFixtureRequest()
+	req.Targets[0].SourceGeneration = generation
+	req.Targets[0].ConnectorPid = 123
+	req.Targets[0].FenceAdmission = true
+	if stopErr := stopFixtureEffect(t.Context(), logging.NewLogger(), req, func() bool { return true }); stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	reopened, err := storage.NewIngestGenerationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestGenerationStoreMu.Lock()
+	ingestGenerationStore = reopened
+	ingestGenerationStoreMu.Unlock()
+	if err := recordAdmittedIngestGeneration(runtime, generation, 123, "late"); err == nil {
+		t.Fatal("delayed admission revived a publisher after the stop was acknowledged and Helmsman restarted")
+	}
+	if err := recordAdmittedIngestGeneration("live+revoked", generation, 123, "late-legacy"); err == nil {
+		t.Fatal("delayed legacy-runtime admission bypassed the persisted generation rejection")
+	}
+}
+
+func TestClaimedStopPreservesReplacementViewers(t *testing.T) {
+	resetControlState(t)
+	store, err := storage.NewIngestGenerationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestGenerationStoreMu.Lock()
+	previous := ingestGenerationStore
+	ingestGenerationStore = store
+	ingestGenerationStoreMu.Unlock()
+	t.Cleanup(func() {
+		ingestGenerationStoreMu.Lock()
+		ingestGenerationStore = previous
+		ingestGenerationStoreMu.Unlock()
+	})
+	old, next := "10000000-0000-4000-8000-000000000019", "10000000-0000-4000-8000-000000000029"
+	oldRuntime, _ := streamident.BoundRuntimeName("revoked", streamident.RuntimePublisher, old)
+	nextRuntime, _ := streamident.BoundRuntimeName("revoked", streamident.RuntimePublisher, next)
+	m := &sessionMist{sessions: map[string]string{"Iold": oldRuntime, "Vreplacement": nextRuntime}}
+	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: m.serve(t)})
+	if err := recordAdmittedIngestGeneration(oldRuntime, old, 123, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordAdmittedIngestGeneration(nextRuntime, next, 124, "next"); err != nil {
+		t.Fatal(err)
+	}
+	req := stopFixtureRequest()
+	req.Targets[0].SourceGeneration = old
+	req.Targets[0].ConnectorPid = 123
+	req.Targets[0].FenceAdmission = true
+	if err := stopFixtureEffect(t.Context(), logging.NewLogger(), req, func() bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.remaining(); !slices.Equal(got, []string{"Vreplacement"}) {
+		t.Fatalf("old publisher stop affected replacement viewers: %v", got)
+	}
 }

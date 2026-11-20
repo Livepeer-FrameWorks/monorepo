@@ -88,6 +88,7 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 	sm.applyRedisChange(change)
 	if change.Entity == StateEntityNode && change.Operation == StateOpUpsert {
 		sm.notifyNodeCluster(change.NodeID)
+		sm.notifyNodeStreamsChanged(change.NodeID)
 	}
 	if change.Entity == StateEntityStream || change.Entity == StateEntityStreamInstance {
 		sm.notifyStreamChanged(change.StreamName)
@@ -112,8 +113,13 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 //     same reason; unmarshaling zeroes them, and NodeIDByClientIP depends
 //     on BinHost surviving peer snapshot applies.
 func mergeIncomingNode(incoming, local *NodeState) {
+	if incoming.Capacity == nil {
+		incoming.Capacity = DefaultNodeCapacity()
+	}
 	if local == nil {
 		incoming.AddBandwidth = 0
+		incoming.IngressReservedBytesPerSec = 0
+		incoming.BandwidthReservationRevision = 0
 		incoming.PendingRedirects = 0
 		// Artifacts/readiness are owned SOLELY by the fenced artifact envelope (StateEntityArtifact),
 		// which orders by (fence, seq). A generic — unfenced — node snapshot must never seed them, or a
@@ -121,8 +127,15 @@ func mergeIncomingNode(incoming, local *NodeState) {
 		// and cordoned until its fenced envelope arrives.
 		incoming.Artifacts = nil
 		incoming.ArtifactInventoryReady = false
+		incoming.BWLimit = float64(incoming.Capacity.GetEgressBudgetBytesPerSec())
+		markLegacyNodeObservation(incoming)
 		return
 	}
+	if local.Capacity != nil && (incoming.Capacity == nil || incoming.Capacity.GetRevision() <= local.Capacity.GetRevision()) {
+		incoming.Capacity = local.Capacity
+		incoming.BWLimit = float64(local.Capacity.GetEgressBudgetBytesPerSec())
+	}
+	incoming.CapacityResendAt = local.CapacityResendAt
 	if incoming.ClusterID == "" {
 		incoming.ClusterID = local.ClusterID
 	}
@@ -134,6 +147,8 @@ func mergeIncomingNode(incoming, local *NodeState) {
 		incoming.OperationalModeSetBy = local.OperationalModeSetBy
 	}
 	incoming.AddBandwidth = local.AddBandwidth
+	incoming.IngressReservedBytesPerSec = local.IngressReservedBytesPerSec
+	incoming.BandwidthReservationRevision = local.BandwidthReservationRevision
 	incoming.PendingRedirects = local.PendingRedirects
 	incoming.BinHost = local.BinHost
 	incoming.EstBandwidthPerUser = local.EstBandwidthPerUser
@@ -143,6 +158,8 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	incoming.Artifacts = local.Artifacts
 	incoming.ArtifactInventoryReady = local.ArtifactInventoryReady
 	keepNewerNodeObservations(incoming, local)
+	incoming.BWLimit = float64(incoming.Capacity.GetEgressBudgetBytesPerSec())
+	markLegacyNodeObservation(incoming)
 }
 
 // keepNewerNodeObservations keeps, per observation stamp, whichever snapshot
@@ -173,7 +190,11 @@ func keepNewerNodeObservations(incoming, local *NodeState) {
 		incoming.RAMCurrent = local.RAMCurrent
 		incoming.UpSpeed = local.UpSpeed
 		incoming.DownSpeed = local.DownSpeed
-		incoming.BWLimit = local.BWLimit
+		incoming.ObservedSource = local.ObservedSource
+		incoming.ObservedValid = local.ObservedValid
+		incoming.SampleWindowStartMS = local.SampleWindowStartMS
+		incoming.SampleWindowEndMS = local.SampleWindowEndMS
+		incoming.CapacityRevisionApplied = cloneUint64Ptr(local.CapacityRevisionApplied)
 		incoming.CapIngest = local.CapIngest
 		incoming.CapEdge = local.CapEdge
 		incoming.CapStorage = local.CapStorage
@@ -204,13 +225,21 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 	if err != nil {
 		return err
 	}
+	counts, err := store.getAllNodeStreamCounts()
+	if err != nil {
+		return err
+	}
 	modes, err := store.GetAllNodeModes()
 	if err != nil {
 		return err
 	}
 
+	bandwidth, err := store.allBandwidthSums(context.Background())
+	if err != nil {
+		return err
+	}
+
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	// Merge Redis state into in-memory state (Redis wins for existing keys,
 	// local-only keys are preserved; identity fields merge ignore-empty so a
@@ -220,6 +249,10 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 		sm.nodes[k] = v
 		sm.recomputeNodeScoresLocked(v)
 	}
+	for id, sums := range bandwidth {
+		sm.applyBandwidthSumsLocked(id, sums, false)
+	}
+
 	// Dedicated mode keys win over whatever (possibly stale) mode the node
 	// JSON carried; they are the multi-writer-safe representation. Applied
 	// to known nodes only; a mode key without a node key is eviction debris.
@@ -292,14 +325,46 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 		}
 	}
 
+	sm.mu.Unlock()
+	for _, env := range counts {
+		if env == nil {
+			continue
+		}
+		lock := sm.nodeStreamReportLock(env.NodeID)
+		lock.Lock()
+		sm.mu.Lock()
+		sm.applyNodeStreamCountsLocked(*env)
+		sm.mu.Unlock()
+		lock.Unlock()
+	}
+
 	return nil
 }
 
 func (sm *StreamStateManager) applyRedisChange(change StateChange) {
+	if change.Entity == StateEntityNodeStreamCounts {
+		lock := sm.nodeStreamReportLock(change.NodeID)
+		lock.Lock()
+		defer lock.Unlock()
+	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	switch change.Entity {
+	case StateEntityNodeStreamCounts:
+		if change.Operation == StateOpDelete {
+			delete(sm.nodeStreamCounts, change.NodeID)
+			return
+		}
+		var env NodeStreamCountsSnapshot
+		if json.Unmarshal(change.Payload, &env) == nil && env.NodeID == change.NodeID {
+			sm.applyNodeStreamCountsLocked(env)
+		}
+	case StateEntityNodeReservation:
+		var sums bandwidthSums
+		if json.Unmarshal(change.Payload, &sums) == nil {
+			sm.applyBandwidthSumsLocked(change.NodeID, sums, false)
+		}
 	case StateEntityNode:
 		if change.Operation == StateOpDelete {
 			delete(sm.nodes, change.NodeID)
@@ -377,6 +442,7 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 			if local := sm.streamInstances[change.StreamName][change.NodeID]; local != nil && instance.TenantID == "" {
 				instance.TenantID = local.TenantID
 			}
+			instance.Viewers = sm.audienceViewersLocked(change.NodeID, change.StreamName)
 			sm.streamInstances[change.StreamName][change.NodeID] = &instance
 		}
 	case StateEntityArtifact:
@@ -403,6 +469,8 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 				return
 			}
 			sm.lastAcceptedArtifactOrder[change.NodeID] = incoming
+			// Eviction seals the old fence at MaxInt64; only a newer takeover passes.
+			delete(sm.evictedNodes, change.NodeID)
 			if n := sm.nodes[change.NodeID]; n != nil {
 				// Replicate readiness + inventory from the envelope. A real report (seq>=1) sets Ready=true
 				// and the new inventory; a takeover marker (seq==0) carries Ready=false + empty artifacts, so
@@ -423,5 +491,13 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 				}
 			}
 		}
+	}
+}
+
+// Older peers report Mist measurements without an explicit provenance field.
+func markLegacyNodeObservation(node *NodeState) {
+	if node.ObservedSource == ipcpb.ObservedSource_OBSERVED_SOURCE_UNSPECIFIED && !node.MetricsObservedAt.IsZero() {
+		node.ObservedSource = ipcpb.ObservedSource_OBSERVED_SOURCE_MIST
+		node.ObservedValid = true
 	}
 }

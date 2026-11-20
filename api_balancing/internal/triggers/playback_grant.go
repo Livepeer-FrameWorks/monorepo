@@ -175,12 +175,22 @@ func bindPlaybackGrantSource(ctx context.Context, nodeID, internal string, grant
 	if nodeID == "" || grant.GetRevoked() || control.StreamRegistryInstance == nil {
 		return grant, nil
 	}
-	runtime, err := control.StreamRegistryInstance.NodeRuntimeName(ctx, grant.GetTenantId(), mist.ExtractInternalName(internal), nodeID)
+	runtime, err := playbackSourceRuntime(ctx, grant.GetTenantId(), internal, nodeID)
 	if err != nil {
 		return nil, err
 	}
 	grant.InternalName = runtime
 	return grant, nil
+}
+
+func playbackSourceRuntime(ctx context.Context, tenant, internal, node string) (string, error) {
+	runtime, err := control.StreamRegistryInstance.NodeRuntimeName(ctx, tenant, mist.ExtractInternalName(internal), node)
+	// A direct pull starts only after the first viewer is admitted. Its signed
+	// playback authority names the unstarted source; no physical binding exists yet.
+	if errors.Is(err, control.ErrUnknownStream) && strings.HasPrefix(internal, "pull+") {
+		return internal, nil
+	}
+	return runtime, err
 }
 
 // PlaybackAuthorityBus carries authority announcements between the cell's

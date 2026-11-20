@@ -5,7 +5,7 @@ import status from "@/data/status.json";
 import { featureOf, showcaseHref } from "@/lib/featureStatus";
 import { signupUrl, walletLoginUrl } from "@/lib/siteLinks";
 import { contactPath } from "@/lib/contactTopics";
-import { abrLine, multistreamLine } from "@/lib/planCopy";
+import { abrLine, capacityLines, multistreamLine, videoLine } from "@/lib/planCopy";
 import InfoTooltip from "../shared/InfoTooltip";
 import StatusTag from "../shared/StatusTag";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -67,7 +67,7 @@ const developerPricing = paidTierPricing(catalogTier.developer);
 const productionPricing = paidTierPricing(catalogTier.production);
 const freeCatalog = catalogTier.free;
 
-const streamingFeatures = (tier) => [abrLine, multistreamLine(tier)];
+const streamingFeatures = (tier) => [videoLine(tier), abrLine, multistreamLine(tier)];
 
 const freeTier = {
   id: "free",
@@ -110,8 +110,8 @@ const paidTiers = [
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
       supportLine,
+      ...capacityLines(catalogTier.supporter),
     ],
-    limitations: ["Suitable for ~100–300 concurrent viewers (adaptive)"],
     note: "Includes hosted LB + subdomain",
     ctaLabel: "Get Started",
     ctaLink: signupUrl(config.appUrl, "pricing-supporter", { plan: "supporter" }),
@@ -130,8 +130,8 @@ const paidTiers = [
       ...streamingFeatures(catalogTier.developer),
       `Team collaboration features (${teamRbac.tag.toLowerCase()})`,
       supportLine,
+      ...capacityLines(catalogTier.developer),
     ],
-    limitations: ["Suitable for ~500–1,000 concurrent viewers (adaptive)"],
     note: "Lower overage rates than Supporter",
     ctaLabel: "Get Started",
     ctaLink: signupUrl(config.appUrl, "pricing-developer", { plan: "developer" }),
@@ -150,8 +150,8 @@ const paidTiers = [
       ...streamingFeatures(catalogTier.production),
       "Dedicated processing allocation",
       `${supportLine}, on-call by Enterprise agreement`,
+      ...capacityLines(catalogTier.production),
     ],
-    limitations: ["Suitable for ~2,000–5,000 concurrent viewers (adaptive)"],
     note: "Reserved capacity through an Enterprise arrangement",
     ctaLabel: "Talk to the engineers",
     ctaLink: contactPath("pricing"),
@@ -250,7 +250,7 @@ const deploymentModes = [
     tone: "green",
     title: "Fully self-hosted",
     description:
-      "You run the control plane, databases, and edge on bare metal, VMs, or Kubernetes. S3-compatible storage and DNS stay external integrations today. Burst into hosted capacity when you choose.",
+      "You run the control plane, databases, and edge on bare metal, VMs, or Kubernetes. S3-compatible storage and DNS stay external integrations today. To burst into hosted capacity, run your edges hybrid instead.",
   },
   {
     id: "enterprise",
@@ -279,8 +279,7 @@ export const PRICING_FAQS = [
   },
   {
     question: "When should I upgrade to Production?",
-    answer:
-      "Upgrade once you have steady audiences or need dedicated processing capacity. Production is tuned for 2,000–5,000 concurrent viewers with reserved capacity.",
+    answer: "Upgrade once you have steady audiences or need dedicated processing capacity.",
   },
   {
     question: "How does the hosted load balancer work?",
@@ -613,6 +612,12 @@ const Pricing = () => {
                   </motion.div>
                 )}
               />
+              <p className="pricing-estimate-link">
+                Not sure which plan fits?{" "}
+                <a href="#calculator" className="pricing-processing-feature__link">
+                  Estimate your bill <span aria-hidden="true">→</span>
+                </a>
+              </p>
             </MarketingBand>
           </motion.div>
         </SectionContainer>

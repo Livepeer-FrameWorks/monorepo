@@ -38,9 +38,9 @@ type referenceDomain struct {
 // referenceDomains is in page order.
 var referenceDomains = []referenceDomain{
 	{Slug: "streams", Title: "Streams", Summary: "Live streams, stream keys, push targets, and ingest endpoint resolution.",
-		Keywords: []string{"stream", "pushtarget", "ingestendpoint"}},
-	{Slug: "media", Title: "Media and storage", Summary: "Clips, DVR recordings, VOD uploads and assets, storage artifacts, retention, and media placement.",
-		Keywords: []string{"clip", "dvr", "vod", "storage", "media", "streamretention", "clustermedia"}},
+		Keywords: []string{"stream", "ingest", "pushtarget", "ingestendpoint"}},
+	{Slug: "media", Title: "Media and storage", Summary: "Clips, DVR recordings, VOD uploads and originals, named transcode ladders, storage artifacts, retention, and media placement.",
+		Keywords: []string{"clip", "dvr", "vod", "storage", "media", "streamretention", "clustermedia", "transcode"}},
 	{Slug: "access", Title: "Access and playback", Summary: "Playback signing keys, developer tokens, playback policy, and viewer endpoint resolution.",
 		Keywords: []string{"signingkey", "developertoken", "playback", "viewerendpoint"}},
 	{Slug: "live", Title: "Live subscriptions", Summary: "Every GraphQL subscription: stream, viewer, storage, processing, incident, and tenant event feeds.",

@@ -2,12 +2,12 @@
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type, size_bytes,
-    origin_cluster_id, retention_until, requires_auth, created_at, updated_at
+    origin_cluster_id, retention_until, requires_auth, transcode_ladder, created_at, updated_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(user_id), sqlc.arg(vod_hash),
     sqlc.arg(internal_name), sqlc.arg(playback_id), sqlc.arg(title), sqlc.arg(description),
     sqlc.arg(filename), sqlc.arg(content_type), sqlc.arg(size_bytes),
-    sqlc.arg(origin_cluster_id), sqlc.arg(retention_until), false, NOW(), NOW()
+    sqlc.arg(origin_cluster_id), sqlc.arg(retention_until), false, sqlc.arg(transcode_ladder), NOW(), NOW()
 );
 
 -- name: GetVODPlaybackID :one
@@ -41,3 +41,7 @@ FROM (
 ) candidates
 ORDER BY priority
 LIMIT 1;
+
+-- name: GetVODTranscodeLadder :one
+SELECT transcode_ladder FROM commodore.vod_assets
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND vod_hash=sqlc.arg(vod_hash);

@@ -27,30 +27,11 @@ mutation DeleteStream($id: ID!) {
   }
 }
 
-mutation RefreshStreamKey($id: ID!) {
-  refreshStreamKey(id: $id) {
+mutation RefreshStreamKey($id: ID!, $endActiveSession: Boolean = false) {
+  refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
     __typename
     ...StreamWithKeyFields
     ...ValidationErrorFields
-    ...NotFoundErrorFields
-    ...AuthErrorFields
-  }
-}
-
-mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
-  createStreamKey(streamId: $streamId, input: $input) {
-    __typename
-    ...StreamKeyFields
-    ...ValidationErrorFields
-    ...NotFoundErrorFields
-    ...AuthErrorFields
-  }
-}
-
-mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
-  deleteStreamKey(streamId: $streamId, keyId: $keyId) {
-    __typename
-    ...DeleteSuccessFields
     ...NotFoundErrorFields
     ...AuthErrorFields
   }

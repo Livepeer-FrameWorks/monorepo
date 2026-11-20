@@ -102,6 +102,7 @@ func runVodUploadOwnerOperation(ctx context.Context, t *testing.T, operation str
 	session := vodUploadSessionID("artifact", "storage:upload/+=")
 	switch operation {
 	case "complete":
+		mock.ExpectQuery("GetVODTranscodeLadder").WithArgs("tenant", "artifact").WillReturnRows(sqlmock.NewRows([]string{"transcode_ladder"}).AddRow(""))
 		mock.ExpectQuery("SELECT playback_id").WithArgs("tenant", "artifact").
 			WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("playback"))
 		var response *sharedpb.CompleteVodUploadResponse

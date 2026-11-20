@@ -29,7 +29,7 @@ function sentOperations(fetcher: ReturnType<typeof vi.fn>): string[] {
   );
 }
 
-const SUPPORTED = { data: { serverInfo: { version: "v0.3.11", features: [] } } };
+const SUPPORTED = { data: { serverInfo: { version: "v0.3.16", features: [] } } };
 
 afterEach(() => {
   vi.unstubAllGlobals();

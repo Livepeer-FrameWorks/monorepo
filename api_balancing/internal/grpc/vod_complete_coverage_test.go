@@ -305,13 +305,13 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 			"filename", "title", "description",
 			"duration_ms", "resolution", "video_codec", "audio_codec", "bitrate_kbps",
 			"s3_upload_id", "s3_key",
-		}).AddRow(
+			"original_size_bytes"}).AddRow(
 			"hash-1", "hash-1", "processing", int64(2048),
 			"s3", "s3://bucket/vod/t1/hash-1/video.mp4", "",
 			time.Now(), time.Now(), nil,
 			"video.mp4", "Video", "",
 			nil, nil, nil, nil, nil,
-			"up-1", "vod/t1/hash-1/video.mp4",
+			"up-1", "vod/t1/hash-1/video.mp4", nil,
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
@@ -504,13 +504,13 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 			"filename", "title", "description",
 			"duration_ms", "resolution", "video_codec", "audio_codec", "bitrate_kbps",
 			"s3_upload_id", "s3_key",
-		}).AddRow(
+			"original_size_bytes"}).AddRow(
 			"hash-1", "hash-1", "processing", int64(2048),
 			"s3", "s3://bucket/vod/t1/hash-1/video.mp4", "",
 			time.Now(), time.Now(), nil,
 			"video.mp4", "Video", "",
 			nil, nil, nil, nil, nil,
-			"up-1", "vod/t1/hash-1/video.mp4",
+			"up-1", "vod/t1/hash-1/video.mp4", nil,
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
@@ -553,13 +553,13 @@ func TestCompleteVodUpload_RetryAlreadyProcessingIsNoOp(t *testing.T) {
 			"filename", "title", "description",
 			"duration_ms", "resolution", "video_codec", "audio_codec", "bitrate_kbps",
 			"s3_upload_id", "s3_key",
-		}).AddRow(
+			"original_size_bytes"}).AddRow(
 			"hash-1", "hash-1", "processing", int64(2048),
 			"s3", "s3://bucket/vod/t1/hash-1/video.mp4", "",
 			time.Now(), time.Now(), nil,
 			"video.mp4", "Video", "",
 			nil, nil, nil, nil, nil,
-			"up-1", "vod/t1/hash-1/video.mp4",
+			"up-1", "vod/t1/hash-1/video.mp4", nil,
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{

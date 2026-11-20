@@ -162,9 +162,11 @@ func TestOlderReplicatedSnapshotCannotRegressNewerObservations(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 	now := time.Now()
 	older := now.Add(-40 * time.Second)
+	budget := DefaultNodeCapacity()
+	budget.EgressBudgetBytesPerSec, budget.Revision = 1000, 1
 	sm.mu.Lock()
 	sm.nodes["node-1"] = &NodeState{NodeID: "node-1", BaseURL: "https://edge-1", IsHealthy: true, CapEdge: true,
-		LastHeartbeat: now, OutputsObservedAt: now, MetricsObservedAt: now, CPU: 12, BWLimit: 1000, RAMMax: 1024,
+		LastHeartbeat: now, OutputsObservedAt: now, MetricsObservedAt: now, CPU: 12, BWLimit: 1000, Capacity: budget, RAMMax: 1024,
 		Outputs: map[string]any{"HLS": "https://HOST/hls/$/index.m3u8"}, OutputsRaw: `{"HLS":"https://HOST/hls/$/index.m3u8"}`}
 	sm.mu.Unlock()
 
@@ -211,6 +213,9 @@ func TestAddBandwidth_PeerSnapshotDoesNotClobberLocalPenalty(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	configureTestNode(sm, "node-1")
+	budget := DefaultNodeCapacity()
+	budget.EgressBudgetBytesPerSec, budget.Revision = 1024*1024, 1
+	sm.SetNodeCapacity("node-1", budget)
 
 	sm.mu.Lock()
 	sm.nodes["node-1"].EstBandwidthPerUser = 256

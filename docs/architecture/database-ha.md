@@ -403,7 +403,7 @@ cluster for tables that hold a few hundred rows.
 
 | Database      | Layout      | Colocated tables | Distributed tables |
 | ------------- | ----------- | ---------------- | ------------------ |
-| quartermaster | colocated   | 23               | 7                  |
+| quartermaster | colocated   | 24               | 7                  |
 | navigator     | colocated   | 11               | 2                  |
 | periscope     | colocated   | 5                | 1                  |
 | commodore     | colocated   | 19               | 34                 |

@@ -125,6 +125,13 @@ generation even when Mist lists no viewers. The edge checks that generation and
 verifies the same exact runtime's input, output and viewer counts before
 acknowledging termination; a different publisher generation stays outside scope.
 
+Retired-publisher drain effects use the ordinary twelve-attempt or acknowledgement-wait limit.
+Unconfirmed failed drains remain terminal and are removed after thirty days. An authenticated,
+tenant-scoped late acknowledgement can complete a retained failed effect and requeue its remaining
+cleanup; time alone never revives it. Drain commands and replies carry the tenant alongside the
+node and generation fence. A natural publisher end does not emit `stream.ingest_disconnected`;
+that event requires completion of the requested platform stop.
+
 ### Rollout and rollback
 
 Apply the Commodore and Foghorn expand migrations before their new binaries.

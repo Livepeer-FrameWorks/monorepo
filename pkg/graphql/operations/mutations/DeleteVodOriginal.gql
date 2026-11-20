@@ -1,0 +1,23 @@
+mutation DeleteVodOriginal($id: ID!) {
+  deleteVodOriginal(id: $id) {
+    ... on DeleteSuccess {
+      success
+      deletedId
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

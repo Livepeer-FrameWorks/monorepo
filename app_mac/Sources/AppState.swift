@@ -52,7 +52,17 @@ struct StreamSummary: Identifiable, Codable {
   let id: String
   let name: String
   let isActive: Bool
-  let viewerCount: Int
+  let viewerCount: Int?
+  var ingestState: String? = nil
+
+  var liveStateLabel: String {
+    switch ingestState {
+    case "LIVE": return "live"
+    case "CONNECTED": return "connected"
+    case "IDLE": return "idle"
+    default: return "unavailable"
+    }
+  }
 }
 
 struct SkipperMessage: Identifiable {

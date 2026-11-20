@@ -104,9 +104,7 @@ func TestEdgeRenderDigestCoversGoDerivedRoleVars(t *testing.T) {
 				return nil, err
 			}
 			if config.Mode == c.Mode && remoteOS == c.OS && remoteArch == c.Arch {
-				// A derivation bug of the kind a release could ship: bits
-				// instead of bytes per second.
-				vars["edge_bandwidth_limit_bytes_per_sec"] = uint64(config.BandwidthMbps) * 1000 * 1000
+				vars["edge_max_transcodes"] = config.MaxTranscodes + 1
 			}
 			return vars, nil
 		}

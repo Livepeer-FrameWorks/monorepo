@@ -1516,6 +1516,9 @@ func tierProcessesForLifecycle(tier *purserpb.BillingTier, lifecycle string) str
 func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) string {
 	processesJSON, err := s.resolveProcessesJSONStrict(ctx, tenantID, streamID, clusterID, lifecycle)
 	if err != nil {
+		s.logger.WithError(err).WithFields(map[string]any{
+			"tenant_id": tenantID, "stream_id": streamID, "lifecycle": lifecycle,
+		}).Warn("Using available processing policy after lookup failure")
 		if processesJSON != "" {
 			return processesJSON
 		}
@@ -1529,6 +1532,10 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 // signed authority cannot, because the empty list would be what every cell
 // holds until the stream is next published.
 func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) (string, error) {
+	return s.resolveProcessesJSONWithLadder(ctx, tenantID, streamID, clusterID, lifecycle, "")
+}
+
+func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, tenantID, streamID, clusterID, lifecycle, assetLadder string) (string, error) {
 	if s.purserClient == nil {
 		return "[]", nil
 	}
@@ -1558,6 +1565,7 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 	}
 
 	processesJSON := tierProcessesForLifecycle(tier, lifecycle)
+	tierDerived := true
 
 	// Per-stream override always wins: operator-supplied bootstrap policy
 	// (stream_processing_config) must not be silently dropped by a tier
@@ -1583,16 +1591,19 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 		return true
 	}
 	if streamID != "" {
-		if override := s.getStreamProcessingOverride(ctx, streamID, lifecycle); validOverride(override) {
+		if override := s.getStreamProcessingOverride(ctx, tenantID, streamID, lifecycle); validOverride(override) {
 			processesJSON = override
+			tierDerived = false
 		} else if tier.GetFeatures().GetProcessingCustomizable() {
 			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(tenantOverride) {
 				processesJSON = tenantOverride
+				tierDerived = false
 			}
 		}
 	} else if tier.GetFeatures().GetProcessingCustomizable() {
 		if override := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(override) {
 			processesJSON = override
+			tierDerived = false
 		}
 	}
 
@@ -1600,14 +1611,48 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 		return "[]", nil
 	}
 
-	if lifecycle == "live" && streamID != "" {
-		abr, abrErr := commodoredb.New(s.db).GetStreamLiveVideoABR(ctx, commodoredb.GetStreamLiveVideoABRParams{ID: streamID, TenantID: tenantID})
-		if abrErr != nil {
-			return mist.NormalizeProcessConfigSelectors(processesJSON), fmt.Errorf("load stream live video ABR setting: %w", abrErr)
+	// Connected callers retain the entitled base policy on transient choice failures.
+	// Signed authority compilation still rejects the accompanying error.
+	fallback := mist.NormalizeProcessConfigSelectors(processesJSON)
+	var streamChoice string
+	liveVideoABR := "INHERIT"
+	if streamID != "" && (lifecycle == "live" || (tierDerived && mist.HasTranscodeProcesses(processesJSON))) {
+		choices, err := commodoredb.New(s.db).GetStreamProcessingChoices(ctx, commodoredb.GetStreamProcessingChoicesParams{ID: streamID, TenantID: tenantID})
+		if err != nil {
+			if lifecycle == "live" {
+				fallback = mist.StripLiveVideoRenditions(fallback)
+			}
+			return fallback, fmt.Errorf("load stream processing choices: %w", err)
 		}
-		if abr == "OFF" {
-			processesJSON = mist.StripLiveVideoRenditions(processesJSON)
+		streamChoice, liveVideoABR = choices.TranscodeLadder, choices.LiveVideoAbr
+		if lifecycle == "live" && liveVideoABR == "OFF" {
+			return mist.StripLiveVideoRenditions(fallback), nil
 		}
+	}
+	if tierDerived && mist.HasTranscodeProcesses(processesJSON) && len(tier.GetTranscodeLadders()) > 0 {
+		choice := streamChoice
+		if assetLadder != "" {
+			choice = assetLadder
+		}
+		var tenantLadder string
+		if _, allowed := allowedTranscodeLadder(tier, choice); !allowed {
+			var err error
+			tenantLadder, err = s.tenantTranscodeLadder(ctx, tenantID)
+			if err != nil {
+				return fallback, err
+			}
+		}
+		ladder, err := s.resolveTranscodeLadder(tier, tenantID, streamID, choice, tenantLadder)
+		if err != nil {
+			return fallback, err
+		}
+		processesJSON, err = applyTranscodeLadder(processesJSON, ladder)
+		if err != nil {
+			return fallback, err
+		}
+	}
+	if lifecycle == "live" && liveVideoABR == "OFF" {
+		processesJSON = mist.StripLiveVideoRenditions(processesJSON)
 	}
 
 	// Livepeer entries carry no hardcoded_broadcasters — Foghorn fills the
@@ -1618,8 +1663,8 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
 // per-stream override. Returns "" when no row exists or the column is NULL.
-func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, streamID, lifecycle string) string {
-	row, err := commodoredb.New(s.db).GetStreamProcessingOverrides(ctx, streamID)
+func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, tenantID, streamID, lifecycle string) string {
+	row, err := commodoredb.New(s.db).GetStreamProcessingOverrides(ctx, commodoredb.GetStreamProcessingOverridesParams{StreamID: streamID, TenantID: tenantID})
 	if err != nil {
 		return ""
 	}
@@ -1641,8 +1686,8 @@ func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenan
 	)
 }
 
-func processingOverrideForLifecycle(lifecycle string, live, dvr, clip, dvrFinalize, vod json.RawMessage) string {
-	var override json.RawMessage
+func processingOverrideForLifecycle(lifecycle string, live, dvr, clip, dvrFinalize, vod string) string {
+	var override string
 	switch normalizeProcessLifecycle(lifecycle) {
 	case processLifecycleDVR:
 		override = dvr
@@ -1655,7 +1700,10 @@ func processingOverrideForLifecycle(lifecycle string, live, dvr, clip, dvrFinali
 	default:
 		override = live
 	}
-	return string(override)
+	if strings.TrimSpace(override) == "null" {
+		return ""
+	}
+	return override
 }
 
 // resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
@@ -6578,6 +6626,11 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 		return nil, status.Error(codes.InvalidArgument, abrErr.Error())
 	}
 
+	ladderChoice, err := s.checkTranscodeLadderChoice(ctx, tenantID, req.GetTranscodeLadder())
+	if err != nil {
+		return nil, err
+	}
+
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
 		return nil, suspendErr
@@ -6634,6 +6687,11 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 			if err != nil {
 				s.logger.WithError(err).Error("Failed to create stream")
 				return txStatus(status.Errorf(codes.Internal, "failed to create stream: %v", err), err)
+			}
+			if ladderChoice != "" {
+				if ladderErr := txQueries.SetCreatedStreamTranscodeLadder(ctx, commodoredb.SetCreatedStreamTranscodeLadderParams{TranscodeLadder: ladderChoice, StreamID: created.StreamID, TenantID: tenantID}); ladderErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to set stream ladder: %v", ladderErr), ladderErr)
+				}
 			}
 			if liveVideoABR != "INHERIT" {
 				if err = txQueries.SetCreatedStreamLiveVideoABR(ctx, commodoredb.SetCreatedStreamLiveVideoABRParams{
@@ -7121,6 +7179,16 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 	applyStreamUpdate := false
 	changedFields := []string{}
+	if req.TranscodeLadder != nil {
+		choice, choiceErr := s.checkTranscodeLadderChoice(ctx, tenantID, req.GetTranscodeLadder())
+		if choiceErr != nil {
+			return nil, choiceErr
+		}
+		updateParams.ApplyTranscodeLadder = true
+		updateParams.TranscodeLadder = choice
+		applyStreamUpdate = true
+		changedFields = append(changedFields, "transcode_ladder")
+	}
 	if req.LiveVideoAbr != nil {
 		liveVideoABR, abrErr := normalizeLiveVideoABR(req.GetLiveVideoAbr())
 		if abrErr != nil {
@@ -7344,7 +7412,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	}
 
 	// PHASE 1 (deleting): in ONE local tx, SOFT-delete the stream (deleted_at set → excluded from all serving/
-	// listing/resolve reads) + stop ingest (drop stream_keys) + enqueue the thumbnail-cleanup obligation. We do NOT
+	// listing/resolve reads) + enqueue ingest revocation and thumbnail cleanup. We do NOT
 	// hard-delete the stream row yet: the deletion is not "done" until the SERVING authority (Foghorn) durably holds
 	// the tombstone. No RPC is held across this tx.
 	txErr := s.withStatusTx(ctx,
@@ -7352,18 +7420,15 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
 		func(tx *sql.Tx) error {
 			txQueries := commodoredb.New(tx)
-			if keysErr := txQueries.DeleteStreamKeysForDeletion(ctx, commodoredb.DeleteStreamKeysForDeletionParams{
-				StreamID: streamID, TenantID: tenantID,
-			}); keysErr != nil {
-				s.logger.WithError(keysErr).Warn("Failed to delete stream keys")
-				// A serialization failure aborts the transaction, so replay it rather than
-				// failing every following statement.
-				if fwdb.IsRetryablePostgresError(keysErr) {
-					return txStatus(status.Errorf(codes.Internal, "failed to delete stream keys: %v", keysErr), keysErr)
-				}
-			}
 			if deleteErr := txQueries.SoftDeleteStream(ctx, commodoredb.SoftDeleteStreamParams{ID: streamID, TenantID: tenantID}); deleteErr != nil {
 				return txStatus(status.Errorf(codes.Internal, "failed to soft-delete stream: %v", deleteErr), deleteErr)
+			}
+			target := commodoredb.LiveStreamMediaAuthorityTarget(streamID)
+			if stopErr := txQueries.EnqueueMediaAuthorityObligation(ctx, commodoredb.EnqueueMediaAuthorityObligationParams{
+				Lane: commodoredb.MediaAuthorityLaneIngestRevocation, TargetKey: target.Key, TargetKind: target.Kind,
+				TenantID: tenantID, Reason: "stream_deleted", SourceService: "commodore", SourceEventID: "stream-deleted-stop:" + streamID,
+			}); stopErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to record stream ingest stop: %v", stopErr), stopErr)
 			}
 			if _, retainErr := txQueries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); retainErr != nil {
 				return txStatus(status.Error(codes.Internal, "failed to retain stream placement policy"), retainErr)
@@ -7476,6 +7541,17 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 				return fmt.Errorf("settle stream cleanup outbox: %w", err)
 			}
 
+			pendingStop, err := queries.HasUnsettledStreamIngestRevocation(ctx, commodoredb.HasUnsettledStreamIngestRevocationParams{
+				TenantID: claimTenantID, TargetKey: commodoredb.LiveStreamMediaAuthorityTarget(streamID).Key,
+			})
+			if err != nil {
+				return fmt.Errorf("read stream ingest stop: %w", err)
+			}
+			if pendingStop {
+				// Revocation delivery reads the retained stream identity and historical cells.
+				return errors.New("stream ingest stop is pending")
+			}
+
 			// We own the finalization. Read attribution (user) from the still-soft-deleted row (present until the DELETE
 			// below), tenant-fenced, so the terminal event carries tenant/user, then hard-delete and emit — all atomic with
 			// the settlement above.
@@ -7532,8 +7608,8 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	if streamID == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
-	queries := commodoredb.New(s.db)
-	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
+	readQueries := commodoredb.New(s.db)
+	if validationErr := requirePushStream(ctx, readQueries, streamID, userID, tenantID); validationErr != nil {
 		return nil, validationErr
 	}
 
@@ -7546,6 +7622,22 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	// Update the stream (a deletion-pending stream is not actionable — do not rotate its key).
 	// stream_updated (stream_key) and stream.key_rotated commit with the new key.
 	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		queries := commodoredb.New(tx)
+		var stopTarget commodoredb.LockIngestStopTargetRow
+		if req.GetEndActiveSession() {
+			var lockErr error
+			stopTarget, lockErr = queries.LockIngestStopTarget(ctx, commodoredb.LockIngestStopTargetParams{TenantID: tenantID, UserID: userID, StreamID: streamID})
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "stream not found")
+			}
+			if lockErr != nil {
+				return txStatus(status.Error(codes.Internal, "failed to lock ingest owner"), lockErr)
+			}
+			if stopTarget.IngestMode != "push" {
+				return ingestStopModeError(stopTarget.IngestMode)
+			}
+		}
+
 		rows, refreshErr := commodoredb.New(tx).RefreshPrimaryStreamKey(ctx, commodoredb.RefreshPrimaryStreamKeyParams{
 			StreamKey: newStreamKey, ID: streamID, UserID: userID, TenantID: tenantID,
 		})
@@ -7559,6 +7651,12 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 			&domainEvent{msg: &publicv1.StreamKeyRotated{StreamId: streamID}, aggregateID: streamID}); enqueueErr != nil {
 			return status.Errorf(codes.Internal, "failed to record stream key rotation: %v", enqueueErr)
 		}
+		if req.GetEndActiveSession() {
+			if _, enqueueErr := enqueueIngestStop(ctx, queries, tenantID, stopTarget, true); enqueueErr != nil {
+				return enqueueErr
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -7569,7 +7667,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	}
 
 	// Get playback ID
-	playbackID, err := queries.GetStreamPlaybackID(ctx, commodoredb.GetStreamPlaybackIDParams{
+	playbackID, err := readQueries.GetStreamPlaybackID(ctx, commodoredb.GetStreamPlaybackIDParams{
 		ID: streamID, UserID: userID, TenantID: tenantID,
 	})
 	if err != nil {
@@ -7586,7 +7684,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 }
 
 // ============================================================================
-// STREAM KEY SERVICE (Gateway → Commodore for multi-key management)
+// STREAM KEY SERVICE (legacy single-key compatibility)
 // ============================================================================
 
 func requirePushStream(ctx context.Context, queries *commodoredb.Queries, streamID, userID, tenantID string) error {
@@ -7605,232 +7703,87 @@ func requirePushStream(ctx context.Context, queries *commodoredb.Queries, stream
 	return nil
 }
 
-// CreateStreamKey creates a new stream key for a stream
+// CreateStreamKey retains the legacy RPC with an explicit rotation instruction.
 func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.CreateStreamKeyRequest) (*commodorepb.StreamKeyResponse, error) {
-	userID, tenantID, err := extractUserContext(ctx)
-	if err != nil {
+	if err := s.requireLegacyStreamKeyOwner(ctx, req.GetStreamId()); err != nil {
 		return nil, err
 	}
-	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
-		return nil, permissionErr
-	}
-
-	streamID := req.GetStreamId()
-	if streamID == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_id required")
-	}
-
-	queries := commodoredb.New(s.db)
-	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
-		return nil, validationErr
-	}
-	// Generate new key
-	keyID := uuid.New().String()
-	keyValue, err := generateStreamKey()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate stream key: %v", err)
-	}
-	keyName := req.GetKeyName()
-	if keyName == "" {
-		keyName = "Key " + time.Now().Format("2006-01-02 15:04")
-	}
-
-	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
-		if insertErr := commodoredb.New(tx).InsertStreamKey(ctx, commodoredb.InsertStreamKeyParams{
-			ID: keyID, TenantID: tenantID,
-			UserID: sql.NullString{String: userID, Valid: true}, StreamID: streamID,
-			KeyValue: keyValue, KeyName: sql.NullString{String: keyName, Valid: true},
-		}); insertErr != nil {
-			return insertErr
-		}
-		return s.enqueueStreamKeyEventTx(ctx, tx, eventStreamKeyCreated, tenantID, userID, streamID, keyID)
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create stream key: %v", err)
-	}
-
-	return &commodorepb.StreamKeyResponse{
-		StreamKey: &commodorepb.StreamKey{
-			Id:        keyID,
-			TenantId:  tenantID,
-			UserId:    userID,
-			StreamId:  streamID,
-			KeyValue:  keyValue,
-			KeyName:   keyName,
-			IsActive:  true,
-			CreatedAt: timestamppb.Now(),
-			UpdatedAt: timestamppb.Now(),
-		},
-		Message: "Stream key created successfully",
-	}, nil
+	return nil, status.Error(codes.FailedPrecondition, "a stream has one key; use refreshStreamKey")
 }
 
-// ListStreamKeys lists all keys for a stream
+func (s *CommodoreServer) requireLegacyStreamKeyOwner(ctx context.Context, streamID string) error {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := requireTenantStreamPermission(ctx, "streams:write"); err != nil {
+		return err
+	}
+	if streamID == "" {
+		return status.Error(codes.InvalidArgument, "stream_id required")
+	}
+	return requirePushStream(ctx, commodoredb.New(s.db), streamID, userID, tenantID)
+}
+
+// ListStreamKeys projects the current primary credential for older SDK lines.
 func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.ListStreamKeysRequest) (*commodorepb.ListStreamKeysResponse, error) {
+	if err := s.requireLegacyStreamKeyOwner(ctx, req.GetStreamId()); err != nil {
+		return nil, err
+	}
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Stream keys are publishing credentials, so listing them is a write-scope
-	// operation even though it changes nothing.
-	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
-		return nil, permissionErr
-	}
-
-	streamID := req.GetStreamId()
-	if streamID == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_id required")
-	}
-
-	queries := commodoredb.New(s.db)
-	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
-		return nil, validationErr
-	}
-
-	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
-
-	// Get total count
-	keyUserID := sql.NullString{String: userID, Valid: true}
-	total, err := queries.CountStreamKeys(ctx, commodoredb.CountStreamKeysParams{
-		StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
-	})
+	if params.Cursor != nil {
+		if _, parseErr := uuid.Parse(params.Cursor.ID); parseErr != nil || params.Cursor.IsSortKey {
+			return nil, status.Error(codes.InvalidArgument, "invalid stream key cursor")
+		}
+	}
+	row, err := commodoredb.New(s.db).GetCurrentPrimaryStreamKey(ctx, commodoredb.GetCurrentPrimaryStreamKeyParams{ID: req.GetStreamId(), UserID: userID, TenantID: tenantID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "stream not found")
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	limit := int32(params.Limit + 1)
-	var keyRows []commodoredb.CommodoreStreamKey
-	if params.Direction == pagination.Forward {
-		if params.Cursor == nil {
-			keyRows, err = queries.ListStreamKeysForward(ctx, commodoredb.ListStreamKeysForwardParams{
-				StreamID: streamID, UserID: keyUserID, TenantID: tenantID, Limit: limit,
-			})
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return nil, status.Error(codes.Internal, "database returned stream without timestamps")
+	}
+	key := &commodorepb.StreamKey{Id: row.ID, TenantId: row.TenantID, UserId: row.UserID, StreamId: row.ID, KeyValue: row.StreamKey, KeyName: "Primary Key", IsActive: true, CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time)}
+	page := &commonpb.CursorPaginationResponse{TotalCount: 1}
+	included := true
+	if params.Cursor != nil {
+		cmp := row.CreatedAt.Time.Compare(params.Cursor.Timestamp)
+		if cmp == 0 {
+			cmp = strings.Compare(row.ID, params.Cursor.ID)
+		}
+		if params.Direction == pagination.Forward {
+			included = cmp < 0
+			page.HasPreviousPage = true
 		} else {
-			keyRows, err = queries.ListStreamKeysForwardAfter(ctx, commodoredb.ListStreamKeysForwardAfterParams{
-				StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
-				Column4: params.Cursor.Timestamp, Column5: params.Cursor.ID, Limit: limit,
-			})
-		}
-	} else if params.Cursor == nil {
-		keyRows, err = queries.ListStreamKeysBackward(ctx, commodoredb.ListStreamKeysBackwardParams{
-			StreamID: streamID, UserID: keyUserID, TenantID: tenantID, Limit: limit,
-		})
-	} else {
-		keyRows, err = queries.ListStreamKeysBackwardBefore(ctx, commodoredb.ListStreamKeysBackwardBeforeParams{
-			StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
-			Column4: params.Cursor.Timestamp, Column5: params.Cursor.ID, Limit: limit,
-		})
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	keys := make([]*commodorepb.StreamKey, 0, len(keyRows))
-	for _, row := range keyRows {
-		if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
-			return nil, status.Error(codes.Internal, "database returned stream key without timestamps")
-		}
-		key := &commodorepb.StreamKey{
-			Id: row.ID, TenantId: row.TenantID, UserId: row.UserID.String,
-			StreamId: row.StreamID, KeyValue: row.KeyValue, KeyName: row.KeyName.String,
-			IsActive: row.IsActive.Bool, CreatedAt: timestamppb.New(row.CreatedAt.Time),
-			UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
-		}
-		if row.LastUsedAt.Valid {
-			key.LastUsedAt = timestamppb.New(row.LastUsedAt.Time)
-		}
-		keys = append(keys, key)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(keys) > params.Limit
-	if hasMore {
-		keys = keys[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(keys) > 0 {
-		for i, j := 0, len(keys)-1; i < j; i, j = i+1, j-1 {
-			keys[i], keys[j] = keys[j], keys[i]
+			included = cmp > 0
+			page.HasNextPage = true
 		}
 	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(keys) > 0 {
-		first := keys[0]
-		last := keys[len(keys)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
+	result := &commodorepb.ListStreamKeysResponse{StreamKeys: []*commodorepb.StreamKey{}, Pagination: page}
+	if included {
+		result.StreamKeys = append(result.StreamKeys, key)
+		cursor := pagination.EncodeCursor(row.CreatedAt.Time, row.ID)
+		page.StartCursor, page.EndCursor = &cursor, &cursor
 	}
-
-	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &commodorepb.ListStreamKeysResponse{
-		StreamKeys: keys,
-		Pagination: &commonpb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-
-	return resp, nil
+	return result, nil
 }
 
-// DeactivateStreamKey deactivates a stream key
+// DeactivateStreamKey retains the legacy RPC with an explicit rotation instruction.
 func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodorepb.DeactivateStreamKeyRequest) (*emptypb.Empty, error) {
-	userID, tenantID, err := extractUserContext(ctx)
-	if err != nil {
+	if err := s.requireLegacyStreamKeyOwner(ctx, req.GetStreamId()); err != nil {
 		return nil, err
 	}
-	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
-		return nil, permissionErr
-	}
-
-	queries := commodoredb.New(s.db)
-	if validationErr := requirePushStream(ctx, queries, req.GetStreamId(), userID, tenantID); validationErr != nil {
-		return nil, validationErr
-	}
-
-	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
-		rows, deactivateErr := commodoredb.New(tx).DeactivateStreamKey(ctx, commodoredb.DeactivateStreamKeyParams{
-			ID: req.GetKeyId(), StreamID: req.GetStreamId(),
-			UserID: sql.NullString{String: userID, Valid: true}, TenantID: tenantID,
-		})
-		if deactivateErr != nil {
-			return status.Errorf(codes.Internal, "failed to deactivate key: %v", deactivateErr)
-		}
-		if rows == 0 {
-			return status.Error(codes.NotFound, "stream key not found")
-		}
-		if enqueueErr := s.enqueueStreamKeyEventTx(ctx, tx, eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId()); enqueueErr != nil {
-			return status.Errorf(codes.Internal, "failed to record stream key deactivation: %v", enqueueErr)
-		}
-		return nil
-	})
-	if err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, status.Errorf(codes.Internal, "failed to deactivate key: %v", err)
-	}
-
-	return &emptypb.Empty{}, nil
+	return nil, status.Error(codes.FailedPrecondition, "a stream has one key; use refreshStreamKey")
 }
 
 // ============================================================================
@@ -8761,8 +8714,6 @@ const (
 	eventStreamCreated          = "stream_created"
 	eventStreamUpdated          = "stream_updated"
 	eventStreamDeleted          = "stream_deleted"
-	eventStreamKeyCreated       = "stream_key_created"
-	eventStreamKeyDeleted       = "stream_key_deleted"
 	eventArtifactRegistered     = "artifact_registered"
 	eventPlaybackPolicyChanged  = "playback_policy_changed"
 )
@@ -8866,30 +8817,6 @@ func (s *CommodoreServer) buildArtifactEvent(eventType, tenantID, userID string,
 		ResourceId:   artifactID,
 		Payload:      &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
 	}
-}
-
-func (s *CommodoreServer) buildStreamKeyEvent(eventType, tenantID, userID, streamID, keyID string) *ipcpb.ServiceEvent {
-	payload := &ipcpb.StreamKeyEvent{
-		StreamId: streamID,
-		KeyId:    keyID,
-	}
-	return &ipcpb.ServiceEvent{
-		EventType:    eventType,
-		Timestamp:    timestamppb.Now(),
-		Source:       commodoreEventSource,
-		TenantId:     tenantID,
-		UserId:       userID,
-		ResourceType: "stream_key",
-		ResourceId:   keyID,
-		Payload:      &ipcpb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
-	}
-}
-
-// enqueueStreamKeyEventTx records a change to the stream's additional ingest
-// keys: the legacy stream_key event and stream.updated naming stream_keys.
-func (s *CommodoreServer) enqueueStreamKeyEventTx(ctx context.Context, exec commodoredb.DBTX, eventType, tenantID, userID, streamID, keyID string) error {
-	return s.enqueueEventTx(ctx, exec, s.buildStreamKeyEvent(eventType, tenantID, userID, streamID, keyID),
-		&domainEvent{msg: &publicv1.StreamUpdated{StreamId: streamID, ChangedFields: []string{"stream_keys"}}, aggregateID: streamID})
 }
 
 // GetStreamsBatch retrieves multiple streams by IDs in a single query
@@ -9044,8 +8971,8 @@ func (s *CommodoreServer) streamFromConfigRow(row commodoredb.StreamConfigRow) (
 		IsRecordingEnabled: row.IsRecordingEnabled.Bool,
 		IsRecording:        row.IsRecordingEnabled.Bool,
 		IngestMode:         row.IngestMode, Monitoring: monitoringToggleFromNullBool(row.MonitoringEnabled),
-		LiveVideoAbr: row.LiveVideoABR,
-		CreatedAt:    timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		LiveVideoAbr: row.LiveVideoABR, TranscodeLadder: row.TranscodeLadder,
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 	}
 	if row.Description.Valid {
 		stream.Description = row.Description.String
@@ -9165,7 +9092,7 @@ var allowedAPITokenPermissions = map[string]struct{}{
 	"placement:read": {}, "placement:write": {},
 	"mcp:high-risk": {}, "security:read": {}, "security:write": {},
 	"settings:write": {}, "streams:read": {}, "streams:write": {},
-	"support:read": {},
+	"support:read": {}, "support:write": {},
 }
 
 func normalizeAPITokenPermissions(permissions []string) ([]string, error) {
@@ -9618,12 +9545,14 @@ func fulfilledClipTiming(resp *sharedpb.CreateClipResponse) (startTimeMs, durati
 	return startTimeMs, durationMs, startTimeMs > 0 && durationMs > 0
 }
 
-// GetClip returns clip business registry metadata (no lifecycle data).
-// Lifecycle/access data must come from Periscope (data plane).
+// GetClip returns tenant-scoped lifecycle and storage metadata from the artifact catalog.
 func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequest) (*sharedpb.ClipInfo, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if scopeErr := requireTenantStreamPermission(ctx, "streams:read"); scopeErr != nil {
+		return nil, scopeErr
 	}
 	clipHash := req.GetClipHash()
 	if clipHash == "" {
@@ -9649,7 +9578,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 		StreamId:   row.CStreamID,
 		StartTime:  row.StartTime / 1000, // Convert ms to seconds
 		Duration:   row.Duration / 1000,  // Convert ms to seconds
-		Status:     "registry",
+		Status:     row.Status,
 		CreatedAt:  timestamppb.New(row.CreatedAt.Time),
 		UpdatedAt:  timestamppb.New(row.UpdatedAt.Time),
 	}
@@ -9677,6 +9606,22 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 	if row.RetentionUntil.Valid {
 		expiresAt := timestamppb.New(row.RetentionUntil.Time)
 		clip.ExpiresAt = expiresAt
+	}
+	clip.StorageClusterId = row.StorageClusterID
+	if row.ErrorMessage.Valid {
+		clip.ErrorMessage = &row.ErrorMessage.String
+	}
+	if row.StorageLocation.Valid {
+		clip.StorageLocation = &row.StorageLocation.String
+	}
+	if row.SyncStatus.Valid {
+		clip.SyncStatus = &row.SyncStatus.String
+	}
+	if row.IsSynced.Valid {
+		clip.IsSynced = &row.IsSynced.Bool
+	}
+	if row.IsFinalized.Valid {
+		clip.IsFinalized = &row.IsFinalized.Bool
 	}
 	thumbnailCluster := sql.NullString{String: row.ThumbnailCluster, Valid: row.ThumbnailCluster != ""}
 	clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(row.HasThumbnails, thumbnailCluster, clipHash)
@@ -9987,7 +9932,7 @@ func hasDelegatedPermission(permissions []string, required string) bool {
 	return auth.PermissionGranted(permissions, required)
 }
 
-func requireNodeAction(ctx context.Context, tenantID, permission string, action authz.Action) error {
+func requireNodeAction(ctx context.Context, ownerTenantID, permission string, action authz.Action) error {
 	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
 		return nil
 	}
@@ -10000,30 +9945,44 @@ func requireNodeAction(ctx context.Context, tenantID, permission string, action 
 		Role:             ctxkeys.GetRole(ctx),
 		Permissions:      ctxkeys.GetPermissions(ctx),
 		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
-	}, action, authz.Resource{OwnerTenantID: tenantID})
+	}, action, authz.Resource{OwnerTenantID: ownerTenantID})
 	if !decision.Allow {
 		return status.Error(codes.PermissionDenied, privateNodeAccessDenied)
 	}
 	return nil
 }
 
-// resolveFoghornForNode resolves the Foghorn managing a specific node's cluster.
-// Unlike resolveFoghornForTenant (tenant's primary cluster), this resolves the
-// node's cluster and validates the requesting tenant owns the node.
-func (s *CommodoreServer) resolveFoghornForNode(ctx context.Context, nodeID, requestingTenantID string) (*foghornclient.GRPCClient, error) {
+func (s *CommodoreServer) authorizeNodeAction(ctx context.Context, nodeID, permission string, action authz.Action) (*quartermasterpb.NodeOwnerResponse, error) {
+	// Reject insufficient roles and scopes before looking up private inventory.
+	if err := requireNodeAction(ctx, ctxkeys.GetTenantID(ctx), permission, action); err != nil {
+		return nil, err
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
 	if s.quartermasterClient == nil {
 		return nil, status.Error(codes.Unavailable, "quartermaster not available")
 	}
 
 	owner, err := s.quartermasterClient.GetNodeOwner(ctx, nodeID)
 	if err != nil {
+		if status.Code(err) == codes.NotFound && ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) {
+			return nil, status.Error(codes.PermissionDenied, privateNodeAccessDenied)
+		}
 		return nil, err
 	}
-
-	if owner.OwnerTenantId == nil || *owner.OwnerTenantId != requestingTenantID {
-		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	if owner == nil {
+		return nil, status.Error(codes.Unavailable, "node ownership unavailable")
 	}
+	if err := requireNodeAction(ctx, owner.GetOwnerTenantId(), permission, action); err != nil {
+		return nil, err
+	}
+	return owner, nil
+}
 
+// resolveFoghornForNode routes using the ownership record already authorized for this action.
+func (s *CommodoreServer) resolveFoghornForNode(owner *quartermasterpb.NodeOwnerResponse) (*foghornclient.GRPCClient, error) {
 	foghornAddr := owner.GetFoghornGrpcAddr()
 	if foghornAddr == "" {
 		return nil, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", owner.ClusterId)
@@ -10038,15 +9997,16 @@ func (s *CommodoreServer) resolveFoghornForNode(ctx context.Context, nodeID, req
 
 // SetNodeOperationalMode proxies mode changes to Foghorn via the node's cluster.
 func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	_, _, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if authErr := requireNodeAction(ctx, tenantID, "infrastructure:write", authz.ActionManageEdgeCluster); authErr != nil {
+	owner, authErr := s.authorizeNodeAction(ctx, req.GetNodeId(), "infrastructure:write", authz.ActionManageEdgeCluster)
+	if authErr != nil {
 		return nil, authErr
 	}
 
-	foghornClient, err := s.resolveFoghornForNode(ctx, req.GetNodeId(), tenantID)
+	foghornClient, err := s.resolveFoghornForNode(owner)
 	if err != nil {
 		return nil, err
 	}
@@ -10060,15 +10020,16 @@ func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *fogho
 
 // GetNodeHealth proxies health queries to Foghorn via the node's cluster.
 func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error) {
-	_, tenantID, err := extractUserContext(ctx)
+	_, _, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if authErr := requireNodeAction(ctx, tenantID, "infrastructure:read", authz.ActionReadPrivateInfrastructure); authErr != nil {
+	owner, authErr := s.authorizeNodeAction(ctx, req.GetNodeId(), "infrastructure:read", authz.ActionReadPrivateInfrastructure)
+	if authErr != nil {
 		return nil, authErr
 	}
 
-	foghornClient, err := s.resolveFoghornForNode(ctx, req.GetNodeId(), tenantID)
+	foghornClient, err := s.resolveFoghornForNode(owner)
 	if err != nil {
 		return nil, err
 	}
@@ -10350,6 +10311,15 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 		return nil, err
 	}
 
+	if filenameErr := vodupload.ValidateFilename(req.GetFilename()); filenameErr != nil {
+		return nil, status.Error(codes.InvalidArgument, filenameErr.Error())
+	}
+
+	ladderChoice, err := s.checkTranscodeLadderChoice(ctx, tenantID, req.GetTranscodeLadder())
+	if err != nil {
+		return nil, err
+	}
+
 	foghornClient, vodRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
@@ -10382,6 +10352,10 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 	// override (uploads aren't bound to a stream); cascade collapses to
 	// tenant per-class default → system default (keep forever), clamped
 	// by the tier cap (Free=30d, paid=uncapped).
+	keepOriginal, originalErr := s.resolveKeepVodOriginal(ctx, tenantID, req.KeepOriginal)
+	if originalErr != nil {
+		return nil, status.Error(codes.Internal, "original policy lookup failed")
+	}
 	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, tenantID, "")
 	if retentionErr != nil {
 		s.logger.WithError(retentionErr).WithField("tenant_id", tenantID).Warn("VOD retention resolution failed; falling back to 30-day horizon for safety")
@@ -10411,6 +10385,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 			Title:           sql.NullString{String: req.GetTitle(), Valid: true},
 			Description:     sql.NullString{String: req.GetDescription(), Valid: true},
 			Filename:        req.Filename,
+			TranscodeLadder: ladderChoice,
 			ContentType:     sql.NullString{String: req.GetContentType(), Valid: true},
 			SizeBytes:       sql.NullInt64{Int64: req.SizeBytes, Valid: true},
 			OriginClusterID: sql.NullString{String: vodRoute.clusterID, Valid: true},
@@ -10446,20 +10421,22 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 	// Build Foghorn request with pre-generated hash. request_id keys Foghorn's
 	// command ledger so the sweep resolves this attempt by request_id.
 	foghornReq := &sharedpb.CreateVodUploadRequest{
-		TenantId:      tenantID,
-		UserId:        userID,
-		Filename:      req.Filename,
-		SizeBytes:     req.SizeBytes,
-		ContentType:   req.ContentType,
-		Title:         req.Title,
-		Description:   req.Description,
-		VodHash:       &vodHash, // Pass the hash we generated
-		PlaybackId:    &playbackID,
-		InternalName:  &artifactInternalName,
-		ClusterId:     vodRoute.clusterID,
-		RetentionDays: &resolvedDays,
-		RequestId:     &intentRequestID,
-		Actor:         s.requestActor(ctx),
+		KeepOriginal:    &keepOriginal,
+		TranscodeLadder: req.GetTranscodeLadder(),
+		TenantId:        tenantID,
+		UserId:          userID,
+		Filename:        req.Filename,
+		SizeBytes:       req.SizeBytes,
+		ContentType:     req.ContentType,
+		Title:           req.Title,
+		Description:     req.Description,
+		VodHash:         &vodHash, // Pass the hash we generated
+		PlaybackId:      &playbackID,
+		InternalName:    &artifactInternalName,
+		ClusterId:       vodRoute.clusterID,
+		RetentionDays:   &resolvedDays,
+		RequestId:       &intentRequestID,
+		Actor:           s.requestActor(ctx),
 	}
 
 	// Call Foghorn for S3 multipart upload setup
@@ -10520,7 +10497,10 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}
 
-	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", vodRoute.clusterID, "vod")
+	processesJSON, err := s.resolveVODProcessesJSON(ctx, tenantID, vodRoute.clusterID, vodRoute.artifactHash)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "resolve upload processing: %v", err)
+	}
 
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
 	foghornReq := &sharedpb.CompleteVodUploadRequest{
@@ -10745,79 +10725,10 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 
 	artifacts := make([]*commodorepb.StorageArtifactInfo, 0, len(catalog.Rows))
 	for _, row := range catalog.Rows {
-		artifact := &commodorepb.StorageArtifactInfo{
-			Kind:             row.Kind,
-			Id:               row.ID,
-			ArtifactHash:     row.ArtifactHash,
-			StreamTitle:      row.StreamTitle,
-			Title:            row.Title,
-			SecondaryLabel:   row.SecondaryLabel,
-			Status:           row.Status.String,
-			CreatedAt:        timestamppb.New(row.CreatedAt),
-			UpdatedAt:        timestamppb.New(row.UpdatedAt),
-			StorageClusterId: row.StorageClusterID,
-			HasThumbnails:    row.HasThumbnails,
+		artifact, mapErr := s.storageArtifactFromCatalogRow(row)
+		if mapErr != nil {
+			return nil, mapErr
 		}
-		if row.PlaybackID != "" {
-			artifact.PlaybackId = &row.PlaybackID
-		}
-		if row.StreamID != "" {
-			artifact.StreamId = &row.StreamID
-		}
-		if row.SizeBytes.Valid {
-			value := row.SizeBytes.Int64
-			artifact.SizeBytes = &value
-		}
-		if row.StorageLocation.Valid && row.StorageLocation.String != "" {
-			value := row.StorageLocation.String
-			artifact.StorageLocation = &value
-		}
-		if row.ExpiresAt.Valid {
-			artifact.ExpiresAt = timestamppb.New(row.ExpiresAt.Time)
-		}
-		if row.RetentionSource != "" {
-			artifact.RetentionSource = &row.RetentionSource
-		}
-		if row.OriginType != "" {
-			artifact.OriginType = &row.OriginType
-		}
-		if row.OriginID != "" {
-			artifact.OriginId = &row.OriginID
-		}
-		if row.Description != "" {
-			artifact.Description = &row.Description
-		}
-		if row.ErrorMessage != "" {
-			artifact.ErrorMessage = &row.ErrorMessage
-		}
-		if row.DurationMs.Valid {
-			value := row.DurationMs.Int64
-			artifact.DurationMs = &value
-		}
-		if row.Tracks.Valid && row.Tracks.String != "" {
-			parsed, trackErr := commodoreclient.UnmarshalMediaTracks([]byte(row.Tracks.String))
-			if trackErr != nil {
-				return nil, status.Errorf(codes.Internal, "decode tracks for %s: %v", row.ArtifactHash, trackErr)
-			}
-			artifact.Tracks = parsed
-		}
-		if row.SyncStatus.Valid && row.SyncStatus.String != "" {
-			value := row.SyncStatus.String
-			artifact.SyncStatus = &value
-		}
-		if row.IsSynced.Valid {
-			value := row.IsSynced.Bool
-			artifact.IsSynced = &value
-		}
-		if row.IsFinalized.Valid {
-			value := row.IsFinalized.Bool
-			artifact.IsFinalized = &value
-		}
-		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(
-			row.HasThumbnails,
-			sql.NullString{String: row.ThumbnailServingCluster, Valid: row.ThumbnailServingCluster != ""},
-			row.ArtifactHash,
-		)
 		artifacts = append(artifacts, artifact)
 	}
 	total := catalog.Total
@@ -10825,6 +10736,10 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 	hasNext := len(artifacts) > limit
 	if hasNext {
 		artifacts = artifacts[:limit]
+	}
+
+	if parentErr := populateChapterParentRecordings(ctx, commodoredb.New(s.db), tenantID, artifacts); parentErr != nil {
+		return nil, parentErr
 	}
 
 	return &commodorepb.ListStorageArtifactsResponse{
@@ -10952,6 +10867,15 @@ func dispatchTenantControl[T any](
 	ctx context.Context, s *CommodoreServer, targets []clusterFanoutTarget,
 	deliver func(context.Context, *foghornclient.GRPCClient) (T, error),
 ) []tenantControlDelivery[T] {
+	return dispatchTenantControlTargets(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient, _ clusterFanoutTarget) (T, error) {
+		return deliver(callCtx, client)
+	})
+}
+
+func dispatchTenantControlTargets[T any](
+	ctx context.Context, s *CommodoreServer, targets []clusterFanoutTarget,
+	deliver func(context.Context, *foghornclient.GRPCClient, clusterFanoutTarget) (T, error),
+) []tenantControlDelivery[T] {
 	results := make([]tenantControlDelivery[T], len(targets))
 	workers := min(8, len(targets))
 	jobs := make(chan int)
@@ -10977,7 +10901,7 @@ func dispatchTenantControl[T any](
 					client, results[index].err = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 				}
 				if results[index].err == nil {
-					results[index].response, results[index].err = deliver(callCtx, client)
+					results[index].response, results[index].err = deliver(callCtx, client, target)
 				}
 				cancel()
 				if results[index].err != nil {
@@ -11296,4 +11220,85 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodore
 			UpdatedAt:   timestamppb.New(now),
 		},
 	}, nil
+}
+
+func (s *CommodoreServer) storageArtifactFromCatalogRow(row commodoredb.StorageArtifactRow) (*commodorepb.StorageArtifactInfo, error) {
+	artifact := &commodorepb.StorageArtifactInfo{
+		Kind:             row.Kind,
+		Id:               row.ID,
+		ArtifactHash:     row.ArtifactHash,
+		StreamTitle:      row.StreamTitle,
+		Title:            row.Title,
+		SecondaryLabel:   row.SecondaryLabel,
+		Status:           row.Status.String,
+		CreatedAt:        timestamppb.New(row.CreatedAt),
+		UpdatedAt:        timestamppb.New(row.UpdatedAt),
+		StorageClusterId: row.StorageClusterID,
+		HasThumbnails:    row.HasThumbnails,
+	}
+	if row.PlaybackID != "" {
+		artifact.PlaybackId = &row.PlaybackID
+	}
+	if row.StreamID != "" {
+		artifact.StreamId = &row.StreamID
+	}
+	if row.OriginalSizeBytes.Valid {
+		value := row.OriginalSizeBytes.Int64
+		artifact.OriginalSizeBytes = &value
+	}
+	if row.SizeBytes.Valid {
+		value := row.SizeBytes.Int64
+		artifact.SizeBytes = &value
+	}
+	if row.StorageLocation.Valid && row.StorageLocation.String != "" {
+		value := row.StorageLocation.String
+		artifact.StorageLocation = &value
+	}
+	if row.ExpiresAt.Valid {
+		artifact.ExpiresAt = timestamppb.New(row.ExpiresAt.Time)
+	}
+	if row.RetentionSource != "" {
+		artifact.RetentionSource = &row.RetentionSource
+	}
+	if row.OriginType != "" {
+		artifact.OriginType = &row.OriginType
+	}
+	if row.OriginID != "" {
+		artifact.OriginId = &row.OriginID
+	}
+	if row.Description != "" {
+		artifact.Description = &row.Description
+	}
+	if row.ErrorMessage != "" {
+		artifact.ErrorMessage = &row.ErrorMessage
+	}
+	if row.DurationMs.Valid {
+		value := row.DurationMs.Int64
+		artifact.DurationMs = &value
+	}
+	if row.Tracks.Valid && row.Tracks.String != "" {
+		parsed, trackErr := commodoreclient.UnmarshalMediaTracks([]byte(row.Tracks.String))
+		if trackErr != nil {
+			return nil, status.Errorf(codes.Internal, "decode tracks for %s: %v", row.ArtifactHash, trackErr)
+		}
+		artifact.Tracks = parsed
+	}
+	if row.SyncStatus.Valid && row.SyncStatus.String != "" {
+		value := row.SyncStatus.String
+		artifact.SyncStatus = &value
+	}
+	if row.IsSynced.Valid {
+		value := row.IsSynced.Bool
+		artifact.IsSynced = &value
+	}
+	if row.IsFinalized.Valid {
+		value := row.IsFinalized.Bool
+		artifact.IsFinalized = &value
+	}
+	artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(
+		row.HasThumbnails,
+		sql.NullString{String: row.ThumbnailServingCluster, Valid: row.ThumbnailServingCluster != ""},
+		row.ArtifactHash,
+	)
+	return artifact, nil
 }

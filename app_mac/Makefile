@@ -8,7 +8,7 @@ generate:
 	xcodegen generate
 
 build: generate
-	xcodebuild \
+	xcodebuild $(XCODEBUILD_FLAGS) \
 		-project FrameWorks.xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration $(CONFIG) \
@@ -20,7 +20,7 @@ run: build
 	open $(BUILD_DIR)/Build/Products/$(CONFIG)/FrameWorks.app
 
 test: generate
-	xcodebuild \
+	xcodebuild $(XCODEBUILD_FLAGS) \
 		-project FrameWorks.xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration $(CONFIG) \
@@ -30,7 +30,7 @@ test: generate
 		test
 
 archive: generate
-	xcodebuild \
+	xcodebuild $(XCODEBUILD_FLAGS) \
 		-project FrameWorks.xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration Release \

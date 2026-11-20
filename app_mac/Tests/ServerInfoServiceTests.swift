@@ -27,11 +27,11 @@ final class ServerInfoServiceTests: XCTestCase {
   func testBridgeBelowTheMinimumIsTooOld() async {
     let result = await service(returning: "v0.3.10").check()
     XCTAssertEqual(result, .tooOld(reported: "v0.3.10"))
-    XCTAssertEqual(result.warning, "Server too old (v0.3.10). This app needs v0.3.11 or later.")
+    XCTAssertEqual(result.warning, "Server too old (v0.3.10). This app needs v0.3.16 or later.")
   }
 
   func testMinimumAndNewerReleasesAreSupported() async {
-    for version in ["v0.3.11", "0.3.11", "v0.3.12", "v0.4.0", "v1.0.0", "v0.3.11-rc1"] {
+    for version in ["v0.3.16", "0.3.16", "v0.3.17", "v0.4.0", "v1.0.0", "v0.3.16-rc1"] {
       let result = await service(returning: version).check()
       guard case .supported(let info) = result else {
         return XCTFail("\(version) reported \(result), want supported")
@@ -55,7 +55,7 @@ final class ServerInfoServiceTests: XCTestCase {
   func testBridgeWithoutServerInfoIsTooOld() async {
     let inBody = await service(throwing: GatewayError.graphqlErrors([unknownField])).check()
     XCTAssertEqual(inBody, .tooOld(reported: nil))
-    XCTAssertEqual(inBody.warning, "Server too old. This app needs v0.3.11 or later.")
+    XCTAssertEqual(inBody.warning, "Server too old. This app needs v0.3.16 or later.")
 
     let body = Data("{\"errors\":[{\"message\":\"\(unknownField.replacingOccurrences(of: "\"", with: "\\\""))\"}],\"data\":null}".utf8)
     let asUnprocessable = await service(throwing: GatewayError.httpError(422, body)).check()
@@ -95,5 +95,12 @@ final class ServerInfoServiceTests: XCTestCase {
     XCTAssertNil(ReleaseVersion("v0.3.4-7-g3023b6190-dirty"))
     XCTAssertTrue(ReleaseVersion(major: 0, minor: 3, patch: 10) < ServerInfoService.minimumVersion)
     XCTAssertFalse(ReleaseVersion(major: 0, minor: 10, patch: 0) < ServerInfoService.minimumVersion)
+  }
+}
+
+extension ServerInfoServiceTests {
+  func testIngestSessionAPINeedsThe316Server() async {
+    let result = await service(returning: "v0.3.15").check()
+    XCTAssertEqual(result, .tooOld(reported: "v0.3.15"))
   }
 }

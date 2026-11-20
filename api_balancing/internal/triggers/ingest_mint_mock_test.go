@@ -35,7 +35,7 @@ func installIngestSessionMintMockWithStream(t *testing.T) {
 	installIngestSessionMint(t, true)
 }
 
-func installIngestSessionMint(t *testing.T, streamConnected bool) {
+func installIngestSessionMint(t *testing.T, streamConnected bool, connectedPayload ...sqlmock.Argument) {
 	t.Helper()
 	dbMock, mock, err := sqlmock.New()
 	if err != nil {
@@ -61,9 +61,13 @@ func installIngestSessionMint(t *testing.T, streamConnected bool) {
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	if streamConnected {
+		payload := sqlmock.AnyArg()
+		if len(connectedPayload) > 0 {
+			payload = connectedPayload[0]
+		}
 		mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
 			WithArgs(sqlmock.AnyArg(), "stream.connected", "foghorn", "streams", sqlmock.AnyArg(), sqlmock.AnyArg(),
-				"tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+				"tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), payload).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectCommit()

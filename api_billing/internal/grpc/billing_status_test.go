@@ -144,14 +144,14 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 			"id", "tier_name", "display_name", "description", "base_price", "currency", "billing_period",
 			"features", "support_level", "sla_level", "metering_enabled", "is_active", "tier_level", "is_enterprise",
 			"created_at", "updated_at", "is_default_prepaid", "is_default_postpaid",
-			"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
+			"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod", "transcode_ladders", "default_transcode_ladder",
 		}).AddRow(
 			tierID, "free", "Free", "Free tier",
 			0.0, "EUR", "monthly",
 			[]byte(`{}`), "community", "none",
 			false, true,
 			int32(1), false, now, now,
-			false, false, []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
+			false, false, []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), "",
 		))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, model, currency`)).
 		WithArgs(subID).

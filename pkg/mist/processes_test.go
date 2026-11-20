@@ -218,39 +218,38 @@ func TestSetLivepeerBroadcastersEmptyFallsBackToLocalAV(t *testing.T) {
 	}
 }
 
-func TestRequestedRenditionHeights_FailClosedVsLegitimatelyEmpty(t *testing.T) {
+func TestExpectedVideoRenditions_FailClosedVsLegitimatelyEmpty(t *testing.T) {
 	src := SourceMediaInfo{Width: 1280, Height: 720, FPS: 30}
 
 	// Valid: two renditions, raw heights returned verbatim, no error.
-	heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360},{"name":"720p","height":720}]}]`, src)
-	if err != nil || len(heights) != 2 || heights[0] != 360 || heights[1] != 720 {
+	heights, err := ExpectedVideoRenditions(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360},{"name":"720p","height":720}]}]`, src)
+	if err != nil || len(heights) != 2 || heights[0].ShortSide != 360 || heights[1].ShortSide != 720 {
 		t.Fatalf("valid config: got %v, err %v; want [360 720], nil", heights, err)
 	}
 
-	// Raw height is the contract even when source aspect math would round the
-	// concrete width: a 360 request off a 2720x1750 source stays 360.
+	// Aspect fitting preserves the short side for off-ladder sources.
 	odd := SourceMediaInfo{Width: 2720, Height: 1750, FPS: 24}
-	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`, odd); err != nil || len(heights) != 1 || heights[0] != 360 {
+	if heights, err := ExpectedVideoRenditions(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`, odd); err != nil || len(heights) != 1 || heights[0].ShortSide != 360 {
 		t.Fatalf("raw-height intent: got %v, err %v; want [360], nil", heights, err)
 	}
 
 	// Width-only profile derives its height from the source aspect (Mist owns width;
 	// validation still needs a height target). 640 wide off 1280x720 => 360 high.
-	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"w640","width":640}]}]`, src); err != nil || len(heights) != 1 || heights[0] != 360 {
+	if heights, err := ExpectedVideoRenditions(`[{"process":"Livepeer","target_profiles":[{"name":"w640","width":640}]}]`, src); err != nil || len(heights) != 1 || heights[0].ShortSide != 360 {
 		t.Fatalf("width-only derive: got %v, err %v; want [360], nil", heights, err)
 	}
 
 	// No Livepeer process: empty + nil (legitimately nothing to prove).
-	if heights, err := RequestedRenditionHeights(`[{"process":"AV","codec":"AAC"}]`, src); err != nil || len(heights) != 0 {
+	if heights, err := ExpectedVideoRenditions(`[{"process":"AV","codec":"AAC"}]`, src); err != nil || len(heights) != 0 {
 		t.Fatalf("no-Livepeer: got %v, err %v; want [], nil", heights, err)
 	}
 
 	// Livepeer present but every profile inhibited by a small source: empty + nil.
 	small := SourceMediaInfo{Width: 320, Height: 240}
-	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"track_inhibit":"video=<640x360"}]}]`, small); err != nil || len(heights) != 0 {
+	if heights, err := ExpectedVideoRenditions(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"track_inhibit":"video=<640x360"}]}]`, small); err != nil || len(heights) != 0 {
 		t.Fatalf("all-inhibited: got %v, err %v; want [], nil", heights, err)
 	}
-	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","track_inhibit":"video=<640x360","target_profiles":[{"name":"360p","height":360}]}]`, small); err != nil || len(heights) != 0 {
+	if heights, err := ExpectedVideoRenditions(`[{"process":"Livepeer","track_inhibit":"video=<640x360","target_profiles":[{"name":"360p","height":360}]}]`, small); err != nil || len(heights) != 0 {
 		t.Fatalf("process-inhibited: got %v, err %v; want [], nil", heights, err)
 	}
 
@@ -262,7 +261,7 @@ func TestRequestedRenditionHeights_FailClosedVsLegitimatelyEmpty(t *testing.T) {
 		"malformed target_profiles": `[{"process":"Livepeer","target_profiles":"notarray"}]`,
 		"malformed config json":     `{not json`,
 	} {
-		if _, err := RequestedRenditionHeights(cfg, src); err == nil {
+		if _, err := ExpectedVideoRenditions(cfg, src); err == nil {
 			t.Fatalf("%s: expected error (fail closed), got nil", name)
 		}
 	}
@@ -692,24 +691,15 @@ func TestLivepeerProfileFloatCoercesEveryJSONNumericEncoding(t *testing.T) {
 	}
 }
 
-// TestRequestedRenditionHeightFallbackChain covers the two ladder-intent
-// fallback branches not already exercised through RequestedRenditionHeights:
-// a profile with no dimensions passes the source height through, while a
-// width-only request against an unknown source fails closed at 0 so the
-// validator never treats an underivable rendition as satisfied.
-func TestRequestedRenditionHeightFallbackChain(t *testing.T) {
-	src := SourceMediaInfo{Width: 1280, Height: 720}
-
-	if got := requestedRenditionHeight(LivepeerJSONProfile{"name": "src", "bitrate": 900000}, src); got != 720 {
-		t.Fatalf("no-dimensions profile = %d, want source passthrough 720", got)
+func TestExpectedVideoRenditionsSourceGeometry(t *testing.T) {
+	for _, cfg := range []string{`[{"process":"Livepeer","target_profiles":[{"name":"src"}]}]`, `[{"process":"Livepeer","target_profiles":[{"height":0}]}]`} {
+		got, err := ExpectedVideoRenditions(cfg, SourceMediaInfo{Width: 1280, Height: 720})
+		if err != nil || len(got) != 1 || got[0].ShortSide != 720 {
+			t.Fatalf("source geometry: %v, %v", got, err)
+		}
 	}
-	// height:0 is "absent", not a real request — must fall through to source.
-	if got := requestedRenditionHeight(LivepeerJSONProfile{"height": 0}, src); got != 720 {
-		t.Fatalf("height:0 = %d, want source passthrough 720", got)
-	}
-	// Width-only with unknown source aspect cannot be resolved -> 0 (fail closed).
-	if got := requestedRenditionHeight(LivepeerJSONProfile{"width": 640}, SourceMediaInfo{}); got != 0 {
-		t.Fatalf("width-only unknown source = %d, want 0 (fail closed)", got)
+	if _, err := ExpectedVideoRenditions(`[{"process":"Livepeer","target_profiles":[{"width":640}]}]`, SourceMediaInfo{}); err == nil {
+		t.Fatal("unknown source geometry must fail closed")
 	}
 }
 

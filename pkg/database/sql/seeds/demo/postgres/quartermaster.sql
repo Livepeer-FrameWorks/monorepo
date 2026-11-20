@@ -7,14 +7,14 @@
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     cluster_class,
-    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    max_concurrent_streams, max_concurrent_viewers,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'central-primary', 'Central Platform', 'central', 'platform.demo.frameworks.network',
     'platform_official',
-    0, 0, 0,
+    0, 0,
     FALSE, TRUE, TRUE,
     'public', 'Platform services: API, billing, analytics, events'
 )
@@ -29,14 +29,14 @@ ON CONFLICT (cluster_id) DO UPDATE SET
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     cluster_class,
-    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    max_concurrent_streams, max_concurrent_viewers,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-media', 'Demo Media Cluster', 'edge', 'demo.frameworks.network',
     'platform_official',
-    0, 0, 0,
+    0, 0,
     TRUE, TRUE, TRUE,
     'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
 )
@@ -73,14 +73,14 @@ ON CONFLICT (id) DO UPDATE SET
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     owner_tenant_id, cluster_class,
-    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    max_concurrent_streams, max_concurrent_viewers,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-selfhosted', 'Demo Self-hosted Cluster', 'edge', 'selfhosted.demo.frameworks.network',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'tenant_private',
-    0, 0, 0,
+    0, 0,
     FALSE, FALSE, FALSE,
     'private', 'Tenant-owned media cluster for local offload testing'
 )

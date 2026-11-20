@@ -7,8 +7,11 @@
 package foghorncontrolpb
 
 import (
+	capacity_values "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/capacity_values"
+	common "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -74,6 +77,58 @@ func (x SetNodeModeStatus) Number() protoreflect.EnumNumber {
 // Deprecated: Use SetNodeModeStatus.Descriptor instead.
 func (SetNodeModeStatus) EnumDescriptor() ([]byte, []int) {
 	return file_foghorn_control_proto_rawDescGZIP(), []int{0}
+}
+
+type StreamIngestState int32
+
+const (
+	StreamIngestState_STREAM_INGEST_STATE_UNSPECIFIED StreamIngestState = 0
+	StreamIngestState_STREAM_INGEST_STATE_IDLE        StreamIngestState = 1
+	StreamIngestState_STREAM_INGEST_STATE_CONNECTED   StreamIngestState = 2
+	StreamIngestState_STREAM_INGEST_STATE_LIVE        StreamIngestState = 3
+)
+
+// Enum value maps for StreamIngestState.
+var (
+	StreamIngestState_name = map[int32]string{
+		0: "STREAM_INGEST_STATE_UNSPECIFIED",
+		1: "STREAM_INGEST_STATE_IDLE",
+		2: "STREAM_INGEST_STATE_CONNECTED",
+		3: "STREAM_INGEST_STATE_LIVE",
+	}
+	StreamIngestState_value = map[string]int32{
+		"STREAM_INGEST_STATE_UNSPECIFIED": 0,
+		"STREAM_INGEST_STATE_IDLE":        1,
+		"STREAM_INGEST_STATE_CONNECTED":   2,
+		"STREAM_INGEST_STATE_LIVE":        3,
+	}
+)
+
+func (x StreamIngestState) Enum() *StreamIngestState {
+	p := new(StreamIngestState)
+	*p = x
+	return p
+}
+
+func (x StreamIngestState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (StreamIngestState) Descriptor() protoreflect.EnumDescriptor {
+	return file_foghorn_control_proto_enumTypes[1].Descriptor()
+}
+
+func (StreamIngestState) Type() protoreflect.EnumType {
+	return &file_foghorn_control_proto_enumTypes[1]
+}
+
+func (x StreamIngestState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use StreamIngestState.Descriptor instead.
+func (StreamIngestState) EnumDescriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{1}
 }
 
 type RetrieveDVRChapterRequest struct {
@@ -298,15 +353,16 @@ func (x *RetrieveDVRChapterResponse) GetActualMediaEndMs() int64 {
 }
 
 type ListDVRChaptersRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	DvrArtifactId   string                 `protobuf:"bytes,1,opt,name=dvr_artifact_id,json=dvrArtifactId,proto3" json:"dvr_artifact_id,omitempty"`
-	Mode            string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"` // restrict to chapters of this mode; empty = all
-	IntervalSeconds int32                  `protobuf:"varint,3,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
-	RangeStartMs    int64                  `protobuf:"varint,4,opt,name=range_start_ms,json=rangeStartMs,proto3" json:"range_start_ms,omitempty"` // 0 = no lower bound
-	RangeEndMs      int64                  `protobuf:"varint,5,opt,name=range_end_ms,json=rangeEndMs,proto3" json:"range_end_ms,omitempty"`       // 0 = no upper bound
-	PageSize        int32                  `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`               // default 200, max 1000
-	PageToken       string                 `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`             // keyset cursor (start_ms as decimal text)
-	TenantId        string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	state           protoimpl.MessageState          `protogen:"open.v1"`
+	DvrArtifactId   string                          `protobuf:"bytes,1,opt,name=dvr_artifact_id,json=dvrArtifactId,proto3" json:"dvr_artifact_id,omitempty"`
+	Mode            string                          `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"` // restrict to chapters of this mode; empty = all
+	IntervalSeconds int32                           `protobuf:"varint,3,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
+	RangeStartMs    int64                           `protobuf:"varint,4,opt,name=range_start_ms,json=rangeStartMs,proto3" json:"range_start_ms,omitempty"` // 0 = no lower bound
+	RangeEndMs      int64                           `protobuf:"varint,5,opt,name=range_end_ms,json=rangeEndMs,proto3" json:"range_end_ms,omitempty"`       // 0 = no upper bound
+	PageSize        int32                           `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`               // default 200, max 1000
+	PageToken       string                          `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`             // keyset cursor (start_ms as decimal text)
+	TenantId        string                          `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Pagination      *common.CursorPaginationRequest `protobuf:"bytes,9,opt,name=pagination,proto3" json:"pagination,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -395,6 +451,13 @@ func (x *ListDVRChaptersRequest) GetTenantId() string {
 		return x.TenantId
 	}
 	return ""
+}
+
+func (x *ListDVRChaptersRequest) GetPagination() *common.CursorPaginationRequest {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
 }
 
 type ChapterRef struct {
@@ -546,9 +609,10 @@ func (x *ChapterRef) GetActualMediaEndMs() int64 {
 }
 
 type ListDVRChaptersResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Chapters      []*ChapterRef          `protobuf:"bytes,1,rep,name=chapters,proto3" json:"chapters,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"` // empty when no more pages
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	Chapters      []*ChapterRef                    `protobuf:"bytes,1,rep,name=chapters,proto3" json:"chapters,omitempty"`
+	NextPageToken string                           `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"` // empty when no more pages
+	Pagination    *common.CursorPaginationResponse `protobuf:"bytes,3,opt,name=pagination,proto3" json:"pagination,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -595,6 +659,13 @@ func (x *ListDVRChaptersResponse) GetNextPageToken() string {
 		return x.NextPageToken
 	}
 	return ""
+}
+
+func (x *ListDVRChaptersResponse) GetPagination() *common.CursorPaginationResponse {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
 }
 
 type SetNodeModeRequest struct {
@@ -780,11 +851,11 @@ type GetNodeHealthResponse struct {
 	ClusterId         string                  `protobuf:"bytes,7,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	TenantId          string                  `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // owning tenant (empty for operator nodes)
 	CpuPercent        float64                 `protobuf:"fixed64,9,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
-	RamUsedMb         float64                 `protobuf:"fixed64,10,opt,name=ram_used_mb,json=ramUsedMb,proto3" json:"ram_used_mb,omitempty"`
-	RamMaxMb          float64                 `protobuf:"fixed64,11,opt,name=ram_max_mb,json=ramMaxMb,proto3" json:"ram_max_mb,omitempty"`
-	BandwidthUpMbps   float64                 `protobuf:"fixed64,12,opt,name=bandwidth_up_mbps,json=bandwidthUpMbps,proto3" json:"bandwidth_up_mbps,omitempty"`
-	BandwidthDownMbps float64                 `protobuf:"fixed64,13,opt,name=bandwidth_down_mbps,json=bandwidthDownMbps,proto3" json:"bandwidth_down_mbps,omitempty"`
-	BwLimitMbps       float64                 `protobuf:"fixed64,14,opt,name=bw_limit_mbps,json=bwLimitMbps,proto3" json:"bw_limit_mbps,omitempty"`
+	RamUsedMb         float64                 `protobuf:"fixed64,10,opt,name=ram_used_mb,json=ramUsedMb,proto3" json:"ram_used_mb,omitempty"`                         // MiB
+	RamMaxMb          float64                 `protobuf:"fixed64,11,opt,name=ram_max_mb,json=ramMaxMb,proto3" json:"ram_max_mb,omitempty"`                            // MiB
+	BandwidthUpMbps   float64                 `protobuf:"fixed64,12,opt,name=bandwidth_up_mbps,json=bandwidthUpMbps,proto3" json:"bandwidth_up_mbps,omitempty"`       // Decimal Mbit/s, egress
+	BandwidthDownMbps float64                 `protobuf:"fixed64,13,opt,name=bandwidth_down_mbps,json=bandwidthDownMbps,proto3" json:"bandwidth_down_mbps,omitempty"` // Decimal Mbit/s, ingress
+	BwLimitMbps       float64                 `protobuf:"fixed64,14,opt,name=bw_limit_mbps,json=bwLimitMbps,proto3" json:"bw_limit_mbps,omitempty"`                   // Decimal Mbit/s, egress budget
 	DiskTotalBytes    uint64                  `protobuf:"varint,15,opt,name=disk_total_bytes,json=diskTotalBytes,proto3" json:"disk_total_bytes,omitempty"`
 	DiskUsedBytes     uint64                  `protobuf:"varint,16,opt,name=disk_used_bytes,json=diskUsedBytes,proto3" json:"disk_used_bytes,omitempty"`
 	Location          string                  `protobuf:"bytes,17,opt,name=location,proto3" json:"location,omitempty"`
@@ -793,10 +864,16 @@ type GetNodeHealthResponse struct {
 	ComponentVersions []*NodeComponentVersion `protobuf:"bytes,20,rep,name=component_versions,json=componentVersions,proto3" json:"component_versions,omitempty"`
 	// Edge config last applied by the provisioner, as the node reports it.
 	// Empty when the node has not reported a provisioned-config marker.
-	ProvisionedConfigCliVersion   string   `protobuf:"bytes,21,opt,name=provisioned_config_cli_version,json=provisionedConfigCliVersion,proto3" json:"provisioned_config_cli_version,omitempty"`
-	ProvisionedConfigDigest       string   `protobuf:"bytes,22,opt,name=provisioned_config_digest,json=provisionedConfigDigest,proto3" json:"provisioned_config_digest,omitempty"`
-	ProvisionedConfigRenderDigest string   `protobuf:"bytes,23,opt,name=provisioned_config_render_digest,json=provisionedConfigRenderDigest,proto3" json:"provisioned_config_render_digest,omitempty"`
-	Capabilities                  []string `protobuf:"bytes,24,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	ProvisionedConfigCliVersion   string                                `protobuf:"bytes,21,opt,name=provisioned_config_cli_version,json=provisionedConfigCliVersion,proto3" json:"provisioned_config_cli_version,omitempty"`
+	ProvisionedConfigDigest       string                                `protobuf:"bytes,22,opt,name=provisioned_config_digest,json=provisionedConfigDigest,proto3" json:"provisioned_config_digest,omitempty"`
+	ProvisionedConfigRenderDigest string                                `protobuf:"bytes,23,opt,name=provisioned_config_render_digest,json=provisionedConfigRenderDigest,proto3" json:"provisioned_config_render_digest,omitempty"`
+	Capabilities                  []string                              `protobuf:"bytes,24,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	BudgetSource                  capacity_values.BandwidthBudgetSource `protobuf:"varint,25,opt,name=budget_source,json=budgetSource,proto3,enum=helmsmancontrol.BandwidthBudgetSource" json:"budget_source,omitempty"`
+	CapacityRevisionComposed      uint64                                `protobuf:"varint,26,opt,name=capacity_revision_composed,json=capacityRevisionComposed,proto3" json:"capacity_revision_composed,omitempty"`
+	CapacityRevisionApplied       *uint64                               `protobuf:"varint,27,opt,name=capacity_revision_applied,json=capacityRevisionApplied,proto3,oneof" json:"capacity_revision_applied,omitempty"`
+	EgressUsableMbps              float64                               `protobuf:"fixed64,28,opt,name=egress_usable_mbps,json=egressUsableMbps,proto3" json:"egress_usable_mbps,omitempty"`
+	EgressReservedMbps            float64                               `protobuf:"fixed64,29,opt,name=egress_reserved_mbps,json=egressReservedMbps,proto3" json:"egress_reserved_mbps,omitempty"`
+	ObservedSource                capacity_values.ObservedSource        `protobuf:"varint,30,opt,name=observed_source,json=observedSource,proto3,enum=helmsmancontrol.ObservedSource" json:"observed_source,omitempty"`
 	unknownFields                 protoimpl.UnknownFields
 	sizeCache                     protoimpl.SizeCache
 }
@@ -997,6 +1074,48 @@ func (x *GetNodeHealthResponse) GetCapabilities() []string {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *GetNodeHealthResponse) GetBudgetSource() capacity_values.BandwidthBudgetSource {
+	if x != nil {
+		return x.BudgetSource
+	}
+	return capacity_values.BandwidthBudgetSource(0)
+}
+
+func (x *GetNodeHealthResponse) GetCapacityRevisionComposed() uint64 {
+	if x != nil {
+		return x.CapacityRevisionComposed
+	}
+	return 0
+}
+
+func (x *GetNodeHealthResponse) GetCapacityRevisionApplied() uint64 {
+	if x != nil && x.CapacityRevisionApplied != nil {
+		return *x.CapacityRevisionApplied
+	}
+	return 0
+}
+
+func (x *GetNodeHealthResponse) GetEgressUsableMbps() float64 {
+	if x != nil {
+		return x.EgressUsableMbps
+	}
+	return 0
+}
+
+func (x *GetNodeHealthResponse) GetEgressReservedMbps() float64 {
+	if x != nil {
+		return x.EgressReservedMbps
+	}
+	return 0
+}
+
+func (x *GetNodeHealthResponse) GetObservedSource() capacity_values.ObservedSource {
+	if x != nil {
+		return x.ObservedSource
+	}
+	return capacity_values.ObservedSource(0)
 }
 
 type NodeComponentVersion struct {
@@ -1428,8 +1547,10 @@ func (x *TerminateTenantStreamsRequest) GetReason() string {
 type TerminateStreamSessionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                              // e.g., "account_inactive"
-	StreamNames   []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"` // Required non-empty scope of internal names.
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                                                                                                        // e.g., "account_inactive"
+	StreamNames   []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"`                                                                           // Required non-empty scope of internal names.
+	ClaimFences   map[string]string      `protobuf:"bytes,4,rep,name=claim_fences,json=claimFences,proto3" json:"claim_fences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Exact publisher execution token per internal name.
+	StreamId      string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                                                                    // Public stream ID required by the claimed-stop RPC.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1483,6 +1604,20 @@ func (x *TerminateStreamSessionsRequest) GetStreamNames() []string {
 		return x.StreamNames
 	}
 	return nil
+}
+
+func (x *TerminateStreamSessionsRequest) GetClaimFences() map[string]string {
+	if x != nil {
+		return x.ClaimFences
+	}
+	return nil
+}
+
+func (x *TerminateStreamSessionsRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
 }
 
 // TerminateTenantStreamsResponse indicates the result of termination
@@ -1794,11 +1929,208 @@ func (x *TestPlaybackAccessResponse) GetResolvedInternalName() string {
 	return ""
 }
 
+type StreamIngest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	State          StreamIngestState      `protobuf:"varint,1,opt,name=state,proto3,enum=foghorn_control.StreamIngestState" json:"state,omitempty"`
+	IsLive         bool                   `protobuf:"varint,2,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`
+	SessionId      string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ConnectedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"`
+	LiveSince      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=live_since,json=liveSince,proto3" json:"live_since,omitempty"`
+	EndedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
+	ResumableUntil *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=resumable_until,json=resumableUntil,proto3" json:"resumable_until,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *StreamIngest) Reset() {
+	*x = StreamIngest{}
+	mi := &file_foghorn_control_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamIngest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamIngest) ProtoMessage() {}
+
+func (x *StreamIngest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamIngest.ProtoReflect.Descriptor instead.
+func (*StreamIngest) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *StreamIngest) GetState() StreamIngestState {
+	if x != nil {
+		return x.State
+	}
+	return StreamIngestState_STREAM_INGEST_STATE_UNSPECIFIED
+}
+
+func (x *StreamIngest) GetIsLive() bool {
+	if x != nil {
+		return x.IsLive
+	}
+	return false
+}
+
+func (x *StreamIngest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *StreamIngest) GetConnectedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ConnectedAt
+	}
+	return nil
+}
+
+func (x *StreamIngest) GetLiveSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LiveSince
+	}
+	return nil
+}
+
+func (x *StreamIngest) GetEndedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EndedAt
+	}
+	return nil
+}
+
+func (x *StreamIngest) GetResumableUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ResumableUntil
+	}
+	return nil
+}
+
+type GetStreamIngestStatesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamIds     []string               `protobuf:"bytes,2,rep,name=stream_ids,json=streamIds,proto3" json:"stream_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStreamIngestStatesRequest) Reset() {
+	*x = GetStreamIngestStatesRequest{}
+	mi := &file_foghorn_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStreamIngestStatesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStreamIngestStatesRequest) ProtoMessage() {}
+
+func (x *GetStreamIngestStatesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStreamIngestStatesRequest.ProtoReflect.Descriptor instead.
+func (*GetStreamIngestStatesRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GetStreamIngestStatesRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetStreamIngestStatesRequest) GetStreamIds() []string {
+	if x != nil {
+		return x.StreamIds
+	}
+	return nil
+}
+
+type GetStreamIngestStatesResponse struct {
+	state  protoimpl.MessageState   `protogen:"open.v1"`
+	States map[string]*StreamIngest `protobuf:"bytes,1,rep,name=states,proto3" json:"states,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Cell failures are isolated to these streams. Missing catalog streams are not returned.
+	UnavailableStreamIds []string `protobuf:"bytes,2,rep,name=unavailable_stream_ids,json=unavailableStreamIds,proto3" json:"unavailable_stream_ids,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *GetStreamIngestStatesResponse) Reset() {
+	*x = GetStreamIngestStatesResponse{}
+	mi := &file_foghorn_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStreamIngestStatesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStreamIngestStatesResponse) ProtoMessage() {}
+
+func (x *GetStreamIngestStatesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStreamIngestStatesResponse.ProtoReflect.Descriptor instead.
+func (*GetStreamIngestStatesResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetStreamIngestStatesResponse) GetStates() map[string]*StreamIngest {
+	if x != nil {
+		return x.States
+	}
+	return nil
+}
+
+func (x *GetStreamIngestStatesResponse) GetUnavailableStreamIds() []string {
+	if x != nil {
+		return x.UnavailableStreamIds
+	}
+	return nil
+}
+
 var File_foghorn_control_proto protoreflect.FileDescriptor
 
 const file_foghorn_control_proto_rawDesc = "" +
 	"\n" +
-	"\x15foghorn_control.proto\x12\x0ffoghorn_control\"\xd1\x01\n" +
+	"\x15foghorn_control.proto\x12\x0ffoghorn_control\x1a\x15capacity_values.proto\x1a\fcommon.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd1\x01\n" +
 	"\x19RetrieveDVRChapterRequest\x12&\n" +
 	"\x0fdvr_artifact_id\x18\x01 \x01(\tR\rdvrArtifactId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12)\n" +
@@ -1822,7 +2154,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"playbackId\x121\n" +
 	"\x15actual_media_start_ms\x18\f \x01(\x03R\x12actualMediaStartMs\x12-\n" +
 	"\x13actual_media_end_ms\x18\r \x01(\x03R\x10actualMediaEndMsJ\x04\b\n" +
-	"\x10\vR\x0fmanifest_s3_keyR\fmanifest_urlR\x05error\"\xa0\x02\n" +
+	"\x10\vR\x0fmanifest_s3_keyR\fmanifest_urlR\x05error\"\xe1\x02\n" +
 	"\x16ListDVRChaptersRequest\x12&\n" +
 	"\x0fdvr_artifact_id\x18\x01 \x01(\tR\rdvrArtifactId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12)\n" +
@@ -1833,7 +2165,10 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\a \x01(\tR\tpageToken\x12\x1b\n" +
-	"\ttenant_id\x18\b \x01(\tR\btenantId\"\xfa\x03\n" +
+	"\ttenant_id\x18\b \x01(\tR\btenantId\x12?\n" +
+	"\n" +
+	"pagination\x18\t \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
+	"pagination\"\xfa\x03\n" +
 	"\n" +
 	"ChapterRef\x12\x1d\n" +
 	"\n" +
@@ -1853,10 +2188,13 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\vplayback_id\x18\f \x01(\tR\n" +
 	"playbackId\x121\n" +
 	"\x15actual_media_start_ms\x18\r \x01(\x03R\x12actualMediaStartMs\x12-\n" +
-	"\x13actual_media_end_ms\x18\x0e \x01(\x03R\x10actualMediaEndMs\"z\n" +
+	"\x13actual_media_end_ms\x18\x0e \x01(\x03R\x10actualMediaEndMs\"\xbc\x01\n" +
 	"\x17ListDVRChaptersResponse\x127\n" +
 	"\bchapters\x18\x01 \x03(\v2\x1b.foghorn_control.ChapterRefR\bchapters\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"X\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12@\n" +
+	"\n" +
+	"pagination\x18\x03 \x01(\v2 .common.CursorPaginationResponseR\n" +
+	"pagination\"X\n" +
 	"\x12SetNodeModeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x15\n" +
@@ -1867,7 +2205,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12:\n" +
 	"\x06status\x18\x04 \x01(\x0e2\".foghorn_control.SetNodeModeStatusR\x06status\"/\n" +
 	"\x14GetNodeHealthRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x9b\b\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xaf\v\n" +
 	"\x15GetNodeHealthResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10operational_mode\x18\x02 \x01(\tR\x0foperationalMode\x12\x1d\n" +
@@ -1897,10 +2235,17 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\x1eprovisioned_config_cli_version\x18\x15 \x01(\tR\x1bprovisionedConfigCliVersion\x12:\n" +
 	"\x19provisioned_config_digest\x18\x16 \x01(\tR\x17provisionedConfigDigest\x12G\n" +
 	" provisioned_config_render_digest\x18\x17 \x01(\tR\x1dprovisionedConfigRenderDigest\x12\"\n" +
-	"\fcapabilities\x18\x18 \x03(\tR\fcapabilitiesB\v\n" +
+	"\fcapabilities\x18\x18 \x03(\tR\fcapabilities\x12K\n" +
+	"\rbudget_source\x18\x19 \x01(\x0e2&.helmsmancontrol.BandwidthBudgetSourceR\fbudgetSource\x12<\n" +
+	"\x1acapacity_revision_composed\x18\x1a \x01(\x04R\x18capacityRevisionComposed\x12?\n" +
+	"\x19capacity_revision_applied\x18\x1b \x01(\x04H\x02R\x17capacityRevisionApplied\x88\x01\x01\x12,\n" +
+	"\x12egress_usable_mbps\x18\x1c \x01(\x01R\x10egressUsableMbps\x120\n" +
+	"\x14egress_reserved_mbps\x18\x1d \x01(\x01R\x12egressReservedMbps\x12H\n" +
+	"\x0fobserved_source\x18\x1e \x01(\x0e2\x1f.helmsmancontrol.ObservedSourceR\x0eobservedSourceB\v\n" +
 	"\t_latitudeB\f\n" +
 	"\n" +
-	"_longitude\"N\n" +
+	"_longitudeB\x1c\n" +
+	"\x1a_capacity_revision_applied\"N\n" +
 	"\x14NodeComponentVersion\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\"<\n" +
@@ -1931,11 +2276,16 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\x13entries_invalidated\x18\x01 \x01(\x05R\x12entriesInvalidated\"T\n" +
 	"\x1dTerminateTenantStreamsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"x\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xba\x02\n" +
 	"\x1eTerminateStreamSessionsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12!\n" +
-	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\"\xa3\x01\n" +
+	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\x12c\n" +
+	"\fclaim_fences\x18\x04 \x03(\v2@.foghorn_control.TerminateStreamSessionsRequest.ClaimFencesEntryR\vclaimFences\x12\x1b\n" +
+	"\tstream_id\x18\x05 \x01(\tR\bstreamId\x1a>\n" +
+	"\x10ClaimFencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa3\x01\n" +
 	"\x1eTerminateTenantStreamsResponse\x12-\n" +
 	"\x12streams_terminated\x18\x01 \x01(\x05R\x11streamsTerminated\x12/\n" +
 	"\x13sessions_terminated\x18\x02 \x01(\x05R\x12sessionsTerminated\x12!\n" +
@@ -1967,13 +2317,38 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"claimsJson\x12%\n" +
 	"\x0ewebhook_status\x18\a \x01(\x05R\rwebhookStatus\x12,\n" +
 	"\x12webhook_latency_ms\x18\b \x01(\x05R\x10webhookLatencyMs\x124\n" +
-	"\x16resolved_internal_name\x18\t \x01(\tR\x14resolvedInternalName*\xd0\x01\n" +
+	"\x16resolved_internal_name\x18\t \x01(\tR\x14resolvedInternalName\"\xf6\x02\n" +
+	"\fStreamIngest\x128\n" +
+	"\x05state\x18\x01 \x01(\x0e2\".foghorn_control.StreamIngestStateR\x05state\x12\x17\n" +
+	"\ais_live\x18\x02 \x01(\bR\x06isLive\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\x12=\n" +
+	"\fconnected_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vconnectedAt\x129\n" +
+	"\n" +
+	"live_since\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tliveSince\x125\n" +
+	"\bended_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\aendedAt\x12C\n" +
+	"\x0fresumable_until\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0eresumableUntil\"Z\n" +
+	"\x1cGetStreamIngestStatesRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"stream_ids\x18\x02 \x03(\tR\tstreamIds\"\x83\x02\n" +
+	"\x1dGetStreamIngestStatesResponse\x12R\n" +
+	"\x06states\x18\x01 \x03(\v2:.foghorn_control.GetStreamIngestStatesResponse.StatesEntryR\x06states\x124\n" +
+	"\x16unavailable_stream_ids\x18\x02 \x03(\tR\x14unavailableStreamIds\x1aX\n" +
+	"\vStatesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x123\n" +
+	"\x05value\x18\x02 \x01(\v2\x1d.foghorn_control.StreamIngestR\x05value:\x028\x01*\xd0\x01\n" +
 	"\x11SetNodeModeStatus\x12$\n" +
 	" SET_NODE_MODE_STATUS_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cSET_NODE_MODE_STATUS_SUCCESS\x10\x01\x12%\n" +
 	"!SET_NODE_MODE_STATUS_INVALID_MODE\x10\x02\x12\"\n" +
 	"\x1eSET_NODE_MODE_STATUS_NOT_FOUND\x10\x03\x12(\n" +
-	"$SET_NODE_MODE_STATUS_ALREADY_IN_MODE\x10\x04BTZRgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control;foghorncontrolpbb\x06proto3"
+	"$SET_NODE_MODE_STATUS_ALREADY_IN_MODE\x10\x04*\x97\x01\n" +
+	"\x11StreamIngestState\x12#\n" +
+	"\x1fSTREAM_INGEST_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18STREAM_INGEST_STATE_IDLE\x10\x01\x12!\n" +
+	"\x1dSTREAM_INGEST_STATE_CONNECTED\x10\x02\x12\x1c\n" +
+	"\x18STREAM_INGEST_STATE_LIVE\x10\x03BTZRgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control;foghorncontrolpbb\x06proto3"
 
 var (
 	file_foghorn_control_proto_rawDescOnce sync.Once
@@ -1987,42 +2362,65 @@ func file_foghorn_control_proto_rawDescGZIP() []byte {
 	return file_foghorn_control_proto_rawDescData
 }
 
-var file_foghorn_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_foghorn_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_foghorn_control_proto_goTypes = []any{
-	(SetNodeModeStatus)(0),                 // 0: foghorn_control.SetNodeModeStatus
-	(*RetrieveDVRChapterRequest)(nil),      // 1: foghorn_control.RetrieveDVRChapterRequest
-	(*RetrieveDVRChapterResponse)(nil),     // 2: foghorn_control.RetrieveDVRChapterResponse
-	(*ListDVRChaptersRequest)(nil),         // 3: foghorn_control.ListDVRChaptersRequest
-	(*ChapterRef)(nil),                     // 4: foghorn_control.ChapterRef
-	(*ListDVRChaptersResponse)(nil),        // 5: foghorn_control.ListDVRChaptersResponse
-	(*SetNodeModeRequest)(nil),             // 6: foghorn_control.SetNodeModeRequest
-	(*SetNodeModeResponse)(nil),            // 7: foghorn_control.SetNodeModeResponse
-	(*GetNodeHealthRequest)(nil),           // 8: foghorn_control.GetNodeHealthRequest
-	(*GetNodeHealthResponse)(nil),          // 9: foghorn_control.GetNodeHealthResponse
-	(*NodeComponentVersion)(nil),           // 10: foghorn_control.NodeComponentVersion
-	(*ListNodeUpdateStatusRequest)(nil),    // 11: foghorn_control.ListNodeUpdateStatusRequest
-	(*ListNodeUpdateStatusResponse)(nil),   // 12: foghorn_control.ListNodeUpdateStatusResponse
-	(*NodeUpdateStatus)(nil),               // 13: foghorn_control.NodeUpdateStatus
-	(*InvalidateTenantCacheRequest)(nil),   // 14: foghorn_control.InvalidateTenantCacheRequest
-	(*InvalidateTenantCacheResponse)(nil),  // 15: foghorn_control.InvalidateTenantCacheResponse
-	(*TerminateTenantStreamsRequest)(nil),  // 16: foghorn_control.TerminateTenantStreamsRequest
-	(*TerminateStreamSessionsRequest)(nil), // 17: foghorn_control.TerminateStreamSessionsRequest
-	(*TerminateTenantStreamsResponse)(nil), // 18: foghorn_control.TerminateTenantStreamsResponse
-	(*TestPlaybackAccessRequest)(nil),      // 19: foghorn_control.TestPlaybackAccessRequest
-	(*TestPlaybackAccessResponse)(nil),     // 20: foghorn_control.TestPlaybackAccessResponse
+	(SetNodeModeStatus)(0),                     // 0: foghorn_control.SetNodeModeStatus
+	(StreamIngestState)(0),                     // 1: foghorn_control.StreamIngestState
+	(*RetrieveDVRChapterRequest)(nil),          // 2: foghorn_control.RetrieveDVRChapterRequest
+	(*RetrieveDVRChapterResponse)(nil),         // 3: foghorn_control.RetrieveDVRChapterResponse
+	(*ListDVRChaptersRequest)(nil),             // 4: foghorn_control.ListDVRChaptersRequest
+	(*ChapterRef)(nil),                         // 5: foghorn_control.ChapterRef
+	(*ListDVRChaptersResponse)(nil),            // 6: foghorn_control.ListDVRChaptersResponse
+	(*SetNodeModeRequest)(nil),                 // 7: foghorn_control.SetNodeModeRequest
+	(*SetNodeModeResponse)(nil),                // 8: foghorn_control.SetNodeModeResponse
+	(*GetNodeHealthRequest)(nil),               // 9: foghorn_control.GetNodeHealthRequest
+	(*GetNodeHealthResponse)(nil),              // 10: foghorn_control.GetNodeHealthResponse
+	(*NodeComponentVersion)(nil),               // 11: foghorn_control.NodeComponentVersion
+	(*ListNodeUpdateStatusRequest)(nil),        // 12: foghorn_control.ListNodeUpdateStatusRequest
+	(*ListNodeUpdateStatusResponse)(nil),       // 13: foghorn_control.ListNodeUpdateStatusResponse
+	(*NodeUpdateStatus)(nil),                   // 14: foghorn_control.NodeUpdateStatus
+	(*InvalidateTenantCacheRequest)(nil),       // 15: foghorn_control.InvalidateTenantCacheRequest
+	(*InvalidateTenantCacheResponse)(nil),      // 16: foghorn_control.InvalidateTenantCacheResponse
+	(*TerminateTenantStreamsRequest)(nil),      // 17: foghorn_control.TerminateTenantStreamsRequest
+	(*TerminateStreamSessionsRequest)(nil),     // 18: foghorn_control.TerminateStreamSessionsRequest
+	(*TerminateTenantStreamsResponse)(nil),     // 19: foghorn_control.TerminateTenantStreamsResponse
+	(*TestPlaybackAccessRequest)(nil),          // 20: foghorn_control.TestPlaybackAccessRequest
+	(*TestPlaybackAccessResponse)(nil),         // 21: foghorn_control.TestPlaybackAccessResponse
+	(*StreamIngest)(nil),                       // 22: foghorn_control.StreamIngest
+	(*GetStreamIngestStatesRequest)(nil),       // 23: foghorn_control.GetStreamIngestStatesRequest
+	(*GetStreamIngestStatesResponse)(nil),      // 24: foghorn_control.GetStreamIngestStatesResponse
+	nil,                                        // 25: foghorn_control.TerminateStreamSessionsRequest.ClaimFencesEntry
+	nil,                                        // 26: foghorn_control.GetStreamIngestStatesResponse.StatesEntry
+	(*common.CursorPaginationRequest)(nil),     // 27: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),    // 28: common.CursorPaginationResponse
+	(capacity_values.BandwidthBudgetSource)(0), // 29: helmsmancontrol.BandwidthBudgetSource
+	(capacity_values.ObservedSource)(0),        // 30: helmsmancontrol.ObservedSource
+	(*timestamppb.Timestamp)(nil),              // 31: google.protobuf.Timestamp
 }
 var file_foghorn_control_proto_depIdxs = []int32{
-	4,  // 0: foghorn_control.ListDVRChaptersResponse.chapters:type_name -> foghorn_control.ChapterRef
-	0,  // 1: foghorn_control.SetNodeModeResponse.status:type_name -> foghorn_control.SetNodeModeStatus
-	10, // 2: foghorn_control.GetNodeHealthResponse.component_versions:type_name -> foghorn_control.NodeComponentVersion
-	13, // 3: foghorn_control.ListNodeUpdateStatusResponse.nodes:type_name -> foghorn_control.NodeUpdateStatus
-	10, // 4: foghorn_control.NodeUpdateStatus.component_versions:type_name -> foghorn_control.NodeComponentVersion
-	5,  // [5:5] is the sub-list for method output_type
-	5,  // [5:5] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	27, // 0: foghorn_control.ListDVRChaptersRequest.pagination:type_name -> common.CursorPaginationRequest
+	5,  // 1: foghorn_control.ListDVRChaptersResponse.chapters:type_name -> foghorn_control.ChapterRef
+	28, // 2: foghorn_control.ListDVRChaptersResponse.pagination:type_name -> common.CursorPaginationResponse
+	0,  // 3: foghorn_control.SetNodeModeResponse.status:type_name -> foghorn_control.SetNodeModeStatus
+	11, // 4: foghorn_control.GetNodeHealthResponse.component_versions:type_name -> foghorn_control.NodeComponentVersion
+	29, // 5: foghorn_control.GetNodeHealthResponse.budget_source:type_name -> helmsmancontrol.BandwidthBudgetSource
+	30, // 6: foghorn_control.GetNodeHealthResponse.observed_source:type_name -> helmsmancontrol.ObservedSource
+	14, // 7: foghorn_control.ListNodeUpdateStatusResponse.nodes:type_name -> foghorn_control.NodeUpdateStatus
+	11, // 8: foghorn_control.NodeUpdateStatus.component_versions:type_name -> foghorn_control.NodeComponentVersion
+	25, // 9: foghorn_control.TerminateStreamSessionsRequest.claim_fences:type_name -> foghorn_control.TerminateStreamSessionsRequest.ClaimFencesEntry
+	1,  // 10: foghorn_control.StreamIngest.state:type_name -> foghorn_control.StreamIngestState
+	31, // 11: foghorn_control.StreamIngest.connected_at:type_name -> google.protobuf.Timestamp
+	31, // 12: foghorn_control.StreamIngest.live_since:type_name -> google.protobuf.Timestamp
+	31, // 13: foghorn_control.StreamIngest.ended_at:type_name -> google.protobuf.Timestamp
+	31, // 14: foghorn_control.StreamIngest.resumable_until:type_name -> google.protobuf.Timestamp
+	26, // 15: foghorn_control.GetStreamIngestStatesResponse.states:type_name -> foghorn_control.GetStreamIngestStatesResponse.StatesEntry
+	22, // 16: foghorn_control.GetStreamIngestStatesResponse.StatesEntry.value:type_name -> foghorn_control.StreamIngest
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_control_proto_init() }
@@ -2036,8 +2434,8 @@ func file_foghorn_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_control_proto_rawDesc), len(file_foghorn_control_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   20,
+			NumEnums:      2,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

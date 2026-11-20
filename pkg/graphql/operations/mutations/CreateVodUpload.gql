@@ -11,6 +11,7 @@ mutation CreateVodUpload($input: CreateVodUploadInput!) {
         presignedUrl
       }
       expiresAt
+      keepOriginal
     }
     ... on ValidationError {
       message

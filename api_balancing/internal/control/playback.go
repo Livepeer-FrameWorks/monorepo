@@ -858,11 +858,12 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		metadata.ThumbnailAssets = buildPosterThumbnailAssets(chandlerBase, streamID)
 	}
 
-	return &sharedpb.ViewerEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata:  metadata,
-	}, nil
+	response := &sharedpb.ViewerEndpointResponse{Primary: endpoints[0], Fallbacks: endpoints[1:], Metadata: metadata}
+	reservationStream := internalName
+	if reservationStream == "" {
+		reservationStream = artifactResp.ArtifactHash
+	}
+	return reserveArtifactPlaybackResponse(ctx, response, reservationStream)
 }
 
 // rankNodeScoresForArtifact projects load-balancer node candidates
@@ -1879,4 +1880,31 @@ func localOriginRelayable(ctx context.Context, deps *PlaybackDependencies, artif
 	}
 	_, err := foghorndb.New(deps.DB).GetFreshRelayOriginNode(ctx, foghorndb.GetFreshRelayOriginNodeParams{ArtifactHash: artifactHash})
 	return err == nil
+}
+
+// The primary reserves the playback; a fallback reserves only if the player connects to it.
+func reserveArtifactPlaybackResponse(ctx context.Context, response *sharedpb.ViewerEndpointResponse, stream string) (*sharedpb.ViewerEndpointResponse, error) {
+	if mist.ViewerSessionID(response.GetPrimary().GetUrl()) != "" {
+		return response, nil
+	}
+	id, err := mist.NewViewerSessionID()
+	if err != nil {
+		return nil, fmt.Errorf("issue artifact viewer session: %w", err)
+	}
+	endpoints := append([]*sharedpb.ViewerEndpoint{response.Primary}, response.Fallbacks...)
+	for i, endpoint := range endpoints {
+		allowed, err := state.DefaultManager().PrepareViewerBandwidth(ctx, id, endpoint.GetNodeId(), stream)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
+		copy(endpoints[1:i+1], endpoints[:i])
+		endpoints[0] = endpoint
+		response.Primary, response.Fallbacks = endpoints[0], endpoints[1:]
+		AppendViewerSession(response, id)
+		return response, nil
+	}
+	return nil, fmt.Errorf("%w: node egress capacity exhausted", ErrStoredMediaPlacementUnavailable)
 }

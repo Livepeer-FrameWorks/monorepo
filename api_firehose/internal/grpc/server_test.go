@@ -1115,20 +1115,6 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 			wantKey: "stream_id",
 		},
 		{
-			name: "StreamKeyEvent",
-			event: &ipcpb.ServiceEvent{
-				EventType: "stream_key",
-				TenantId:  tenantID,
-				Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
-					StreamKeyEvent: &ipcpb.StreamKeyEvent{
-						StreamId: "stream-1",
-						KeyId:    "key-1",
-					},
-				},
-			},
-			wantKey: "key_id",
-		},
-		{
 			name: "BillingEvent",
 			event: &ipcpb.ServiceEvent{
 				EventType: "billing",

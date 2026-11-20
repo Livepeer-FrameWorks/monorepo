@@ -35,6 +35,12 @@ func TestRenderCanonicalCatalog(t *testing.T) {
 	if free.Storage.Included != 10 || free.Limits.StorageGiB != 10 {
 		t.Errorf("free storage = %+v limits %+v, want 10 GiB-months and a 10 GiB cap", free.Storage, free.Limits)
 	}
+	// Plan cards quote the live rewind window from this field.
+	for id, wantSeconds := range map[string]float64{"supporter": 21600, "developer": 43200, "production": 86400} {
+		if got := byID[id].Limits.DvrMaxWindowSeconds; got != wantSeconds {
+			t.Errorf("%s dvrMaxWindowSeconds = %v, want %v", id, got, wantSeconds)
+		}
+	}
 	// Storage is priced per GiB-month; a per-hour-scale price here means the
 	// catalog regressed to GiB-hour units.
 	for _, tr := range out.Tiers {
@@ -100,5 +106,31 @@ tiers:
 	_, err := render([]byte(catalog))
 	if err == nil || !strings.Contains(err.Error(), "explicitly rate GiB-months") {
 		t.Fatalf("render error = %v, want missing storage-unit error", err)
+	}
+}
+
+func TestPlanCardsUseTheAllowedLadderCeiling(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", catalogPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := render(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Tiers []map[string]any `json:"tiers"`
+	}
+	if err := json.Unmarshal(rendered, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range document.Tiers {
+		want := float64(2160)
+		if tier["id"] == "free" {
+			want = 1080
+		}
+		if tier["maxVideoHeight"] != want {
+			t.Fatalf("%s maxVideoHeight=%v, want %v", tier["id"], tier["maxVideoHeight"], want)
+		}
 	}
 }

@@ -18,7 +18,9 @@ query GetInfrastructureOverview {
         deploymentModel
         maxConcurrentStreams
         maxConcurrentViewers
-        maxBandwidthMbps
+        capacity {
+          ...ClusterCapacityFields @mask_disable
+        }
         healthStatus
         createdAt
         visibility

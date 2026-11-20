@@ -5,6 +5,7 @@ package clientstest
 
 import (
 	"context"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -137,4 +138,92 @@ func (f *FakeCommodore) ResolvePlaybackPolicy(ctx context.Context, playbackID st
 		panic("FakeCommodore.ResolvePlaybackPolicy not stubbed")
 	}
 	return f.ResolvePlaybackPolicyFn(ctx, playbackID)
+}
+
+func (f *FakeCommodore) GetTranscodeLadderPolicy(ctx context.Context, req *commodorepb.GetTranscodeLadderPolicyRequest) (*commodorepb.TranscodeLadderPolicy, error) {
+	f.Calls++
+	if f.GetTranscodeLadderPolicyFn == nil {
+		panic("FakeCommodore.GetTranscodeLadderPolicy not stubbed")
+	}
+	return f.GetTranscodeLadderPolicyFn(ctx, req)
+}
+
+func (f *FakeCommodore) SetTenantTranscodeLadder(ctx context.Context, req *commodorepb.SetTenantTranscodeLadderRequest) (*commodorepb.TranscodeLadderPolicy, error) {
+	f.Calls++
+	if f.SetTenantTranscodeLadderFn == nil {
+		panic("FakeCommodore.SetTenantTranscodeLadder not stubbed")
+	}
+	return f.SetTenantTranscodeLadderFn(ctx, req)
+}
+
+func (f *FakeCommodore) SetVodOriginalPolicy(ctx context.Context, req *commodorepb.SetVodOriginalPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error) {
+	f.Calls++
+	if f.SetVodOriginalPolicyFn == nil {
+		panic("FakeCommodore.SetVodOriginalPolicy not stubbed")
+	}
+	return f.SetVodOriginalPolicyFn(ctx, req)
+}
+
+func (f *FakeCommodore) CreateVodOriginalDownload(ctx context.Context, req *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error) {
+	f.Calls++
+	if f.CreateVodOriginalDownloadFn == nil {
+		panic("FakeCommodore.CreateVodOriginalDownload not stubbed")
+	}
+	return f.CreateVodOriginalDownloadFn(ctx, req)
+}
+
+func (f *FakeCommodore) DeleteVodOriginal(ctx context.Context, req *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error) {
+	f.Calls++
+	if f.DeleteVodOriginalFn == nil {
+		panic("FakeCommodore.DeleteVodOriginal not stubbed")
+	}
+	return f.DeleteVodOriginalFn(ctx, req)
+}
+
+func (f *FakeCommodore) GetStreamIngestStates(ctx context.Context, ids []string) (*foghorncontrolpb.GetStreamIngestStatesResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.GetStreamIngestStatesFn == nil {
+		panic("FakeCommodore.GetStreamIngestStates not stubbed")
+	}
+	return f.GetStreamIngestStatesFn(ctx, ids)
+}
+
+func (f *FakeCommodore) ListStreamArtifacts(ctx context.Context, req *commodorepb.ListStreamArtifactsRequest) (*commodorepb.ListStreamArtifactsResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.ListStreamArtifactsFn == nil {
+		panic("FakeCommodore media API not stubbed")
+	}
+	return f.ListStreamArtifactsFn(ctx, req)
+}
+func (f *FakeCommodore) GetDVRRecording(ctx context.Context, id string) (*sharedpb.DVRInfo, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.GetDVRRecordingFn == nil {
+		panic("FakeCommodore media API not stubbed")
+	}
+	return f.GetDVRRecordingFn(ctx, id)
+}
+
+func (f *FakeCommodore) RefreshStreamKeyAndEndIngest(ctx context.Context, id string) (*commodorepb.RefreshStreamKeyResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.RefreshKeyAndEndFn == nil {
+		panic("FakeCommodore.RefreshStreamKeyAndEndIngest not stubbed")
+	}
+	return f.RefreshKeyAndEndFn(ctx, id)
+}
+func (f *FakeCommodore) DisconnectIngest(ctx context.Context, id string) (*commodorepb.DisconnectIngestResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.DisconnectIngestFn == nil {
+		panic("FakeCommodore.DisconnectIngest not stubbed")
+	}
+	return f.DisconnectIngestFn(ctx, id)
 }

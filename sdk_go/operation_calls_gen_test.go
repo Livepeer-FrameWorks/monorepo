@@ -89,14 +89,14 @@ var operationCalls = map[string]operationCall{
 	"CreateStream": {CreateStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CreateStream(ctx, c, arg[CreateStreamInput](v, "input"))
 	}},
-	"CreateStreamKey": {CreateStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateStreamKey(ctx, c, arg[string](v, "streamId"), arg[CreateStreamKeyInput](v, "input"))
-	}},
 	"CreateStripeBillingPortal": {CreateStripeBillingPortal_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CreateStripeBillingPortal(ctx, c, arg[string](v, "returnUrl"))
 	}},
 	"CreateStripeCheckout": {CreateStripeCheckout_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CreateStripeCheckout(ctx, c, arg[string](v, "tierId"), arg[string](v, "billingPeriod"), arg[string](v, "successUrl"), arg[string](v, "cancelUrl"))
+	}},
+	"CreateVodOriginalDownload": {CreateVodOriginalDownload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return CreateVodOriginalDownload(ctx, c, arg[string](v, "id"))
 	}},
 	"CreateVodUpload": {CreateVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CreateVodUpload(ctx, c, arg[CreateVodUploadInput](v, "input"))
@@ -122,17 +122,20 @@ var operationCalls = map[string]operationCall{
 	"DeleteStream": {DeleteStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return DeleteStream(ctx, c, arg[string](v, "id"))
 	}},
-	"DeleteStreamKey": {DeleteStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteStreamKey(ctx, c, arg[string](v, "streamId"), arg[string](v, "keyId"))
-	}},
 	"DeleteVodAsset": {DeleteVodAsset_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return DeleteVodAsset(ctx, c, arg[string](v, "id"))
+	}},
+	"DeleteVodOriginal": {DeleteVodOriginal_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return DeleteVodOriginal(ctx, c, arg[string](v, "id"))
 	}},
 	"DeleteWebhookEndpoint": {DeleteWebhookEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return DeleteWebhookEndpoint(ctx, c, arg[string](v, "id"))
 	}},
 	"DisableWebhookEndpoint": {DisableWebhookEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return DisableWebhookEndpoint(ctx, c, arg[string](v, "id"))
+	}},
+	"DisconnectIngest": {DisconnectIngest_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return DisconnectIngest(ctx, c, arg[string](v, "streamId"))
 	}},
 	"EnableWebhookEndpoint": {EnableWebhookEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return EnableWebhookEndpoint(ctx, c, arg[string](v, "id"))
@@ -238,6 +241,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"GetDiscoverServicesConnection": {GetDiscoverServicesConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetDiscoverServicesConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[string](v, "discoverServicesConnectionType"), arg[*string](v, "clusterId"))
+	}},
+	"GetDvrRecording": {GetDvrRecording_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetDvrRecording(ctx, c, arg[string](v, "id"))
 	}},
 	"GetFederationEventsConnection": {GetFederationEventsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetFederationEventsConnection(ctx, c, arg[TimeRangeInput](v, "timeRange"), arg[*int](v, "first"), arg[*string](v, "eventType"), arg[*bool](v, "noCache"))
@@ -446,6 +452,9 @@ var operationCalls = map[string]operationCall{
 	"GetStreamHealthSummary": {GetStreamHealthSummary_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetStreamHealthSummary(ctx, c, arg[*string](v, "streamId"), arg[*TimeRangeInput](v, "timeRange"), arg[*bool](v, "noCache"))
 	}},
+	"GetStreamIngest": {GetStreamIngest_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetStreamIngest(ctx, c, arg[string](v, "id"))
+	}},
 	"GetStreamKey": {GetStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetStreamKey(ctx, c, arg[string](v, "id"))
 	}},
@@ -469,6 +478,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"GetTrackListConnection": {GetTrackListConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetTrackListConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[string](v, "streamId"), arg[*TimeRangeInput](v, "timeRange"), arg[*bool](v, "noCache"))
+	}},
+	"GetTranscodeLadderPolicy": {GetTranscodeLadderPolicy_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
+		return GetTranscodeLadderPolicy(ctx, c)
 	}},
 	"GetUsageAggregates": {GetUsageAggregates_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetUsageAggregates(ctx, c, arg[TimeRangeInput](v, "timeRange"), arg[*string](v, "granularity"), arg[[]string](v, "usageTypes"))
@@ -539,14 +551,23 @@ var operationCalls = map[string]operationCall{
 	"ListPushTargets": {ListPushTargets_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListPushTargets(ctx, c, arg[string](v, "streamId"))
 	}},
+	"ListRecordingChapters": {ListRecordingChapters_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ListRecordingChapters(ctx, c, arg[string](v, "id"), arg[*ConnectionInput](v, "page"), arg[*float64](v, "rangeStartMs"), arg[*float64](v, "rangeEndMs"))
+	}},
 	"ListSigningKeys": {ListSigningKeys_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListSigningKeys(ctx, c, arg[*string](v, "status"), arg[*ConnectionInput](v, "page"))
 	}},
-	"ListStreamKeys": {ListStreamKeys_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListStreamKeys(ctx, c, arg[string](v, "streamId"), arg[*ConnectionInput](v, "page"))
+	"ListStreamClips": {ListStreamClips_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ListStreamClips(ctx, c, arg[string](v, "id"), arg[*ConnectionInput](v, "page"))
+	}},
+	"ListStreamIngest": {ListStreamIngest_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ListStreamIngest(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))
 	}},
 	"ListStreamMetrics": {ListStreamMetrics_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListStreamMetrics(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))
+	}},
+	"ListStreamRecordings": {ListStreamRecordings_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ListStreamRecordings(ctx, c, arg[string](v, "id"), arg[*ConnectionInput](v, "page"))
 	}},
 	"ListStreams": {ListStreams_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListStreams(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))
@@ -564,7 +585,7 @@ var operationCalls = map[string]operationCall{
 		return PromoteToPaid(ctx, c, arg[string](v, "tierId"))
 	}},
 	"RefreshStreamKey": {RefreshStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return RefreshStreamKey(ctx, c, arg[string](v, "id"))
+		return RefreshStreamKey(ctx, c, arg[string](v, "id"), arg[*bool](v, "endActiveSession"))
 	}},
 	"RejectClusterSubscription": {RejectClusterSubscription_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return RejectClusterSubscription(ctx, c, arg[string](v, "subscriptionId"), arg[*string](v, "reason"))
@@ -620,6 +641,9 @@ var operationCalls = map[string]operationCall{
 	"SetMediaRetentionPolicy": {SetMediaRetentionPolicy_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return SetMediaRetentionPolicy(ctx, c, arg[SetMediaRetentionPolicyInput](v, "input"))
 	}},
+	"SetNodeCapacity": {SetNodeCapacity_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return SetNodeCapacity(ctx, c, arg[SetNodeCapacityInput](v, "input"))
+	}},
 	"SetNodeMode": {SetNodeMode_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return SetNodeMode(ctx, c, arg[SetNodeModeInput](v, "input"))
 	}},
@@ -631,6 +655,12 @@ var operationCalls = map[string]operationCall{
 	}},
 	"SetStreamRetentionOverrides": {SetStreamRetentionOverrides_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return SetStreamRetentionOverrides(ctx, c, arg[SetStreamRetentionOverridesInput](v, "input"))
+	}},
+	"SetTranscodeLadderPolicy": {SetTranscodeLadderPolicy_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return SetTranscodeLadderPolicy(ctx, c, arg[SetTranscodeLadderPolicyInput](v, "input"))
+	}},
+	"SetVodOriginalPolicy": {SetVodOriginalPolicy_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return SetVodOriginalPolicy(ctx, c, arg[*bool](v, "keepVodOriginals"))
 	}},
 	"StartDVR": {StartDVR_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return StartDVR(ctx, c, arg[string](v, "streamId"))

@@ -9,12 +9,16 @@ import (
 // SetupTestRegistry creates a temporary connection registry with an optional
 // fake stream for the given nodeID. Returns a cleanup function that restores
 // the previous registry. Exported for cross-package tests (grpc package).
-func SetupTestRegistry(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) func() {
+func SetupTestRegistry(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, protocol ...int32) func() {
 	streams := make(map[string]ipcpb.HelmsmanControl_ConnectServer)
 	if nodeID != "" && stream != nil {
 		streams[nodeID] = stream
 	}
-	return SetupTestRegistryNodes(streams)
+	cleanup := SetupTestRegistryNodes(streams)
+	if len(protocol) > 0 && registry.conns[nodeID] != nil {
+		registry.conns[nodeID].protocolVersion = protocol[0]
+	}
+	return cleanup
 }
 
 // SetupTestRegistryNodes installs current-protocol streams for multi-node RPC tests.

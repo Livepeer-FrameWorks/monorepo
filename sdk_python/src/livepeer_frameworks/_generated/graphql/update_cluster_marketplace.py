@@ -7,6 +7,7 @@ from .base_model import BaseModel
 from .fragments import (
     AuthErrorDefault,
     ClusterDefault,
+    ClusterDefaultCapacity,  # noqa: F401
     NotFoundErrorDefault,
     ValidationErrorDefault,
 )

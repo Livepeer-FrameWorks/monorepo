@@ -64,7 +64,7 @@ func TestCreateIngestSession_MintsSignedAuthoritySnapshotAtomically(t *testing.T
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`ingest_close_tombstones`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery(`SELECT COUNT\(\*\)::integer[\s\S]*tenant_id = \$1::uuid`).
+	mock.ExpectQuery(`-- name: CountActiveTenantIngestSessions`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions[\s\S]*media_authority_id`).

@@ -26,6 +26,9 @@ func (s *CommodoreServer) RetrieveDVRChapter(ctx context.Context, req *foghornco
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:read"); permissionErr != nil {
+		return nil, permissionErr
+	}
 	originClusterID, dvrHash, err := s.assertDVRTenant(ctx, req.GetDvrArtifactId(), tenantID)
 	if err != nil {
 		return nil, err
@@ -50,6 +53,9 @@ func (s *CommodoreServer) ListDVRChapters(ctx context.Context, req *foghorncontr
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:read"); permissionErr != nil {
+		return nil, permissionErr
 	}
 	originClusterID, dvrHash, err := s.assertDVRTenant(ctx, req.GetDvrArtifactId(), tenantID)
 	if err != nil {

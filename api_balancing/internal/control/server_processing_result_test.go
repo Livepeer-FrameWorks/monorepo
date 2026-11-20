@@ -217,6 +217,7 @@ func TestProcessProcessingJobResult_Completed_ReadinessFailureRollsBack(t *testi
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
 			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
+	mock.ExpectQuery("GetVodOriginalToStamp").WithArgs("art-1", "tenant-1").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
@@ -247,6 +248,7 @@ func TestProcessProcessingJobResult_Completed_DeletedMidProcessingStillCompletes
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
 			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
+	mock.ExpectQuery("GetVodOriginalToStamp").WithArgs("art-1", "tenant-1").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows: deleted/failed mid-processing
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'completed'`).

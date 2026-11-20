@@ -27,29 +27,32 @@ func TestDoCreateVodUpload(t *testing.T) {
 				ArtifactHash: "hash1",
 				PlaybackId:   "pl1",
 				PartSize:     5242880,
+				KeepOriginal: func() *bool { value := false; return &value }(),
 				ExpiresAt:    timestamppb.Now(),
 			}, nil
 		},
 	}
 	r := commoR(commo)
 	ct := "video/mp4"
+	keepOriginal := false
 	res, err := r.DoCreateVodUpload(clientstest.AuthedCtx("t1"), model.CreateVodUploadInput{
-		Filename:    "movie.mp4",
-		SizeBytes:   1000,
-		ContentType: &ct,
+		Filename:     "movie.mp4",
+		SizeBytes:    1000,
+		ContentType:  &ct,
+		KeepOriginal: &keepOriginal, TranscodeLadder: strPtr("uhd"),
 	})
 	if err != nil {
 		t.Fatalf("DoCreateVodUpload err: %v", err)
 	}
 	// Tenant is server-derived; filename + size ride the request from input.
-	if gotReq.TenantId != "t1" || gotReq.Filename != "movie.mp4" || gotReq.SizeBytes != 1000 {
+	if gotReq.TenantId != "t1" || gotReq.Filename != "movie.mp4" || gotReq.SizeBytes != 1000 || gotReq.KeepOriginal == nil || gotReq.GetKeepOriginal() || gotReq.GetTranscodeLadder() != "uhd" {
 		t.Fatalf("outbound request not built from input: %+v", gotReq)
 	}
 	session, ok := res.(*model.VodUploadSession)
 	if !ok {
 		t.Fatalf("expected VodUploadSession, got %T", res)
 	}
-	if session.ID != "up1" || session.ArtifactHash != "hash1" || session.PlaybackID != "pl1" || session.PartSize != 5242880 {
+	if session.KeepOriginal == nil || *session.KeepOriginal || session.ID != "up1" || session.ArtifactHash != "hash1" || session.PlaybackID != "pl1" || session.PartSize != 5242880 {
 		t.Fatalf("response not mapped: %+v", session)
 	}
 }
@@ -61,7 +64,7 @@ func TestDoCreateVodUploadStorageNotConfigured(t *testing.T) {
 			return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
 		},
 	})
-	res, err := r.DoCreateVodUpload(clientstest.AuthedCtx("t1"), model.CreateVodUploadInput{Filename: "f", SizeBytes: 1})
+	res, err := r.DoCreateVodUpload(clientstest.AuthedCtx("t1"), model.CreateVodUploadInput{Filename: "f.mp4", SizeBytes: 1})
 	if err != nil {
 		t.Fatalf("storage-not-configured should be a typed result: %v", err)
 	}
@@ -71,7 +74,7 @@ func TestDoCreateVodUploadStorageNotConfigured(t *testing.T) {
 
 	// No tenant → guard fires before backend.
 	guard := commoR(&clientstest.FakeCommodore{})
-	if _, err := guard.DoCreateVodUpload(context.Background(), model.CreateVodUploadInput{Filename: "f", SizeBytes: 1}); err == nil {
+	if _, err := guard.DoCreateVodUpload(context.Background(), model.CreateVodUploadInput{Filename: "f.mp4", SizeBytes: 1}); err == nil {
 		t.Fatal("DoCreateVodUpload should require tenant context")
 	}
 	if guard.Clients.Commodore.(*clientstest.FakeCommodore).Calls != 0 {
@@ -390,5 +393,22 @@ func TestDoDeleteVodAsset(t *testing.T) {
 	}
 	if guard.Clients.Commodore.(*clientstest.FakeCommodore).Calls != 0 {
 		t.Fatal("tenant guard must short-circuit before backend")
+	}
+}
+
+func TestUploadFilenameRefusalDoesNotCreateBackendWork(t *testing.T) {
+	client := &clientstest.FakeCommodore{CreateVodUploadFn: func(context.Context, *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
+		t.Fatal("unsupported filename reached backend upload creation")
+		return nil, nil
+	}}
+	for _, filename := range []string{"video.xyz", "playlist.m3u8", "playlist.mpd", "video", "video.mp4.exe"} {
+		result, err := commoR(client).DoCreateVodUpload(clientstest.AuthedCtx("format-refusal"), model.CreateVodUploadInput{Filename: filename, SizeBytes: 1024})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refusal, ok := result.(*model.ValidationError)
+		if !ok || refusal.Field == nil || *refusal.Field != "filename" {
+			t.Fatalf("%s refusal = %T %+v", filename, result, result)
+		}
 	}
 }

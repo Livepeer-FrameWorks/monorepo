@@ -2,8 +2,8 @@
 
 import { AccountSuspended, ApiTokenCreated, ApiTokenRevoked, CustomDomainFailed, CustomDomainVerified, MultistreamStatusChanged } from "./proto/events/public/v1/access.js";
 import { BillingDetailsUpdated, InvoiceCreated, InvoicePaid, PaymentFailed, TopupCredited } from "./proto/events/public/v1/billing.js";
-import { ClipFailed, ClipReady, ClipRequested, RecordingChapterFailed, RecordingFailed, RecordingReady, RecordingStarted, RecordingStopped, UploadAborted, UploadCompleted, UploadCreated, UploadFailed, UploadReady } from "./proto/events/public/v1/media.js";
-import { StreamConnected, StreamCreated, StreamDeleted, StreamIdle, StreamKeyRotated, StreamLive, StreamUpdated } from "./proto/events/public/v1/streams.js";
+import { ClipFailed, ClipReady, ClipRequested, RecordingChapterFailed, RecordingChapterReady, RecordingFailed, RecordingReady, RecordingStarted, RecordingStopped, UploadAborted, UploadCompleted, UploadCreated, UploadFailed, UploadReady } from "./proto/events/public/v1/media.js";
+import { StreamConnected, StreamCreated, StreamDeleted, StreamEnded, StreamIdle, StreamIngestDisconnected, StreamKeyRotated, StreamLive, StreamUpdated } from "./proto/events/public/v1/streams.js";
 
 /** The payload type of each public event type. */
 export interface PublicEventDataMap {
@@ -22,6 +22,7 @@ export interface PublicEventDataMap {
   "custom_domain.verified": CustomDomainVerified;
   "multistream.status_changed": MultistreamStatusChanged;
   "recording.chapter_failed": RecordingChapterFailed;
+  "recording.chapter_ready": RecordingChapterReady;
   "recording.failed": RecordingFailed;
   "recording.ready": RecordingReady;
   "recording.started": RecordingStarted;
@@ -29,7 +30,9 @@ export interface PublicEventDataMap {
   "stream.connected": StreamConnected;
   "stream.created": StreamCreated;
   "stream.deleted": StreamDeleted;
+  "stream.ended": StreamEnded;
   "stream.idle": StreamIdle;
+  "stream.ingest_disconnected": StreamIngestDisconnected;
   "stream.key_rotated": StreamKeyRotated;
   "stream.live": StreamLive;
   "stream.updated": StreamUpdated;
@@ -61,6 +64,7 @@ export const publicEventDecoders: {
   "custom_domain.verified": CustomDomainVerified,
   "multistream.status_changed": MultistreamStatusChanged,
   "recording.chapter_failed": RecordingChapterFailed,
+  "recording.chapter_ready": RecordingChapterReady,
   "recording.failed": RecordingFailed,
   "recording.ready": RecordingReady,
   "recording.started": RecordingStarted,
@@ -68,7 +72,9 @@ export const publicEventDecoders: {
   "stream.connected": StreamConnected,
   "stream.created": StreamCreated,
   "stream.deleted": StreamDeleted,
+  "stream.ended": StreamEnded,
   "stream.idle": StreamIdle,
+  "stream.ingest_disconnected": StreamIngestDisconnected,
   "stream.key_rotated": StreamKeyRotated,
   "stream.live": StreamLive,
   "stream.updated": StreamUpdated,

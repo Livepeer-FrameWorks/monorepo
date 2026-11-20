@@ -155,6 +155,7 @@ func installOfflineFenceDB(t *testing.T, includeDVRBackstop bool, reapLifecycle 
 	t.Cleanup(func() { control.SetDB(prevDB); _ = dbMock.Close() })
 	if len(reapLifecycle) > 0 && reapLifecycle[0] {
 		mock.ExpectBegin()
+		mock.ExpectExec("LockIngestStream").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery(`UPDATE foghorn.ingest_sessions`).WillReturnRows(sqlmock.NewRows([]string{"id"}))
 		mock.ExpectQuery(`ListStreamEndSparedIngestSessions`).WillReturnRows(sqlmock.NewRows([]string{"session_id", "connector_pid", "started_at_unix_millis", "playable_at_unix_millis"}))
 		mock.ExpectCommit()

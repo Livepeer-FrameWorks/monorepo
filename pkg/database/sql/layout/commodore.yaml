@@ -29,6 +29,8 @@ colocated_tables:
   - commodore.retired_ingest_cells
   - public._schema_baseline
 distributed_tables:
+  # Every original-download request updates its tenant's shared admission bucket.
+  - commodore.vod_original_download_limits
   - commodore.publisher_lease_abandonments
   # Append-only history grows with lifecycle actions and supports tenant-time keyset reads.
   - commodore.operator_account_audit
@@ -70,3 +72,5 @@ distributed_tables:
   - commodore.media_authority_refresh_obligations
   - commodore.media_authority_target_claims
 write_rate_benchmark: []
+retired_tables:
+  - commodore.stream_keys

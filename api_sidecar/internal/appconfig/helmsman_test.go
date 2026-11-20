@@ -96,8 +96,8 @@ func TestHelmsmanDefaultsMatchLegacyReaders(t *testing.T) {
 	if cfg.RotateNodeIdentityRequested() || cfg.GRPCInsecureAllowed() {
 		t.Error("identity rotation and insecure gRPC must default to false")
 	}
-	if cfg.StorageCapacity() != 0 || cfg.MaxTranscodeSlots() != 0 || cfg.BandwidthLimitBytesPerSecond() != 0 {
-		t.Error("capacity, transcode slots, and bandwidth limit must default to 0")
+	if cfg.StorageCapacity() != 0 || cfg.MaxTranscodeSlots() != 0 {
+		t.Error("capacity and transcode slots must default to 0")
 	}
 }
 
@@ -127,8 +127,6 @@ func TestHelmsmanMalformedValuesKeepLegacyFallbacks(t *testing.T) {
 		"HELMSMAN_TARGET_AFTER_FREEZE":    "0.5",
 		"HELMSMAN_STORAGE_CAPACITY_BYTES": "-1",
 		"HELMSMAN_MAX_TRANSCODES":         "four",
-		"HELMSMAN_BW_LIMIT_BYTES_PER_SEC": "fast",
-		"HELMSMAN_BW_LIMIT_MBPS":          "8",
 	})
 	if got := cfg.BlockingGrace(); got != 2000 {
 		t.Errorf("BlockingGrace() = %d, want fallback 2000", got)
@@ -145,27 +143,7 @@ func TestHelmsmanMalformedValuesKeepLegacyFallbacks(t *testing.T) {
 	if cfg.StorageCapacity() != 0 || cfg.MaxTranscodeSlots() != 0 {
 		t.Error("malformed capacity and transcode slots must count as 0")
 	}
-	if got := cfg.BandwidthLimitBytesPerSecond(); got != 1_000_000 {
-		t.Errorf("BandwidthLimitBytesPerSecond() = %d, want 1000000 from HELMSMAN_BW_LIMIT_MBPS", got)
-	}
-}
 
-func TestBandwidthLimitPrecedence(t *testing.T) {
-	cases := []struct {
-		name    string
-		runtime EdgeRuntime
-		want    uint64
-	}{
-		{"bytes per second wins", EdgeRuntime{BandwidthLimitBytesPerSec: "250000000", BandwidthLimitBytes: "1", BandwidthLimitMbps: "1"}, 250000000},
-		{"bytes alias when per second is 0", EdgeRuntime{BandwidthLimitBytesPerSec: "0", BandwidthLimitBytes: "4096"}, 4096},
-		{"megabits last", EdgeRuntime{BandwidthLimitMbps: "1000"}, 125000000},
-		{"none", EdgeRuntime{}, 0},
-	}
-	for _, tc := range cases {
-		if got := tc.runtime.BandwidthLimitBytesPerSecond(); got != tc.want {
-			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
-		}
-	}
 }
 
 func TestHelmsmanValidateRequiresLoopbackManagementBind(t *testing.T) {

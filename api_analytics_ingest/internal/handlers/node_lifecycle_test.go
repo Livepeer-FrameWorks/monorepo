@@ -133,3 +133,59 @@ func TestProcessNodeLifecycle_RejectsWrongPayload(t *testing.T) {
 		t.Error("no fact should be written when the payload is wrong")
 	}
 }
+
+func TestProcessNodeLifecycleWritesBudgetAndProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		budget     uint64
+		source     ipcpb.BandwidthBudgetSource
+		wantBudget uint64
+		wantSource string
+	}{
+		{"default", 0, ipcpb.BandwidthBudgetSource_BANDWIDTH_BUDGET_SOURCE_UNSPECIFIED, 125000000, "DEFAULT"},
+		{"operator", 250000000, ipcpb.BandwidthBudgetSource_BANDWIDTH_BUDGET_SOURCE_OPERATOR, 250000000, "OPERATOR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := &captureBatch{}
+			h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
+			update := &ipcpb.NodeLifecycleUpdate{NodeId: "node", EgressBudgetBytesPerSec: tc.budget, BudgetSource: tc.source, ObservedSource: ipcpb.ObservedSource_OBSERVED_SOURCE_NIC, ObservedValid: proto.Bool(true), IsHealthy: true}
+			if err := h.processNodeLifecycle(t.Context(), nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "cluster", time.Now(), update)); err != nil {
+				t.Fatal(err)
+			}
+			row := batch.rows[0]
+			if len(row) != 22 {
+				t.Fatalf("node fact has %d columns, want budget and source appended (21)", len(row))
+			}
+			var metadata map[string]any
+			if err := json.Unmarshal(row[17].([]byte), &metadata); err != nil {
+				t.Fatal(err)
+			}
+			if metadata["observed_source"] != "NIC" || metadata["observed_valid"] != true {
+				t.Errorf("observation provenance missing: %v", metadata)
+			}
+			if row[19] != tc.wantBudget || row[20] != tc.wantSource {
+				t.Errorf("budget/source=%v/%v, want %d/%s", row[19], row[20], tc.wantBudget, tc.wantSource)
+			}
+		})
+	}
+}
+
+func TestProcessNodeLifecycleUsesAudienceWithLegacyFallback(t *testing.T) {
+	batch := &captureBatch{}
+	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("audience-test")}
+	update := &ipcpb.NodeLifecycleUpdate{NodeId: "node", Streams: map[string]*ipcpb.StreamData{
+		"audience":      {Total: 3, AudienceViewers: proto.Uint32(2)},
+		"internal-only": {Total: 50, AudienceViewers: proto.Uint32(0)},
+		"legacy":        {Total: 4},
+	}}
+	if err := h.processNodeLifecycle(t.Context(), nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "serving-cluster", time.Now(), update)); err != nil {
+		t.Fatal(err)
+	}
+	row := batch.rows[0]
+	if len(row) != 22 {
+		t.Fatalf("node row has %d columns, want audience at column 22", len(row))
+	}
+	if row[21] != uint32(6) {
+		t.Fatalf("node viewers=%v, want audience 2+0 and legacy 4", row[21])
+	}
+}

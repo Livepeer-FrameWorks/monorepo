@@ -60,17 +60,6 @@ fragment StreamMetricsFields on StreamMetrics {
   issuesDescription
 }
 
-fragment StreamKeyFields on StreamKey {
-  __typename
-  id
-  streamId
-  keyValue
-  keyName
-  isActive
-  lastUsedAt
-  createdAt
-}
-
 fragment PushTargetFields on PushTarget {
   id
   streamId
@@ -178,6 +167,8 @@ fragment VodAssetFields on VodAsset {
 }
 
 fragment StorageArtifactFields on StorageArtifact {
+  originType
+  parentRecordingId
   key
   kind
   id

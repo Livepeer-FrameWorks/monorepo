@@ -22,6 +22,7 @@ colocated_tables:
   - foghorn.tenant_authority_projection
   - foghorn.tenant_authority_grants
   - foghorn.control_replicas
+  - foghorn.vod_original_retention_activation
   - foghorn.placement_membership_snapshot
   - foghorn.node_relay_delete_cursor
   - public._schema_baseline
@@ -34,6 +35,7 @@ distributed_tables:
   - foghorn.dvr_segments
   - foghorn.dvr_chapters
   - foghorn.ingest_sessions
+  - foghorn.pull_ingest_sessions
   - foghorn.ingest_close_tombstones
   - foghorn.ingest_admission_abandonments
   - foghorn.source_projection_revision_counter

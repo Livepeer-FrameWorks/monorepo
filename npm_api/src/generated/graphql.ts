@@ -78,6 +78,11 @@ export type BufferState =
   | 'UNKNOWN'
   | '%future added value';
 
+export type CapacityBudgetSource =
+  | 'DEFAULT'
+  | 'OPERATOR'
+  | '%future added value';
+
 /** Card payment provider for top-ups. */
 export type CardPaymentProvider =
   /** Mollie checkout. */
@@ -313,12 +318,8 @@ export type CreateStreamInput = {
   record?: boolean | null | undefined;
   /** Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources. */
   sourceLocation?: SourceLocationInput | null | undefined;
-};
-
-/** Input for creating an additional stream key. */
-export type CreateStreamKeyInput = {
-  /** Human-readable name for the key. */
-  name: string;
+  /** Ladder name allowed by the plan. Empty inherits the account, then plan default. */
+  transcodeLadder?: string | null | undefined;
 };
 
 /**
@@ -330,12 +331,16 @@ export type CreateVodUploadInput = {
   contentType?: string | null | undefined;
   /** Optional description for the asset. */
   description?: string | null | undefined;
-  /** Original filename (for metadata and content-type detection). */
+  /** Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused. */
   filename: string;
+  /** Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default. */
+  keepOriginal?: boolean | null | undefined;
   /** Total file size in bytes (required for part calculation). */
   sizeBytes: number;
   /** Optional display title for the asset. */
   title?: string | null | undefined;
+  /** Video ladder for this upload; empty inherits the account, then plan default. */
+  transcodeLadder?: string | null | undefined;
 };
 
 export type CreateWebhookEndpointInput = {
@@ -486,11 +491,13 @@ export type ImportVodAssetInput = {
   description?: string | null | undefined;
   /**
    * Filename to store the video under. Required when the URL path does not end
-   * in a supported video extension (mp4, mov, mkv, webm, ts).
+   * in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
    */
   filename?: string | null | undefined;
   /** Optional display title for the asset. */
   title?: string | null | undefined;
+  /** Video ladder for this import; empty inherits the account, then plan default. */
+  transcodeLadder?: string | null | undefined;
   /**
    * Source URL, https or http. It must be publicly reachable and support HTTP
    * range requests; private and internal addresses are refused.
@@ -780,6 +787,7 @@ export type MediaViewerProtocol =
   | 'TS'
   | 'WEBM'
   | 'WEBRTC'
+  | 'WEBVTT'
   | 'WHEP'
   | '%future added value';
 
@@ -1009,6 +1017,16 @@ export type SetMediaRetentionPolicyInput = {
   targetType: MediaRetentionTarget;
 };
 
+export type SetNodeCapacityInput = {
+  /** Positive whole bytes per second, or null to restore the default. */
+  egressBudgetBytesPerSec?: number | null | undefined;
+  /** Revision from the current capacity; a stale revision rejects the write. */
+  expectedRevision: number;
+  /** Positive whole bytes per second, or null to restore the default. */
+  ingressBudgetBytesPerSec?: number | null | undefined;
+  nodeId: string;
+};
+
 export type SetNodeModeInput = {
   mode: NodeOperationalMode;
   /** Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID). */
@@ -1037,6 +1055,10 @@ export type SetStreamRetentionOverridesInput = {
    */
   dvrRetentionDaysOverride?: number | null | undefined;
   streamId: string;
+};
+
+export type SetTranscodeLadderPolicyInput = {
+  ladder?: string | null | undefined;
 };
 
 /** Algorithm used to sign viewer playback JWTs. ES256 only for v1. */
@@ -1156,6 +1178,12 @@ export type StreamEventType =
   | 'STREAM_SOURCE'
   | 'STREAM_START'
   | 'TRACK_LIST_UPDATE'
+  | '%future added value';
+
+export type StreamIngestState =
+  | 'CONNECTED'
+  | 'IDLE'
+  | 'LIVE'
   | '%future added value';
 
 /** Live stream status. */
@@ -1308,6 +1336,8 @@ export type UpdateStreamInput = {
   record?: boolean | null | undefined;
   /** Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams. */
   sourceLocation?: SourceLocationInput | null | undefined;
+  /** Ladder name; empty inherits the account, then plan. Applies from the next broadcast. */
+  transcodeLadder?: string | null | undefined;
 };
 
 /** Input for updating tenant settings. */
@@ -1514,9 +1544,6 @@ qualityTier: string | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null };
 
-export type StreamKeyFieldsFragment = { __typename: 'StreamKey', id: string, streamId: string, /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
-keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string };
-
 export type PushTargetFieldsFragment = { id: string, streamId: string, /** Platform identifier (twitch, youtube, facebook, kick, x, custom). */
 platform: string | null, /** User-friendly label for this target. */
 name: string, /** Target URI (masked in responses — stream key portion is redacted). */
@@ -1601,7 +1628,9 @@ effectiveRetention: { /** Days from now until the artifact is scheduled for dele
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
 retentionUntil: string | null, source: RetentionSource } | null };
 
-export type StorageArtifactFieldsFragment = { key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, /** User-provided description (VOD uploads and clips); null when unset. */
+export type StorageArtifactFieldsFragment = { /** How the artifact was produced, such as dvr_chapter. */
+originType: string | null, /** Catalog ID of the parent DVR recording, present on saved chapters. */
+parentRecordingId: string | null, key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, /** User-provided description (VOD uploads and clips); null when unset. */
 description: string | null, /** Processing failure detail for a failed artifact; null when not failed. */
 errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, /** Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized. */
 durationSeconds: number | null, /** Poster + hover-scrub sprite assets, when the artifact has thumbnails. */
@@ -1658,7 +1687,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1714,7 +1744,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1770,7 +1801,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2067,7 +2099,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2115,7 +2148,8 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** When the clip was last updated. */
+status: string, /** Processing failure detail from the artifact catalog. */
+errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
 clipMode: string | null, /** Original request parameters for audit/display. */
 requestedParams: unknown, /** Storage backend (local, s3). */
@@ -2151,7 +2185,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2215,8 +2250,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -2230,7 +2264,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null };
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null };
 
 /** A streaming cluster containing one or more infrastructure nodes. Clusters provide isolated capacity for streaming workloads. */
 export type ClusterInNodeDefaultFieldsFragment = { /** Global unique identifier for Relay compatibility. */
@@ -2243,8 +2278,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -2259,7 +2293,8 @@ monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
 shortDescription: string | null, /** Internal cluster identifier (UUID). */
 clusterClusterId: string, /** When the cluster was created. */
-clusterCreatedAt: string | null };
+clusterCreatedAt: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null };
 
 export type ClusterInviteDefaultFieldsFragment = { id: string, clusterId: string, invitedTenantId: string, inviteToken: string | null, accessLevel: string, resourceLimits: unknown, status: string, createdBy: string, createdAt: string, expiresAt: string | null, acceptedAt: string | null, invitedTenantName: string | null, clusterName: string | null };
 
@@ -2299,7 +2334,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2355,7 +2391,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2428,8 +2465,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -2443,7 +2479,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null }, bootstrapToken: { /** Unique token identifier. */
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null }, bootstrapToken: { /** Unique token identifier. */
 id: string, /** Human-readable name for the token. */
 name: string, /** The secret token value (only returned on creation). */
 token: string | null, /** Token type (edge_node, service). */
@@ -2558,7 +2595,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2632,7 +2670,11 @@ effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data 
 liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
 ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
-routingImpactPreview: { activeStreams: number, activeViewers: number } };
+routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
+capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+egressBudgetBytesPerSec: number, /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, /** Last revision applied by Helmsman; null when the node does not report one. */
+appliedRevision: number | null } | null };
 
 /** An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers. */
 export type InfrastructureNodeInNodeDefaultFieldsFragment = { /** Global unique identifier for Relay compatibility. */
@@ -2661,7 +2703,14 @@ infrastructureNodeCreatedAt: string | null, /** Real-time state from the analyti
 liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
 ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
-routingImpactPreview: { activeStreams: number, activeViewers: number } };
+routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
+infrastructureNodeCapacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+egressBudgetBytesPerSec: number, /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, /** Last revision applied by Helmsman; null when the node does not report one. */
+appliedRevision: number | null } | null };
+
+/** An accepted request to stop the currently claimed push publisher. */
+export type IngestDisconnectSuccessDefaultFieldsFragment = { streamId: string, stopRequested: boolean };
 
 /** A billing invoice for a subscription period. Includes base subscription and metered usage charges. Amounts are computed in EUR; a finalized invoice is presented and charged in the tenant's presentment currency at the ECB rate of its finalization date. */
 export type InvoiceDefaultFieldsFragment = { /** Unique invoice identifier. */
@@ -2744,7 +2793,9 @@ defaultDvrRetentionDays: number | null, /** Per-class tenant default for clips. 
 defaultClipRetentionDays: number | null, /** Effective VOD horizon the cascade resolves to today (0 = keep forever). */
 effectiveVodRetentionDays: number, /** Effective DVR horizon the cascade resolves to today (0 = keep forever). */
 effectiveDvrRetentionDays: number, /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
-effectiveClipRetentionDays: number, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
+effectiveClipRetentionDays: number, /** Account default for new uploads. Null inherits the system default (keep). */
+keepVodOriginals: boolean | null, /** Effective original-retention default for new uploads. */
+effectiveKeepVodOriginals: boolean, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
 maxRecordingRetentionDays: number } };
 
 /** A message within a support conversation. */
@@ -2782,7 +2833,7 @@ subscriptionId: string, /** Subscription status (active, pending, etc.). */
 status: string, /** Next payment date (ISO 8601). */
 nextPaymentDate: string | null };
 
-export type NetworkStatusDefaultFieldsFragment = { totalNodes: number, healthyNodes: number, updatedAt: string, clusters: Array<{ clusterId: string, name: string, region: string, latitude: number, longitude: number, nodeCount: number, healthyNodeCount: number, peerCount: number, status: string, clusterType: string, shortDescription: string | null, currentStreams: number, currentViewers: number, egressMbps: number, egressCapacityMbps: number, ingressMbps: number, services: Array<string> }>, peerConnections: Array<{ sourceCluster: string, targetCluster: string, connected: boolean, connectionType: string }>, nodes: Array<{ nodeId: string, name: string, nodeType: string, latitude: number, longitude: number, status: string, clusterId: string }>, serviceInstances: Array<{ instanceId: string, serviceId: string, clusterId: string, nodeId: string | null, status: string, healthStatus: string }> };
+export type NetworkStatusDefaultFieldsFragment = { totalNodes: number, healthyNodes: number, updatedAt: string, clusters: Array<{ clusterId: string, name: string, region: string, latitude: number, longitude: number, nodeCount: number, healthyNodeCount: number, peerCount: number, status: string, clusterType: string, shortDescription: string | null, currentStreams: number, currentViewers: number, egressMbps: number, egressCapacityMbps: number, egressUsableMbps: number, defaultBudgetNodes: number, ingressMbps: number, services: Array<string> }>, peerConnections: Array<{ sourceCluster: string, targetCluster: string, connected: boolean, connectionType: string }>, nodes: Array<{ nodeId: string, name: string, nodeType: string, latitude: number, longitude: number, status: string, clusterId: string }>, serviceInstances: Array<{ instanceId: string, serviceId: string, clusterId: string, nodeId: string | null, status: string, healthStatus: string }> };
 
 export type NodeMetricDefaultFieldsFragment = { id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, /** Total memory in MiB. */
 memoryTotal: number | null, /** Used memory in MiB. */
@@ -2879,7 +2930,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2935,7 +2987,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3003,7 +3056,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3063,7 +3117,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3127,7 +3182,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3224,7 +3280,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3280,7 +3337,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3338,7 +3396,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3397,7 +3456,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3455,7 +3515,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3511,7 +3572,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3567,7 +3629,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3627,7 +3690,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3683,7 +3747,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3744,7 +3809,8 @@ alwaysOn: boolean, /** Number of source placements requested by the operator con
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
 avoidNodeIds: Array<string>, /** Empty unless mode is RESTRICTED. */
-clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3834,7 +3900,9 @@ createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
-monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
+bandwidthInBps: number | null, /** Bandwidth in bytes per second received from the viewer; legacy field name. */
+bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -3948,7 +4016,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4004,7 +4073,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4060,7 +4130,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4092,6 +4163,8 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
 
+export type TranscodeLadderPolicyDefaultFieldsFragment = { planDefault: string, tenantLadder: string | null, effectiveLadder: string, ladders: Array<{ name: string, displayName: string, description: string, renditionNames: Array<string> }> };
+
 export type ViewerCountBucketDefaultFieldsFragment = { timestamp: string, viewerCount: number, streamId: string | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
@@ -4116,7 +4189,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4176,7 +4250,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4232,7 +4307,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4288,7 +4364,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4320,7 +4397,9 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
 
-export type ViewerMetricsDefaultFieldsFragment = { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+export type ViewerMetricsDefaultFieldsFragment = { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
+bandwidthInBps: number | null, /** Bandwidth in bytes per second received from the viewer; legacy field name. */
+bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -4344,7 +4423,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4400,7 +4480,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4456,7 +4537,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4528,7 +4610,11 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
 retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
-storageCost: { perDay: number, perMonth: number, currency: string } | null };
+storageCost: { perDay: number, perMonth: number, currency: string } | null, /** Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original. */
+originalFile: { sizeBytes: number } | null };
+
+/** Short-lived download of the byte-identical original upload, without playback metering. */
+export type VodOriginalDownloadDefaultFieldsFragment = { url: string, expiresAt: string, sizeBytes: number, filename: string };
 
 /** A VOD asset with retention data in the window. Eligibility + stats (sessions, duration, lastSeen) come from analytics; title/playbackId are composed from the catalog by artifactHash — both may be null when the asset is uncatalogued (e.g. deleted but retention still within TTL). */
 export type VodRetentionAssetDefaultFieldsFragment = { artifactHash: string, totalSessions: number, durationS: number, lastSeen: string, title: string | null, playbackId: string | null };
@@ -4899,8 +4985,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -4914,7 +4999,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null }, bootstrapToken: { /** Unique token identifier. */
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null }, bootstrapToken: { /** Unique token identifier. */
 id: string, /** Human-readable name for the token. */
 name: string, /** The secret token value (only returned on creation). */
 token: string | null, /** Token type (edge_node, service). */
@@ -5051,6 +5137,20 @@ checkoutUrl: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type CreateVodOriginalDownloadMutationVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
+export type CreateVodOriginalDownloadMutation = { /** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
+createVodOriginalDownload:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+    | { __typename: 'VodOriginalDownload', url: string, expiresAt: string, sizeBytes: number, filename: string }
+   };
+
 export type CreateWebhookEndpointMutationVariables = Exact<{
   input: CreateWebhookEndpointInput;
 }>;
@@ -5115,6 +5215,21 @@ export type DeleteSkipperConversationMutationVariables = Exact<{
 export type DeleteSkipperConversationMutation = { /** Delete a Skipper conversation. */
 deleteSkipperConversation: boolean };
 
+export type DeleteVodOriginalMutationVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Permanently delete only the retained upload; processed playback remains available. */
+export type DeleteVodOriginalMutation = { /** Permanently delete only the retained upload; processed playback remains available. */
+deleteVodOriginal:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
 export type DeleteWebhookEndpointMutationVariables = Exact<{
   id: string;
 }>;
@@ -5150,6 +5265,20 @@ disabledAt: string | null, /** Failed attempts since the last successful deliver
 consecutiveFailures: number, /** First failed attempt since the last successful delivery. */
 failingSince: string | null, lastSuccessAt: string | null, lastFailureAt: string | null, /** Until when the previous signing secret still signs deliveries; null when there is none. */
 previousSecretExpiresAt: string | null, createdAt: string, updatedAt: string }
+   };
+
+export type DisconnectIngestMutationVariables = Exact<{
+  streamId: string;
+}>;
+
+
+/** Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false. */
+export type DisconnectIngestMutation = { /** Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false. */
+disconnectIngest:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'IngestDisconnectSuccess', streamId: string, stopRequested: boolean }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
 export type EnableWebhookEndpointMutationVariables = Exact<{
@@ -5470,8 +5599,54 @@ defaultDvrRetentionDays: number | null, /** Per-class tenant default for clips. 
 defaultClipRetentionDays: number | null, /** Effective VOD horizon the cascade resolves to today (0 = keep forever). */
 effectiveVodRetentionDays: number, /** Effective DVR horizon the cascade resolves to today (0 = keep forever). */
 effectiveDvrRetentionDays: number, /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
-effectiveClipRetentionDays: number, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
+effectiveClipRetentionDays: number, /** Account default for new uploads. Null inherits the system default (keep). */
+keepVodOriginals: boolean | null, /** Effective original-retention default for new uploads. */
+effectiveKeepVodOriginals: boolean, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
 maxRecordingRetentionDays: number } }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
+export type SetNodeCapacityMutationVariables = Exact<{
+  input: SetNodeCapacityInput;
+}>;
+
+
+/** Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access. */
+export type SetNodeCapacityMutation = { /** Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access. */
+setNodeCapacity:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'InfrastructureNode', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal node identifier (UUID). */
+nodeId: string, /** Cluster this node belongs to. */
+clusterId: string, /** Human-readable node name. */
+nodeName: string, /** Node role (edge, origin, transcoder, hybrid). */
+nodeType: string, /** Private network IP address. */
+internalIp: string | null, /** Public IP address for external access. */
+externalIp: string | null, /** WireGuard mesh network IP. */
+wireguardIp: string | null, /** WireGuard public key for mesh peering. */
+wireguardPublicKey: string | null, /** Geographic region (us-east, eu-west, etc.). */
+region: string | null, /** GPS latitude. */
+latitude: number | null, /** GPS longitude. */
+longitude: number | null, /** Availability zone within region. */
+availabilityZone: string | null, /** Number of CPU cores. */
+cpuCores: number | null, /** Memory in gigabytes. */
+memoryGb: number | null, /** Disk storage in gigabytes. */
+diskGb: number | null, /** Last heartbeat timestamp from node agent. */
+lastHeartbeat: string | null, /** Custom tags for node organization. */
+tags: unknown, /** Additional node metadata. */
+metadata: unknown, /** When the node was registered. */
+createdAt: string | null, /** When the node was last updated. */
+updatedAt: string | null, /** Current operational mode (normal / draining / maintenance). Read from Foghorn's per-node heartbeat. Changes via setNodeMode. */
+effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data plane. */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
+ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
+routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
+capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+egressBudgetBytesPerSec: number, /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, /** Last revision applied by Helmsman; null when the node does not report one. */
+appliedRevision: number | null } | null }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -5510,7 +5685,11 @@ effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data 
 liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
 ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
-routingImpactPreview: { activeStreams: number, activeViewers: number } }
+routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
+capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+egressBudgetBytesPerSec: number, /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, /** Last revision applied by Helmsman; null when the node does not report one. */
+appliedRevision: number | null } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -5535,8 +5714,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -5550,7 +5728,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null }
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -5567,6 +5746,42 @@ setStreamRetentionOverrides:
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'StreamRetentionOverrides', streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
+export type SetTranscodeLadderPolicyMutationVariables = Exact<{
+  input: SetTranscodeLadderPolicyInput;
+}>;
+
+
+/** Set the account's video ladder. Empty or null inherits the plan default. */
+export type SetTranscodeLadderPolicyMutation = { /** Set the account's video ladder. Empty or null inherits the plan default. */
+setTranscodeLadderPolicy:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'TranscodeLadderPolicy', planDefault: string, tenantLadder: string | null, effectiveLadder: string, ladders: Array<{ name: string, displayName: string, description: string, renditionNames: Array<string> }> }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
+export type SetVodOriginalPolicyMutationVariables = Exact<{
+  keepVodOriginals?: boolean | null | undefined;
+}>;
+
+
+/** Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged. */
+export type SetVodOriginalPolicyMutation = { /** Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged. */
+setVodOriginalPolicy:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'MediaRetentionPolicy', /** User who last touched the policy. Null when no tenant override is set. */
+updatedBy: string | null, updatedAt: string | null, /** Per-class tenant default for VOD uploads. Null = inherit the system default (keep forever). 0 = no auto-expire (paid-tier baseline). Free tier clamps to the tier cap at write time. */
+defaultVodRetentionDays: number | null, /** Per-class tenant default for DVR recordings. Null = inherit the system default (30d). 0 = no auto-expire (paid only). */
+defaultDvrRetentionDays: number | null, /** Per-class tenant default for clips. Null = inherit the system default (30d). 0 = no auto-expire (paid only). */
+defaultClipRetentionDays: number | null, /** Effective VOD horizon the cascade resolves to today (0 = keep forever). */
+effectiveVodRetentionDays: number, /** Effective DVR horizon the cascade resolves to today (0 = keep forever). */
+effectiveDvrRetentionDays: number, /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
+effectiveClipRetentionDays: number, /** Account default for new uploads. Null inherits the system default (keep). */
+keepVodOriginals: boolean | null, /** Effective original-retention default for new uploads. */
+effectiveKeepVodOriginals: boolean, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
+maxRecordingRetentionDays: number } }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -5693,8 +5908,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -5708,7 +5922,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null }
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -5842,7 +6057,7 @@ export type GetArtifactEventsConnectionQueryVariables = Exact<{
 
 export type GetArtifactEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetArtifactNodeCopiesQueryVariables = Exact<{
   artifactHash: string;
@@ -5865,7 +6080,7 @@ export type GetArtifactStatesConnectionQueryVariables = Exact<{
 
 export type GetArtifactStatesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetAuthSessionsConnectionQueryVariables = Exact<{
   first?: number | null | undefined;
@@ -6068,7 +6283,7 @@ export type GetClientQoeConnectionQueryVariables = Exact<{
 
 export type GetClientQoeConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetClientQoeSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -6101,8 +6316,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -6116,7 +6330,8 @@ visibility: ClusterVisibility, /** Pricing model for subscriptions. */
 pricingModel: ClusterPricingModel, /** Monthly subscription price in cents. */
 monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
-shortDescription: string | null } | null };
+shortDescription: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null } | null };
 
 export type GetClusterBootOpsQueryVariables = Exact<{
   clusterId?: string | null | undefined;
@@ -6175,7 +6390,7 @@ export type GetClusterNodesConnectionQueryVariables = Exact<{
 /** Paginated list of nodes in this cluster. */
 export type GetClusterNodesConnectionQuery = { /** Fetch a single cluster by ID. */
 cluster: { /** Paginated list of nodes in this cluster. */
-nodesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, nodeId: string, clusterId: string, nodeName: string, nodeType: string, internalIp: string | null, externalIp: string | null, wireguardIp: string | null, wireguardPublicKey: string | null, region: string | null, latitude: number | null, longitude: number | null, availabilityZone: string | null, cpuCores: number | null, memoryGb: number | null, diskGb: number | null, lastHeartbeat: string | null, tags: unknown, metadata: unknown, createdAt: string | null, updatedAt: string | null, effectiveMode: NodeOperationalMode, liveState: { nodeId: string, tenantId: string, cpuPercent: number, ramUsedBytes: number, ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, routingImpactPreview: { activeStreams: number, activeViewers: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } | null } | null };
+nodesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, nodeId: string, clusterId: string, nodeName: string, nodeType: string, internalIp: string | null, externalIp: string | null, wireguardIp: string | null, wireguardPublicKey: string | null, region: string | null, latitude: number | null, longitude: number | null, availabilityZone: string | null, cpuCores: number | null, memoryGb: number | null, diskGb: number | null, lastHeartbeat: string | null, tags: unknown, metadata: unknown, createdAt: string | null, updatedAt: string | null, effectiveMode: NodeOperationalMode, liveState: { nodeId: string, tenantId: string, cpuPercent: number, ramUsedBytes: number, ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, routingImpactPreview: { activeStreams: number, activeViewers: number }, capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, appliedRevision: number | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } | null } | null };
 
 export type GetClusterQoeOpsQueryVariables = Exact<{
   clusterId?: string | null | undefined;
@@ -6240,7 +6455,7 @@ export type GetClustersConnectionQueryVariables = Exact<{
 
 /** List clusters the tenant has access to. */
 export type GetClustersConnectionQuery = { /** List clusters the tenant has access to. */
-clustersConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clusterId: string, clusterName: string, clusterType: string, deploymentModel: string, baseUrl: string, databaseUrl: string | null, periscopeUrl: string | null, kafkaBrokers: Array<string> | null, maxConcurrentStreams: number, maxConcurrentViewers: number, maxBandwidthMbps: number, healthStatus: string, isActive: boolean, isDefaultCluster: boolean, isPlatformOfficial: boolean, regionId: string | null, isSubscribed: boolean, createdAt: string | null, updatedAt: string | null, ownerTenantId: string | null, visibility: ClusterVisibility, pricingModel: ClusterPricingModel, monthlyPriceCents: number | null, requiresApproval: boolean, shortDescription: string | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+clustersConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clusterId: string, clusterName: string, clusterType: string, deploymentModel: string, baseUrl: string, databaseUrl: string | null, periscopeUrl: string | null, kafkaBrokers: Array<string> | null, maxConcurrentStreams: number, maxConcurrentViewers: number, healthStatus: string, isActive: boolean, isDefaultCluster: boolean, isPlatformOfficial: boolean, regionId: string | null, isSubscribed: boolean, createdAt: string | null, updatedAt: string | null, ownerTenantId: string | null, visibility: ClusterVisibility, pricingModel: ClusterPricingModel, monthlyPriceCents: number | null, requiresApproval: boolean, shortDescription: string | null, capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetConnectionEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -6252,7 +6467,7 @@ export type GetConnectionEventsConnectionQueryVariables = Exact<{
 
 export type GetConnectionEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetConversationQueryVariables = Exact<{
   id: string;
@@ -6370,7 +6585,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6624,7 +6840,9 @@ defaultDvrRetentionDays: number | null, /** Per-class tenant default for clips. 
 defaultClipRetentionDays: number | null, /** Effective VOD horizon the cascade resolves to today (0 = keep forever). */
 effectiveVodRetentionDays: number, /** Effective DVR horizon the cascade resolves to today (0 = keep forever). */
 effectiveDvrRetentionDays: number, /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
-effectiveClipRetentionDays: number, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
+effectiveClipRetentionDays: number, /** Account default for new uploads. Null inherits the system default (keep). */
+keepVodOriginals: boolean | null, /** Effective original-retention default for new uploads. */
+effectiveKeepVodOriginals: boolean, bounds: { /** Maximum retention days the tenant's tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail. */
 maxRecordingRetentionDays: number } } };
 
 export type GetMessagesConnectionQueryVariables = Exact<{
@@ -6663,14 +6881,14 @@ export type GetMySubscriptionsConnectionQueryVariables = Exact<{
 
 /** List clusters the tenant is subscribed to (paginated). */
 export type GetMySubscriptionsConnectionQuery = { /** List clusters the tenant is subscribed to (paginated). */
-mySubscriptionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clusterId: string, clusterName: string, clusterType: string, deploymentModel: string, baseUrl: string, databaseUrl: string | null, periscopeUrl: string | null, kafkaBrokers: Array<string> | null, maxConcurrentStreams: number, maxConcurrentViewers: number, maxBandwidthMbps: number, healthStatus: string, isActive: boolean, isDefaultCluster: boolean, isPlatformOfficial: boolean, regionId: string | null, isSubscribed: boolean, createdAt: string | null, updatedAt: string | null, ownerTenantId: string | null, visibility: ClusterVisibility, pricingModel: ClusterPricingModel, monthlyPriceCents: number | null, requiresApproval: boolean, shortDescription: string | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+mySubscriptionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clusterId: string, clusterName: string, clusterType: string, deploymentModel: string, baseUrl: string, databaseUrl: string | null, periscopeUrl: string | null, kafkaBrokers: Array<string> | null, maxConcurrentStreams: number, maxConcurrentViewers: number, healthStatus: string, isActive: boolean, isDefaultCluster: boolean, isPlatformOfficial: boolean, regionId: string | null, isSubscribed: boolean, createdAt: string | null, updatedAt: string | null, ownerTenantId: string | null, visibility: ClusterVisibility, pricingModel: ClusterPricingModel, monthlyPriceCents: number | null, requiresApproval: boolean, shortDescription: string | null, capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetNetworkStatusQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 /** Public network status: cluster topology, node counts, peer connections. No tenant data exposed. Part of public allowlist. */
 export type GetNetworkStatusQuery = { /** Public network status: cluster topology, node counts, peer connections. No tenant data exposed. Part of public allowlist. */
-networkStatus: { totalNodes: number, healthyNodes: number, updatedAt: string, clusters: Array<{ clusterId: string, name: string, region: string, latitude: number, longitude: number, nodeCount: number, healthyNodeCount: number, peerCount: number, status: string, clusterType: string, shortDescription: string | null, currentStreams: number, currentViewers: number, egressMbps: number, egressCapacityMbps: number, ingressMbps: number, services: Array<string> }>, peerConnections: Array<{ sourceCluster: string, targetCluster: string, connected: boolean, connectionType: string }>, nodes: Array<{ nodeId: string, name: string, nodeType: string, latitude: number, longitude: number, status: string, clusterId: string }>, serviceInstances: Array<{ instanceId: string, serviceId: string, clusterId: string, nodeId: string | null, status: string, healthStatus: string }> } | null };
+networkStatus: { totalNodes: number, healthyNodes: number, updatedAt: string, clusters: Array<{ clusterId: string, name: string, region: string, latitude: number, longitude: number, nodeCount: number, healthyNodeCount: number, peerCount: number, status: string, clusterType: string, shortDescription: string | null, currentStreams: number, currentViewers: number, egressMbps: number, egressCapacityMbps: number, egressUsableMbps: number, defaultBudgetNodes: number, ingressMbps: number, services: Array<string> }>, peerConnections: Array<{ sourceCluster: string, targetCluster: string, connected: boolean, connectionType: string }>, nodes: Array<{ nodeId: string, name: string, nodeType: string, latitude: number, longitude: number, status: string, clusterId: string }>, serviceInstances: Array<{ instanceId: string, serviceId: string, clusterId: string, nodeId: string | null, status: string, healthStatus: string }> } | null };
 
 export type GetNodeQueryVariables = Exact<{
   id: string;
@@ -6705,7 +6923,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6761,7 +6980,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6804,7 +7024,8 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** When the clip was last updated. */
+status: string, /** Processing failure detail from the artifact catalog. */
+errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
 clipMode: string | null, /** Original request parameters for audit/display. */
 requestedParams: unknown, /** Storage backend (local, s3). */
@@ -6840,7 +7061,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6895,8 +7117,7 @@ databaseUrl: string | null, /** Analytics query endpoint URL. */
 periscopeUrl: string | null, /** Kafka broker addresses for event streaming. */
 kafkaBrokers: Array<string> | null, /** Maximum allowed concurrent streams. */
 maxConcurrentStreams: number, /** Maximum allowed concurrent viewers. */
-maxConcurrentViewers: number, /** Maximum allowed bandwidth in Mbps. */
-maxBandwidthMbps: number, /** Cluster health status (healthy, degraded, critical). */
+maxConcurrentViewers: number, /** Cluster health status (healthy, degraded, critical). */
 healthStatus: string, /** Whether the cluster is operational. */
 isActive: boolean, /** Whether this is the tenant's default cluster. */
 isDefaultCluster: boolean, /** Whether this cluster is a platform-official regional/control cell. */
@@ -6911,7 +7132,8 @@ monthlyPriceCents: number | null, /** Whether access requires owner approval. */
 requiresApproval: boolean, /** Short marketplace description. */
 shortDescription: string | null, /** Internal cluster identifier (UUID). */
 clusterClusterId: string, /** When the cluster was created. */
-clusterCreatedAt: string | null }
+clusterCreatedAt: string | null, /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressUsableBytesPerSec: number, ingressUsableBytesPerSec: number, defaultBudgetNodes: number } | null }
     | { __typename: 'ConnectionEvent', id: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connectionEventEventId: string, connectionEventClusterId: string, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
@@ -6936,7 +7158,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7006,7 +7229,11 @@ infrastructureNodeCreatedAt: string | null, /** Real-time state from the analyti
 liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
 ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
-routingImpactPreview: { activeStreams: number, activeViewers: number } }
+routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
+infrastructureNodeCapacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+egressBudgetBytesPerSec: number, /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, /** Last revision applied by Helmsman; null when the node does not report one. */
+appliedRevision: number | null } | null }
     | { __typename: 'Message', /** The globally unique identifier for this message. */
 id: string, /** The conversation this message belongs to. */
 conversationId: string, /** The message content. */
@@ -7050,7 +7277,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7105,7 +7333,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7168,7 +7397,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7225,7 +7455,8 @@ alwaysOn: boolean, /** Number of source placements requested by the operator con
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
 avoidNodeIds: Array<string>, /** Empty unless mode is RESTRICTED. */
-clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7287,7 +7518,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7342,7 +7574,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7397,7 +7630,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7453,7 +7687,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7509,7 +7744,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7565,7 +7801,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7620,7 +7857,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7690,7 +7928,8 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
 retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
-storageCost: { perDay: number, perMonth: number, currency: string } | null }
+storageCost: { perDay: number, perMonth: number, currency: string } | null, /** Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original. */
+originalFile: { sizeBytes: number } | null }
    | null };
 
 export type GetNodeMetrics1hConnectionQueryVariables = Exact<{
@@ -7750,7 +7989,7 @@ export type GetNodesConnectionQueryVariables = Exact<{
 
 /** List nodes (edge servers) with optional filters. */
 export type GetNodesConnectionQuery = { /** List nodes (edge servers) with optional filters. */
-nodesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, nodeId: string, clusterId: string, nodeName: string, nodeType: string, internalIp: string | null, externalIp: string | null, wireguardIp: string | null, wireguardPublicKey: string | null, region: string | null, latitude: number | null, longitude: number | null, availabilityZone: string | null, cpuCores: number | null, memoryGb: number | null, diskGb: number | null, lastHeartbeat: string | null, tags: unknown, metadata: unknown, createdAt: string | null, updatedAt: string | null, effectiveMode: NodeOperationalMode, liveState: { nodeId: string, tenantId: string, cpuPercent: number, ramUsedBytes: number, ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, routingImpactPreview: { activeStreams: number, activeViewers: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+nodesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, nodeId: string, clusterId: string, nodeName: string, nodeType: string, internalIp: string | null, externalIp: string | null, wireguardIp: string | null, wireguardPublicKey: string | null, region: string | null, latitude: number | null, longitude: number | null, availabilityZone: string | null, cpuCores: number | null, memoryGb: number | null, diskGb: number | null, lastHeartbeat: string | null, tags: unknown, metadata: unknown, createdAt: string | null, updatedAt: string | null, effectiveMode: NodeOperationalMode, liveState: { nodeId: string, tenantId: string, cpuPercent: number, ramUsedBytes: number, ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, routingImpactPreview: { activeStreams: number, activeViewers: number }, capacity: { egressBudgetBytesPerSec: number, ingressBudgetBytesPerSec: number, egressSource: CapacityBudgetSource, ingressSource: CapacityBudgetSource, revision: number, updatedAt: string | null, appliedRevision: number | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetOrchestratorQueryVariables = Exact<{
   orchAddr: string;
@@ -7926,7 +8165,7 @@ export type GetProcessingUsageConnectionQueryVariables = Exact<{
 export type GetProcessingUsageConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Processing usage: transcoding, clipping, DVR operations. */
-processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
+processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
 
 export type GetQualityTierDailyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7939,7 +8178,7 @@ export type GetQualityTierDailyConnectionQueryVariables = Exact<{
 export type GetQualityTierDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetRebufferingEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7952,7 +8191,7 @@ export type GetRebufferingEventsConnectionQueryVariables = Exact<{
 
 export type GetRebufferingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetRecentPullSourceEventsQueryVariables = Exact<{
   id: string;
@@ -8014,7 +8253,7 @@ export type GetRoutingEventsConnectionQueryVariables = Exact<{
 
 export type GetRoutingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Infrastructure analytics: routing, node metrics, services. */
-infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetSecurityActivityConnectionQueryVariables = Exact<{
   first?: number | null | undefined;
@@ -8132,7 +8371,7 @@ export type GetStorageEventsConnectionQueryVariables = Exact<{
 
 export type GetStorageEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStorageUsageConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8159,7 +8398,7 @@ export type GetStreamAnalyticsDailyConnectionQueryVariables = Exact<{
 export type GetStreamAnalyticsDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummariesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8174,7 +8413,7 @@ export type GetStreamAnalyticsSummariesConnectionQuery = { /** Unified analytics
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
 streaming: { /** Pre-aggregated analytics summaries for multiple streams. Returns sorted, paginated results with tenant-wide share percentages. */
-streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummaryQueryVariables = Exact<{
   streamId: string;
@@ -8212,7 +8451,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8257,7 +8497,7 @@ export type GetStreamConnectionHourlyConnectionQueryVariables = Exact<{
 export type GetStreamConnectionHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8269,7 +8509,7 @@ export type GetStreamEventsConnectionQueryVariables = Exact<{
 
 export type GetStreamEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealth5mConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8293,7 +8533,7 @@ export type GetStreamHealthConnectionQueryVariables = Exact<{
 
 export type GetStreamHealthConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealthSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -8368,7 +8608,14 @@ export type GetTrackListConnectionQueryVariables = Exact<{
 
 export type GetTrackListConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+
+export type GetTranscodeLadderPolicyQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+/** Allowed video ladders, account choice, and effective default. */
+export type GetTranscodeLadderPolicyQuery = { /** Allowed video ladders, account choice, and effective default. */
+transcodeLadderPolicy: { planDefault: string, tenantLadder: string | null, effectiveLadder: string, ladders: Array<{ name: string, displayName: string, description: string, renditionNames: Array<string> }> } };
 
 export type GetValidateStreamKeyQueryVariables = Exact<{
   streamKey: string;
@@ -8401,7 +8648,7 @@ export type GetViewerGeographicsConnectionQueryVariables = Exact<{
 export type GetViewerGeographicsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8414,7 +8661,7 @@ export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
 export type GetViewerHoursHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerSessionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8426,7 +8673,7 @@ export type GetViewerSessionsConnectionQueryVariables = Exact<{
 
 export type GetViewerSessionsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8439,7 +8686,7 @@ export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
 export type GetViewerTimeSeriesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetVodRetentionQueryVariables = Exact<{
   artifactHash: string;
@@ -8564,7 +8811,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8636,7 +8884,9 @@ createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
-monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
+bandwidthInBps: number | null, /** Bandwidth in bytes per second received from the viewer; legacy field name. */
+bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -8776,7 +9026,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8839,7 +9090,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8902,7 +9154,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8972,7 +9225,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9011,7 +9265,9 @@ export type LiveViewerMetricsSubscriptionVariables = Exact<{
 
 /** Real-time viewer count and engagement metrics for a stream. Updates every few seconds while the stream is live. */
 export type LiveViewerMetricsSubscription = { /** Real-time viewer count and engagement metrics for a stream. Updates every few seconds while the stream is live. */
-liveViewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+liveViewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
+bandwidthInBps: number | null, /** Bandwidth in bytes per second received from the viewer; legacy field name. */
+bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -9035,7 +9291,8 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+avoidNodeIds: Array<string> }, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9588,6 +9845,7 @@ pending: boolean | null }
 
 export type RefreshStreamKeyMutationVariables = Exact<{
   id: string;
+  endActiveSession?: boolean | null | undefined;
 }>;
 
 
@@ -9625,37 +9883,6 @@ timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcryp
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
 context: unknown } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-   };
-
-export type CreateStreamKeyMutationVariables = Exact<{
-  streamId: string;
-  input: CreateStreamKeyInput;
-}>;
-
-
-/** Create an additional stream key for a stream. */
-export type CreateStreamKeyMutation = { /** Create an additional stream key for a stream. */
-createStreamKey:
-    | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'StreamKey', id: string, streamId: string, /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
-keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }
-    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-   };
-
-export type DeleteStreamKeyMutationVariables = Exact<{
-  streamId: string;
-  keyId: string;
-}>;
-
-
-/** Delete a stream key. */
-export type DeleteStreamKeyMutation = { /** Delete a stream key. */
-deleteStreamKey:
-    | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
-pending: boolean | null }
-    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
 export type CreatePushTargetMutationVariables = Exact<{
@@ -9935,7 +10162,52 @@ export type ListArtifactsQueryVariables = Exact<{
 
 /** Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry. */
 export type ListArtifactsQuery = { /** Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry. */
-storageArtifactsConnection: { totalCount: number, hasNextPage: boolean, limit: number, offset: number, nodes: Array<{ key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null }> } };
+storageArtifactsConnection: { totalCount: number, hasNextPage: boolean, limit: number, offset: number, nodes: Array<{ originType: string | null, parentRecordingId: string | null, key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null }> } };
+
+export type ListStreamRecordingsQueryVariables = Exact<{
+  id: string;
+  page?: ConnectionInput | null | undefined;
+}>;
+
+
+/** Recordings from this stream's tenant catalog, newest first. */
+export type ListStreamRecordingsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+stream: { /** Recordings from this stream's tenant catalog, newest first. */
+recordings: { totalCount: number, edges: Array<{ cursor: string, node: { originType: string | null, parentRecordingId: string | null, key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } | null } | null };
+
+export type ListStreamClipsQueryVariables = Exact<{
+  id: string;
+  page?: ConnectionInput | null | undefined;
+}>;
+
+
+/** Clips from this stream's tenant catalog, newest first. */
+export type ListStreamClipsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+stream: { /** Clips from this stream's tenant catalog, newest first. */
+clips: { totalCount: number, edges: Array<{ cursor: string, node: { originType: string | null, parentRecordingId: string | null, key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } | null } | null };
+
+export type ListRecordingChaptersQueryVariables = Exact<{
+  id: string;
+  page?: ConnectionInput | null | undefined;
+  rangeStartMs?: number | null | undefined;
+  rangeEndMs?: number | null | undefined;
+}>;
+
+
+/** Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds. */
+export type ListRecordingChaptersQuery = { /** A recording from the tenant catalog, readable with streams:read. */
+dvrRecording: { id: string | null, dvrHash: string, /** Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds. */
+chapters: { totalCount: number, edges: Array<{ cursor: string, node: { chapterId: string, mode: DVRChapterMode, intervalSeconds: number | null, startMs: number, endMs: number, isCurrent: boolean, state: DVRChapterState, playbackId: string | null, hasGaps: boolean, segmentCount: number, lastFailureReason: string | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } | null } | null };
+
+export type GetDvrRecordingQueryVariables = Exact<{
+  id: string;
+}>;
+
+
+/** A recording from the tenant catalog, readable with streams:read. */
+export type GetDvrRecordingQuery = { /** A recording from the tenant catalog, readable with streams:read. */
+dvrRecording: { __typename: 'DVRRequest', id: string | null, dvrHash: string, playbackId: string, streamId: string, title: string | null, status: string | null, createdAt: string, updatedAt: string, startedAt: string | null, endedAt: string | null, expiresAt: string | null, /** Whether the DVR has passed its retention date (expiresAt < now). */
+isExpired: boolean, durationSeconds: number | null, sizeBytes: number | null, errorMessage: string | null } | null };
 
 export type ServerInfoQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -10032,16 +10304,6 @@ export type ListStreamMetricsQueryVariables = Exact<{
 export type ListStreamMetricsQuery = { /** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 streamsConnection: { totalCount: number, nodes: Array<{ id: string, streamId: string, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, bufferState: string | null, qualityTier: string | null, hasIssues: boolean | null, issuesDescription: string | null } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
-export type ListStreamKeysQueryVariables = Exact<{
-  streamId: string;
-  page?: ConnectionInput | null | undefined;
-}>;
-
-
-/** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
-export type ListStreamKeysQuery = { /** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
-streamKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
-
 export type ListPushTargetsQueryVariables = Exact<{
   streamId: string;
 }>;
@@ -10052,6 +10314,28 @@ export type ListPushTargetsQuery = { /** Fetch a single stream by its global ID.
 stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }> } | null };
+
+export type GetStreamIngestQueryVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+export type GetStreamIngestQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+stream: { /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null } | null };
+
+export type ListStreamIngestQueryVariables = Exact<{
+  page?: ConnectionInput | null | undefined;
+  search?: string | null | undefined;
+}>;
+
+
+/** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+export type ListStreamIngestQuery = { /** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+streamsConnection: { totalCount: number, nodes: Array<{ id: string, streamId: string, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type TenantEventsSubscriptionVariables = Exact<{
   types?: Array<string> | string | null | undefined;
@@ -10080,16 +10364,19 @@ subject: string, data:
       | { __typename: 'MultistreamStatusChanged', streamId: string, targetId: string, targetName: string, status: EventMultistreamStatus, previousStatus: EventMultistreamStatus }
       | { __typename: 'PaymentFailed', paymentId: string, invoiceId: string, provider: string, providerReferenceId: string, paymentFailureReason: EventPaymentFailureReason, amount: { amountMinor: number, currency: string } | null }
       | { __typename: 'RecordingChapterFailed' }
+      | { __typename: 'RecordingChapterReady', chapterId: string, startMs: number, endMs: number, sizeBytes: number, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingFailed', mediaFailureReason: EventMediaFailureReason, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingReady', durationMs: number, sizeBytes: number, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingStarted' }
       | { __typename: 'RecordingStopped' }
-      | { __typename: 'StreamConnected', streamId: string, protocol: EventIngestProtocol }
+      | { __typename: 'StreamConnected', streamId: string, protocol: EventIngestProtocol, sessionId: string }
       | { __typename: 'StreamCreated', streamId: string, name: string, playbackId: string }
       | { __typename: 'StreamDeleted', streamId: string }
-      | { __typename: 'StreamIdle', streamId: string }
+      | { __typename: 'StreamEnded', streamId: string, playbackId: string, sessionId: string }
+      | { __typename: 'StreamIdle', streamId: string, sessionId: string }
+      | { __typename: 'StreamIngestDisconnected', streamId: string, sessionId: string, disconnectReason: string }
       | { __typename: 'StreamKeyRotated', streamId: string }
-      | { __typename: 'StreamLive', streamId: string }
+      | { __typename: 'StreamLive', streamId: string, sessionId: string }
       | { __typename: 'StreamUpdated', streamId: string, changedFields: Array<string> }
       | { __typename: 'TopupCredited', topupId: string, amount: { amountMinor: number, currency: string } | null }
       | { __typename: 'UploadAborted', artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
@@ -10307,18 +10594,6 @@ export const StreamMetricsFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentStr
   issuesDescription
 }
     `, {"fragmentName":"StreamMetricsFields"}) as unknown as TypedDocumentString<StreamMetricsFieldsFragment, unknown>;
-export const StreamKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
-    fragment StreamKeyFields on StreamKey {
-  __typename
-  id
-  streamId
-  keyValue
-  keyName
-  isActive
-  lastUsedAt
-  createdAt
-}
-    `, {"fragmentName":"StreamKeyFields"}) as unknown as TypedDocumentString<StreamKeyFieldsFragment, unknown>;
 export const PushTargetFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment PushTargetFields on PushTarget {
   id
@@ -10508,6 +10783,8 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }`, {"fragmentName":"VodAssetFields"}) as unknown as TypedDocumentString<VodAssetFieldsFragment, unknown>;
 export const StorageArtifactFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StorageArtifactFields on StorageArtifact {
+  originType
+  parentRecordingId
   key
   kind
   id
@@ -10634,6 +10911,15 @@ export const ArtifactEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -10737,6 +11023,15 @@ export const ArtifactEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -10838,6 +11133,15 @@ export const ArtifactStateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -11463,6 +11767,15 @@ export const ClientMetrics5mDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -11574,6 +11887,15 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -11640,6 +11962,7 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
   storagePath
   sizeBytes
   status
+  errorMessage
   clipCreatedAt: createdAt
   updatedAt
   clipMode
@@ -11718,7 +12041,13 @@ export const ClusterDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -11749,7 +12078,13 @@ export const ClusterInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -11877,6 +12212,15 @@ export const ConnectionEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -11992,6 +12336,15 @@ export const ConnectionEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -12125,7 +12478,13 @@ export const CreateEdgeClusterResponseDefaultFieldsFragmentDoc = /*#__PURE__*/ n
     kafkaBrokers
     maxConcurrentStreams
     maxConcurrentViewers
-    maxBandwidthMbps
+    capacity {
+      egressBudgetBytesPerSec
+      ingressBudgetBytesPerSec
+      egressUsableBytesPerSec
+      ingressUsableBytesPerSec
+      defaultBudgetNodes
+    }
     healthStatus
     isActive
     isDefaultCluster
@@ -12318,6 +12677,15 @@ export const GeographicDistributionDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -12532,6 +12900,15 @@ export const InfrastructureNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     activeStreams
     activeViewers
   }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
     `, {"fragmentName":"InfrastructureNodeDefaultFields"}) as unknown as TypedDocumentString<InfrastructureNodeDefaultFieldsFragment, unknown>;
 /** An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers. */
@@ -12581,8 +12958,24 @@ export const InfrastructureNodeInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
     activeStreams
     activeViewers
   }
+  infrastructureNodeCapacity: capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
     `, {"fragmentName":"InfrastructureNodeInNodeDefaultFields"}) as unknown as TypedDocumentString<InfrastructureNodeInNodeDefaultFieldsFragment, unknown>;
+/** An accepted request to stop the currently claimed push publisher. */
+export const IngestDisconnectSuccessDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment IngestDisconnectSuccessDefaultFields on IngestDisconnectSuccess {
+  streamId
+  stopRequested
+}
+    `, {"fragmentName":"IngestDisconnectSuccessDefaultFields"}) as unknown as TypedDocumentString<IngestDisconnectSuccessDefaultFieldsFragment, unknown>;
 /** A billing invoice for a subscription period. Includes base subscription and metered usage charges. Amounts are computed in EUR; a finalized invoice is presented and charged in the tenant's presentment currency at the ECB rate of its finalization date. */
 export const InvoiceDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment InvoiceDefaultFields on Invoice {
@@ -13014,6 +13407,8 @@ export const MediaRetentionPolicyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
   effectiveVodRetentionDays
   effectiveDvrRetentionDays
   effectiveClipRetentionDays
+  keepVodOriginals
+  effectiveKeepVodOriginals
 }
     `, {"fragmentName":"MediaRetentionPolicyDefaultFields"}) as unknown as TypedDocumentString<MediaRetentionPolicyDefaultFieldsFragment, unknown>;
 /** A message within a support conversation. */
@@ -13079,6 +13474,8 @@ export const NetworkStatusDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     currentViewers
     egressMbps
     egressCapacityMbps
+    egressUsableMbps
+    defaultBudgetNodes
     ingressMbps
     services
   }
@@ -13452,6 +13849,15 @@ export const ProcessingUsageRecordDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -13592,6 +13998,15 @@ export const ProcessingUsageRecordInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -13751,6 +14166,15 @@ export const QualityTierDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -13861,6 +14285,15 @@ export const RebufferingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -13981,6 +14414,15 @@ export const RoutingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14295,6 +14737,15 @@ export const StorageEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14399,6 +14850,15 @@ export const StorageEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14519,6 +14979,15 @@ export const StreamAnalyticsDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14613,6 +15082,15 @@ export const StreamAnalyticsSummaryDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14741,6 +15219,15 @@ export const StreamConnectionHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14835,6 +15322,15 @@ export const StreamEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -14960,6 +15456,15 @@ export const StreamEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -15119,6 +15624,15 @@ export const StreamHealthMetricDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -15236,6 +15750,15 @@ export const StreamHealthMetricInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -15367,6 +15890,15 @@ export const StreamInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
   }
   createdAt
   streamUpdatedAt: updatedAt
+  ingest {
+    state
+    isLive
+    sessionId
+    connectedAt
+    liveSince
+    endedAt
+    resumableUntil
+  }
   metrics {
     status
     isLive
@@ -15980,6 +16512,15 @@ export const TrackListEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16090,6 +16631,15 @@ export const TrackListEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16199,6 +16749,15 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16288,6 +16847,19 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
   primaryAudioSampleRate
 }
     `, {"fragmentName":"TrackListUpdateDefaultFields"}) as unknown as TypedDocumentString<TrackListUpdateDefaultFieldsFragment, unknown>;
+export const TranscodeLadderPolicyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+  ladders {
+    name
+    displayName
+    description
+    renditionNames
+  }
+  planDefault
+  tenantLadder
+  effectiveLadder
+}
+    `, {"fragmentName":"TranscodeLadderPolicyDefaultFields"}) as unknown as TypedDocumentString<TranscodeLadderPolicyDefaultFieldsFragment, unknown>;
 export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
   timestamp
@@ -16319,6 +16891,15 @@ export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16429,6 +17010,15 @@ export const ViewerGeographicDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16532,6 +17122,15 @@ export const ViewerHoursHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16629,6 +17228,15 @@ export const ViewerHoursHourlyInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16725,6 +17333,15 @@ export const ViewerMetricsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16834,6 +17451,15 @@ export const ViewerSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -16943,6 +17569,15 @@ export const ViewerSessionInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -17079,8 +17714,20 @@ export const VodAssetInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
     perMonth
     currency
   }
+  originalFile {
+    sizeBytes
+  }
 }
     `, {"fragmentName":"VodAssetInNodeDefaultFields"}) as unknown as TypedDocumentString<VodAssetInNodeDefaultFieldsFragment, unknown>;
+/** Short-lived download of the byte-identical original upload, without playback metering. */
+export const VodOriginalDownloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment VodOriginalDownloadDefaultFields on VodOriginalDownload {
+  url
+  expiresAt
+  sizeBytes
+  filename
+}
+    `, {"fragmentName":"VodOriginalDownloadDefaultFields"}) as unknown as TypedDocumentString<VodOriginalDownloadDefaultFieldsFragment, unknown>;
 /** A VOD asset with retention data in the window. Eligibility + stats (sessions, duration, lastSeen) come from analytics; title/playbackId are composed from the catalog by artifactHash — both may be null when the asset is uncatalogued (e.g. deleted but retention still within TTL). */
 export const VodRetentionAssetDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment VodRetentionAssetDefaultFields on VodRetentionAsset {
@@ -17911,7 +18558,13 @@ export const CreateEdgeClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
     kafkaBrokers
     maxConcurrentStreams
     maxConcurrentViewers
-    maxBandwidthMbps
+    capacity {
+      egressBudgetBytesPerSec
+      ingressBudgetBytesPerSec
+      egressUsableBytesPerSec
+      ingressUsableBytesPerSec
+      defaultBudgetNodes
+    }
     healthStatus
     isActive
     isDefaultCluster
@@ -18176,6 +18829,39 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<CreateStripeCheckoutMutation, CreateStripeCheckoutMutationVariables>;
+/** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
+export const CreateVodOriginalDownloadDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation CreateVodOriginalDownload($id: ID!) {
+  createVodOriginalDownload(id: $id) {
+    __typename
+    ...VodOriginalDownloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment VodOriginalDownloadDefaultFields on VodOriginalDownload {
+  url
+  expiresAt
+  sizeBytes
+  filename
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<CreateVodOriginalDownloadMutation, CreateVodOriginalDownloadMutationVariables>;
 /** Create an outbound webhook endpoint. The response carries the signing secret once; it is never returned again. A tenant can have at most 10 endpoints. */
 export const CreateWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateWebhookEndpoint($input: CreateWebhookEndpointInput!) {
@@ -18254,6 +18940,38 @@ export const DeleteSkipperConversationDocument = /*#__PURE__*/ new TypedDocument
   deleteSkipperConversation(id: $id)
 }
     `) as unknown as TypedDocumentString<DeleteSkipperConversationMutation, DeleteSkipperConversationMutationVariables>;
+/** Permanently delete only the retained upload; processed playback remains available. */
+export const DeleteVodOriginalDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation DeleteVodOriginal($id: ID!) {
+  deleteVodOriginal(id: $id) {
+    __typename
+    ...DeleteSuccessDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment DeleteSuccessDefaultFields on DeleteSuccess {
+  success
+  deletedId
+  pending
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<DeleteVodOriginalMutation, DeleteVodOriginalMutationVariables>;
 /** Delete an endpoint with its signing secrets and delivery log. */
 export const DeleteWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteWebhookEndpoint($id: ID!) {
@@ -18316,6 +19034,37 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<DisableWebhookEndpointMutation, DisableWebhookEndpointMutationVariables>;
+/** Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false. */
+export const DisconnectIngestDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation DisconnectIngest($streamId: ID!) {
+  disconnectIngest(streamId: $streamId) {
+    __typename
+    ...IngestDisconnectSuccessDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment IngestDisconnectSuccessDefaultFields on IngestDisconnectSuccess {
+  streamId
+  stopRequested
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<DisconnectIngestMutation, DisconnectIngestMutationVariables>;
 /** Enable a disabled endpoint. Deliveries skipped while it was disabled are not sent again; replay them with replayWebhookDeliveries. */
 export const EnableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation EnableWebhookEndpoint($id: ID!) {
@@ -18943,6 +19692,8 @@ export const SetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentSt
   effectiveVodRetentionDays
   effectiveDvrRetentionDays
   effectiveClipRetentionDays
+  keepVodOriginals
+  effectiveKeepVodOriginals
 }
 fragment ValidationErrorDefaultFields on ValidationError {
   message
@@ -18954,6 +19705,88 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<SetMediaRetentionPolicyMutation, SetMediaRetentionPolicyMutationVariables>;
+/** Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access. */
+export const SetNodeCapacityDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation SetNodeCapacity($input: SetNodeCapacityInput!) {
+  setNodeCapacity(input: $input) {
+    __typename
+    ...InfrastructureNodeDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment InfrastructureNodeDefaultFields on InfrastructureNode {
+  id
+  nodeId
+  clusterId
+  nodeName
+  nodeType
+  internalIp
+  externalIp
+  wireguardIp
+  wireguardPublicKey
+  region
+  latitude
+  longitude
+  availabilityZone
+  cpuCores
+  memoryGb
+  diskGb
+  lastHeartbeat
+  tags
+  metadata
+  createdAt
+  updatedAt
+  liveState {
+    nodeId
+    tenantId
+    cpuPercent
+    ramUsedBytes
+    ramTotalBytes
+    diskUsedBytes
+    diskTotalBytes
+    upSpeed
+    downSpeed
+    activeStreams
+    isHealthy
+    latitude
+    longitude
+    location
+    metadata
+    updatedAt
+  }
+  effectiveMode
+  routingImpactPreview {
+    activeStreams
+    activeViewers
+  }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<SetNodeCapacityMutation, SetNodeCapacityMutationVariables>;
 /** Set a node's operational mode. Drains/maintenance bleed traffic away from the node; restoring with NORMAL re-admits it to routing. Reason is recorded in Foghorn's audit trail. */
 export const SetNodeModeDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation SetNodeMode($input: SetNodeModeInput!) {
@@ -19010,6 +19843,15 @@ export const SetNodeModeDocument = /*#__PURE__*/ new TypedDocumentString(`
     activeStreams
     activeViewers
   }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
 fragment NotFoundErrorDefaultFields on NotFoundError {
   message
@@ -19050,7 +19892,13 @@ export const SetPreferredClusterDocument = /*#__PURE__*/ new TypedDocumentString
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -19114,6 +19962,72 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<SetStreamRetentionOverridesMutation, SetStreamRetentionOverridesMutationVariables>;
+/** Set the account's video ladder. Empty or null inherits the plan default. */
+export const SetTranscodeLadderPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation SetTranscodeLadderPolicy($input: SetTranscodeLadderPolicyInput!) {
+  setTranscodeLadderPolicy(input: $input) {
+    __typename
+    ...TranscodeLadderPolicyDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+  ladders {
+    name
+    displayName
+    description
+    renditionNames
+  }
+  planDefault
+  tenantLadder
+  effectiveLadder
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<SetTranscodeLadderPolicyMutation, SetTranscodeLadderPolicyMutationVariables>;
+/** Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged. */
+export const SetVodOriginalPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation SetVodOriginalPolicy($keepVodOriginals: Boolean) {
+  setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+    __typename
+    ...MediaRetentionPolicyDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
+  bounds {
+    maxRecordingRetentionDays
+  }
+  updatedBy
+  updatedAt
+  defaultVodRetentionDays
+  defaultDvrRetentionDays
+  defaultClipRetentionDays
+  effectiveVodRetentionDays
+  effectiveDvrRetentionDays
+  effectiveClipRetentionDays
+  keepVodOriginals
+  effectiveKeepVodOriginals
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<SetVodOriginalPolicyMutation, SetVodOriginalPolicyMutationVariables>;
 /** Submit an x402 payment payload to settle a 402 response or top up balance. Authenticated members may settle viewer resources; direct top-ups and non-viewer resources require billing management authority on the target tenant. */
 export const SubmitX402PaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation SubmitX402Payment($payment: String!, $resource: String) {
@@ -19299,7 +20213,13 @@ export const UpdateClusterMarketplaceDocument = /*#__PURE__*/ new TypedDocumentS
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -19633,6 +20553,15 @@ export const GetArtifactEventsConnectionDocument = /*#__PURE__*/ new TypedDocume
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -19788,6 +20717,15 @@ export const GetArtifactStatesConnectionDocument = /*#__PURE__*/ new TypedDocume
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -20402,6 +21340,15 @@ export const GetClientQoeConnectionDocument = /*#__PURE__*/ new TypedDocumentStr
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -20511,7 +21458,13 @@ export const GetClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -20757,6 +21710,15 @@ export const GetClusterNodesConnectionDocument = /*#__PURE__*/ new TypedDocument
     activeStreams
     activeViewers
   }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
 fragment PageInfoDefaultFields on PageInfo {
   startCursor
@@ -20918,7 +21880,13 @@ export const GetClustersConnectionDocument = /*#__PURE__*/ new TypedDocumentStri
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -20995,6 +21963,15 @@ export const GetConnectionEventsConnectionDocument = /*#__PURE__*/ new TypedDocu
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -21324,6 +22301,15 @@ export const GetGeographicDistributionDocument = /*#__PURE__*/ new TypedDocument
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -21984,6 +22970,8 @@ export const GetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentSt
   effectiveVodRetentionDays
   effectiveDvrRetentionDays
   effectiveClipRetentionDays
+  keepVodOriginals
+  effectiveKeepVodOriginals
 }`) as unknown as TypedDocumentString<GetMediaRetentionPolicyQuery, GetMediaRetentionPolicyQueryVariables>;
 /** List messages in a conversation. Messages are ordered chronologically, oldest first. */
 export const GetMessagesConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -22094,7 +23082,13 @@ export const GetMySubscriptionsConnectionDocument = /*#__PURE__*/ new TypedDocum
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -22140,6 +23134,8 @@ export const GetNetworkStatusDocument = /*#__PURE__*/ new TypedDocumentString(`
     currentViewers
     egressMbps
     egressCapacityMbps
+    egressUsableMbps
+    defaultBudgetNodes
     ingressMbps
     services
   }
@@ -22250,6 +23246,15 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -22360,6 +23365,15 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -22457,6 +23471,15 @@ fragment ClipInNodeDefaultFields on Clip {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -22523,6 +23546,7 @@ fragment ClipInNodeDefaultFields on Clip {
   storagePath
   sizeBytes
   status
+  errorMessage
   clipCreatedAt: createdAt
   updatedAt
   clipMode
@@ -22577,7 +23601,13 @@ fragment ClusterInNodeDefaultFields on Cluster {
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -22624,6 +23654,15 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -22766,6 +23805,15 @@ fragment InfrastructureNodeInNodeDefaultFields on InfrastructureNode {
     activeStreams
     activeViewers
   }
+  infrastructureNodeCapacity: capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
 fragment MessageDefaultFields on Message {
   id
@@ -22858,6 +23906,15 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -22995,6 +24052,15 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23108,6 +24174,15 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23224,6 +24299,15 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23318,6 +24402,15 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23410,6 +24503,15 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23548,6 +24650,15 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23663,6 +24774,15 @@ fragment StreamInNodeDefaultFields on Stream {
   }
   createdAt
   streamUpdatedAt: updatedAt
+  ingest {
+    state
+    isLive
+    sessionId
+    connectedAt
+    liveSince
+    endedAt
+    resumableUntil
+  }
   metrics {
     status
     isLive
@@ -23769,6 +24889,15 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23886,6 +25015,15 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -23981,6 +25119,15 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -24113,6 +25260,9 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
     perDay
     perMonth
     currency
+  }
+  originalFile {
+    sizeBytes
   }
 }`) as unknown as TypedDocumentString<GetNodeQuery, GetNodeQueryVariables>;
 export const GetNodeMetrics1hConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -24344,6 +25494,15 @@ export const GetNodesConnectionDocument = /*#__PURE__*/ new TypedDocumentString(
   routingImpactPreview {
     activeStreams
     activeViewers
+  }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
   }
 }
 fragment PageInfoDefaultFields on PageInfo {
@@ -24892,6 +26051,15 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -25061,6 +26229,15 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -25193,6 +26370,15 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -25466,6 +26652,15 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -25852,6 +27047,15 @@ fragment StorageEventDefaultFields on StorageEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26033,6 +27237,15 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26158,6 +27371,15 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26294,6 +27516,15 @@ export const GetStreamAnalyticsSummaryDocument = /*#__PURE__*/ new TypedDocument
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26452,6 +27683,15 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26574,6 +27814,15 @@ fragment StreamEventDefaultFields on StreamEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -26772,6 +28021,15 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27053,6 +28311,15 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27132,6 +28399,24 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     sampleRate
   }
 }`) as unknown as TypedDocumentString<GetTrackListConnectionQuery, GetTrackListConnectionQueryVariables>;
+/** Allowed video ladders, account choice, and effective default. */
+export const GetTranscodeLadderPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetTranscodeLadderPolicy {
+  transcodeLadderPolicy {
+    ...TranscodeLadderPolicyDefaultFields
+  }
+}
+    fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+  ladders {
+    name
+    displayName
+    description
+    renditionNames
+  }
+  planDefault
+  tenantLadder
+  effectiveLadder
+}`) as unknown as TypedDocumentString<GetTranscodeLadderPolicyQuery, GetTranscodeLadderPolicyQueryVariables>;
 /** Validate a stream key and return the associated stream info. */
 export const GetValidateStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetValidateStreamKey($streamKey: String!) {
@@ -27239,6 +28524,15 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27372,6 +28666,15 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27497,6 +28800,15 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27636,6 +28948,15 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -27950,6 +29271,15 @@ export const LiveConnectionEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -28520,6 +29850,15 @@ export const LiveProcessingEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -28664,6 +30003,15 @@ export const LiveStorageEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -28773,6 +30121,15 @@ export const LiveStreamEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -28923,6 +30280,15 @@ export const LiveTrackListUpdatesDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -29047,6 +30413,15 @@ export const LiveViewerMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -30108,8 +31483,8 @@ fragment DeleteSuccessFields on DeleteSuccess {
 }`) as unknown as TypedDocumentString<DeleteStreamMutation, DeleteStreamMutationVariables>;
 /** Generate a new stream key, invalidating the old one. */
 export const RefreshStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
-    mutation RefreshStreamKey($id: ID!) {
-  refreshStreamKey(id: $id) {
+    mutation RefreshStreamKey($id: ID!, $endActiveSession: Boolean = false) {
+  refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
     __typename
     ...StreamWithKeyFields
     ...ValidationErrorFields
@@ -30181,74 +31556,6 @@ fragment StreamWithKeyFields on Stream {
   ...StreamFields
   streamKey
 }`) as unknown as TypedDocumentString<RefreshStreamKeyMutation, RefreshStreamKeyMutationVariables>;
-/** Create an additional stream key for a stream. */
-export const CreateStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
-    mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
-  createStreamKey(streamId: $streamId, input: $input) {
-    __typename
-    ...StreamKeyFields
-    ...ValidationErrorFields
-    ...NotFoundErrorFields
-    ...AuthErrorFields
-  }
-}
-    fragment ValidationErrorFields on ValidationError {
-  __typename
-  message
-  code
-  field
-  constraint
-}
-fragment AuthErrorFields on AuthError {
-  __typename
-  message
-  code
-}
-fragment NotFoundErrorFields on NotFoundError {
-  __typename
-  message
-  code
-  resourceType
-  resourceId
-}
-fragment StreamKeyFields on StreamKey {
-  __typename
-  id
-  streamId
-  keyValue
-  keyName
-  isActive
-  lastUsedAt
-  createdAt
-}`) as unknown as TypedDocumentString<CreateStreamKeyMutation, CreateStreamKeyMutationVariables>;
-/** Delete a stream key. */
-export const DeleteStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
-    mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
-  deleteStreamKey(streamId: $streamId, keyId: $keyId) {
-    __typename
-    ...DeleteSuccessFields
-    ...NotFoundErrorFields
-    ...AuthErrorFields
-  }
-}
-    fragment AuthErrorFields on AuthError {
-  __typename
-  message
-  code
-}
-fragment NotFoundErrorFields on NotFoundError {
-  __typename
-  message
-  code
-  resourceType
-  resourceId
-}
-fragment DeleteSuccessFields on DeleteSuccess {
-  __typename
-  success
-  deletedId
-  pending
-}`) as unknown as TypedDocumentString<DeleteStreamKeyMutation, DeleteStreamKeyMutationVariables>;
 /** Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets. */
 export const CreatePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
@@ -30783,6 +32090,8 @@ export const ListArtifactsDocument = /*#__PURE__*/ new TypedDocumentString(`
   assetKey
 }
 fragment StorageArtifactFields on StorageArtifact {
+  originType
+  parentRecordingId
   key
   kind
   id
@@ -30804,6 +32113,178 @@ fragment StorageArtifactFields on StorageArtifact {
     ...ThumbnailAssetsFields
   }
 }`) as unknown as TypedDocumentString<ListArtifactsQuery, ListArtifactsQueryVariables>;
+/** Recordings from this stream's tenant catalog, newest first. */
+export const ListStreamRecordingsDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query ListStreamRecordings($id: ID!, $page: ConnectionInput) {
+  stream(id: $id) {
+    recordings(page: $page) {
+      edges {
+        cursor
+        node {
+          ...StorageArtifactFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+    fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+  posterUrl
+  spriteVttUrl
+  spriteJpgUrl
+  assetKey
+}
+fragment StorageArtifactFields on StorageArtifact {
+  originType
+  parentRecordingId
+  key
+  kind
+  id
+  hash
+  playbackId
+  streamId
+  streamTitle
+  title
+  description
+  errorMessage
+  sizeBytes
+  status
+  createdAt
+  updatedAt
+  expiresAt
+  deleteId
+  durationSeconds
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+}`) as unknown as TypedDocumentString<ListStreamRecordingsQuery, ListStreamRecordingsQueryVariables>;
+/** Clips from this stream's tenant catalog, newest first. */
+export const ListStreamClipsDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query ListStreamClips($id: ID!, $page: ConnectionInput) {
+  stream(id: $id) {
+    clips(page: $page) {
+      edges {
+        cursor
+        node {
+          ...StorageArtifactFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+    fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+  posterUrl
+  spriteVttUrl
+  spriteJpgUrl
+  assetKey
+}
+fragment StorageArtifactFields on StorageArtifact {
+  originType
+  parentRecordingId
+  key
+  kind
+  id
+  hash
+  playbackId
+  streamId
+  streamTitle
+  title
+  description
+  errorMessage
+  sizeBytes
+  status
+  createdAt
+  updatedAt
+  expiresAt
+  deleteId
+  durationSeconds
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+}`) as unknown as TypedDocumentString<ListStreamClipsQuery, ListStreamClipsQueryVariables>;
+/** Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds. */
+export const ListRecordingChaptersDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query ListRecordingChapters($id: ID!, $page: ConnectionInput, $rangeStartMs: Float, $rangeEndMs: Float) {
+  dvrRecording(id: $id) {
+    id
+    dvrHash
+    chapters(page: $page, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+      edges {
+        cursor
+        node {
+          ...DVRChapterRefFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}
+    fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment DVRChapterRefFields on DVRChapterRef {
+  chapterId
+  mode
+  intervalSeconds
+  startMs
+  endMs
+  isCurrent
+  state
+  playbackId
+  hasGaps
+  segmentCount
+  lastFailureReason
+}`) as unknown as TypedDocumentString<ListRecordingChaptersQuery, ListRecordingChaptersQueryVariables>;
+/** A recording from the tenant catalog, readable with streams:read. */
+export const GetDvrRecordingDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetDvrRecording($id: ID!) {
+  dvrRecording(id: $id) {
+    ...DVRRequestFields
+  }
+}
+    fragment DVRRequestFields on DVRRequest {
+  __typename
+  id
+  dvrHash
+  playbackId
+  streamId
+  title
+  status
+  createdAt
+  updatedAt
+  startedAt
+  endedAt
+  expiresAt
+  isExpired
+  durationSeconds
+  sizeBytes
+  errorMessage
+}`) as unknown as TypedDocumentString<GetDvrRecordingQuery, GetDvrRecordingQueryVariables>;
 /** Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in. */
 export const ServerInfoDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ServerInfo {
@@ -30985,35 +32466,6 @@ fragment StreamMetricsFields on StreamMetrics {
   hasIssues
   issuesDescription
 }`) as unknown as TypedDocumentString<ListStreamMetricsQuery, ListStreamMetricsQueryVariables>;
-/** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
-export const ListStreamKeysDocument = /*#__PURE__*/ new TypedDocumentString(`
-    query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
-  streamKeysConnection(streamId: $streamId, page: $page) {
-    nodes {
-      ...StreamKeyFields
-    }
-    pageInfo {
-      ...PageInfoFields
-    }
-    totalCount
-  }
-}
-    fragment PageInfoFields on PageInfo {
-  startCursor
-  endCursor
-  hasNextPage
-  hasPreviousPage
-}
-fragment StreamKeyFields on StreamKey {
-  __typename
-  id
-  streamId
-  keyValue
-  keyName
-  isActive
-  lastUsedAt
-  createdAt
-}`) as unknown as TypedDocumentString<ListStreamKeysQuery, ListStreamKeysQueryVariables>;
 /** Configured multistream push targets for this stream. */
 export const ListPushTargetsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListPushTargets($streamId: ID!) {
@@ -31037,6 +32489,53 @@ export const ListPushTargetsDocument = /*#__PURE__*/ new TypedDocumentString(`
   lastPushedAt
   createdAt
 }`) as unknown as TypedDocumentString<ListPushTargetsQuery, ListPushTargetsQueryVariables>;
+/** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+export const GetStreamIngestDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetStreamIngest($id: ID!) {
+  stream(id: $id) {
+    id
+    streamId
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<GetStreamIngestQuery, GetStreamIngestQueryVariables>;
+/** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+export const ListStreamIngestDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query ListStreamIngest($page: ConnectionInput, $search: String) {
+  streamsConnection(page: $page, search: $search) {
+    nodes {
+      id
+      streamId
+      ingest {
+        state
+        isLive
+        sessionId
+        connectedAt
+        liveSince
+        endedAt
+        resumableUntil
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+    fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}`) as unknown as TypedDocumentString<ListStreamIngestQuery, ListStreamIngestQueryVariables>;
 /** Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event's data is the registered payload of its type. Pass types to receive only those event types (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events whose payload names that stream. */
 export const TenantEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     subscription TenantEvents($types: [String!], $streamId: ID) {
@@ -31139,9 +32638,29 @@ export const TenantEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
         }
         mediaFailureReason: reason
       }
+      ... on StreamEnded {
+        streamId
+        playbackId
+        sessionId
+      }
+      ... on StreamIngestDisconnected {
+        streamId
+        sessionId
+        disconnectReason: reason
+      }
+      ... on RecordingChapterReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        chapterId
+        startMs
+        endMs
+        sizeBytes
+      }
       ... on StreamConnected {
         streamId
         protocol
+        sessionId
       }
       ... on StreamCreated {
         streamId
@@ -31153,12 +32672,14 @@ export const TenantEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
       }
       ... on StreamIdle {
         streamId
+        sessionId
       }
       ... on StreamKeyRotated {
         streamId
       }
       ... on StreamLive {
         streamId
+        sessionId
       }
       ... on StreamUpdated {
         streamId

@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
+import "capacity_values.proto";
 import "events/envelope.proto";
 
 // Coarse geospatial bucket (H3 index + resolution)
@@ -74,6 +75,8 @@ service DecklogService {
 // the aggregate consumer side is time-ordered. Decklog backfills any
 // envelope field a legacy producer left empty.
 message ServiceEvent {
+  reserved 25;
+  reserved "stream_key_event";
   string event_id = 1;
   string event_type = 2;
   google.protobuf.Timestamp timestamp = 3;
@@ -88,7 +91,6 @@ message ServiceEvent {
     TenantEvent tenant_event = 22;
     ClusterEvent cluster_event = 23;
     StreamChangeEvent stream_change_event = 24;
-    StreamKeyEvent stream_key_event = 25;
     BillingEvent billing_event = 26;
     MessageLifecycleData support_event = 27;
     ArtifactEvent artifact_event = 28;
@@ -160,10 +162,6 @@ message StreamChangeEvent {
   repeated string changed_fields = 2;
 }
 
-message StreamKeyEvent {
-  string stream_id = 1;
-  string key_id = 2;
-}
 
 message BillingEvent {
   string tenant_id = 1;
@@ -556,8 +554,8 @@ message ManagedStreamRetraction {
   string policy_digest = 11;
 }
 
-// DrainStreamRequest is sent by Foghorn when a new publisher session replaces
-// an ended publisher on another node. The old owner must unload its
+// DrainStreamRequest is sent by Foghorn when a publisher loses its claim or
+// a new publisher replaces an ended publisher on another node. The old owner must unload its
 // lingering Mist buffer and disconnect viewer sessions for that runtime
 // name so viewers don't keep talking to the stale buffer. Idempotent —
 // when the stream is absent locally, Helmsman returns unloaded=false with
@@ -565,13 +563,14 @@ message ManagedStreamRetraction {
 message DrainStreamRequest {
   string runtime_name = 1;        // exact Mist source name to nuke
   string reason = 2;              // e.g. "publisher_replaced_by_node:edge-us-2"
-  // Obligation identity: the admitting ingest generation whose durable drain leg this command
+  // Obligation identity: the ingest generation whose durable drain leg this command
   // serves. Echoed verbatim in the response so the acknowledgement completes EXACTLY that
   // obligation — a delayed response from an earlier generation must not complete a later one.
   string source_generation = 3;
   // Exact generation that occupied runtime_name on the drained node when this obligation was
   // created. Helmsman refuses the command after it has admitted a different local generation.
   string prior_owner_source_generation = 4;
+  string tenant_id = 5; // owning tenant of the exact drain obligation
 }
 
 // DrainStreamResponse acknowledges the drain COMMAND. nuke_stream launches MistUtilNuke
@@ -583,6 +582,7 @@ message DrainStreamResponse {
   uint32 sessions_disconnected = 3;
   string error = 4;               // empty on success; populated on partial failure
   string source_generation = 5;   // echoed from the request for exact obligation correlation
+  string tenant_id = 6; // echoed for tenant-bound acknowledgement persistence
 }
 
 // ModeChangeRequest is sent by Helmsman when a local agent or CLI requests
@@ -653,6 +653,9 @@ message StopSessionsRequest {
 message StopSessionsTarget {
   string internal_name = 1;
   string source_generation = 2;
+  int64 connector_pid = 3;
+  // Requires control protocol 12: persist rejection of a delayed admission.
+  bool fence_admission = 4;
 }
 
 // Success confirms Mist reports no sessions for the exact requested scope.
@@ -951,6 +954,18 @@ message Register {
   // False (an older sidecar, or a store that could not be read) means the list
   // proves nothing, and Foghorn ends no session because of it.
   bool live_ingest_generations_reported = 27;
+  // Direct-source buffers observed in Mist before registration. A failed or malformed
+  // snapshot proves no absence and leaves reported false.
+  repeated LiveSourceBuffer live_source_buffers = 28;
+  bool live_source_buffers_reported = 29;
+  // Node clock at the beginning of the snapshot; a later FULL cannot be retired
+  // by an inventory captured before that buffer existed.
+  int64 live_source_buffers_sampled_unix_millis = 30;
+}
+
+message LiveSourceBuffer {
+  string runtime_name = 1;
+  int64 buffer_pid = 2;
 }
 
 // LiveIngestGeneration is one admitted publisher generation a sidecar still
@@ -2335,7 +2350,9 @@ message ClientLifecycleUpdate {
   optional string session_id = 7;
   optional float connection_time = 8;
   optional float position = 9;
+  // Bytes per second sent to the viewer (Mist upbps); legacy field name.
   optional uint64 bandwidth_in_bps = 10;
+  // Bytes per second received from the viewer (Mist downbps); legacy field name.
   optional uint64 bandwidth_out_bps = 11;
   optional uint64 bytes_downloaded = 12;
   optional uint64 bytes_uploaded = 13;
@@ -2537,6 +2554,15 @@ enum NodeOperationalMode {
   NODE_OPERATIONAL_MODE_MAINTENANCE = 3;
 }
 
+// Resolved budgets in bytes per second, authored by Quartermaster and delivered by Foghorn.
+message NodeBandwidthCapacity {
+  uint64 egress_budget_bytes_per_sec = 1;
+  uint64 ingress_budget_bytes_per_sec = 2;
+  BandwidthBudgetSource egress_source = 3;
+  BandwidthBudgetSource ingress_source = 4;
+  uint64 revision = 5;
+}
+
 message NodeLifecycleUpdate {
   string node_id = 1;
   // Resource metrics
@@ -2655,6 +2681,16 @@ message NodeLifecycleUpdate {
   // provisioned-config marker in HELMSMAN_STATE_DIR. Unset when the node was
   // never provisioned by a CLI that writes the marker.
   EdgeProvisionedConfig provisioned_config = 55;
+  // Presence distinguishes revision 0 from an older sidecar that cannot apply capacity.
+  optional uint64 capacity_revision_applied = 56;
+  // False marks a first sample, counter reset, interface change, or invalid time window.
+  optional bool observed_valid = 57;
+  int64 sample_window_start_ms = 58;
+  int64 sample_window_end_ms = 59;
+  // Stamped by Foghorn from its composed seed, never accepted as node-authored budgets.
+  uint64 egress_budget_bytes_per_sec = 60;
+  BandwidthBudgetSource budget_source = 61;
+  ObservedSource observed_source = 62;
 }
 
 // EdgeProvisionedConfig identifies the rendered edge config on a node:
@@ -3084,7 +3120,8 @@ message StreamData {
   uint32 inputs = 2;         // Input count
   uint64 bytes_up = 3;       // Upload bytes
   uint64 bytes_down = 4;     // Download bytes
-  uint32 bandwidth = 5;      // Bandwidth per viewer
+  reserved 5;
+  reserved "bandwidth";
   bool replicated = 6;       // True if this is a replicated (pull) stream
 
   // Packet stats (for QoS monitoring) - MistServer pkts array
@@ -3092,6 +3129,9 @@ message StreamData {
 
   // Connection totals - MistServer tot array
   repeated int64 total_connections = 8;   // [total_viewers, total_inputs, total_outputs]
+  // Audience excludes internal processing, ingest and output sessions.
+  optional uint32 audience_viewers = 9;
+
 }
 
 // Stream track information (replaces JSON parsing)
@@ -3230,8 +3270,8 @@ message ConfigSeed {
   // Tenant owning this node (resolved by Foghorn via Quartermaster)
   string tenant_id = 5;
   repeated StreamTemplate templates = 10;
-  // Processing configuration (Gateway availability, codec support)
-  ProcessingConfig processing = 11;
+  reserved 11;
+  reserved "processing";
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
   // Single cluster bundle. Kept populated with the cluster wildcard site
@@ -3257,6 +3297,7 @@ message ConfigSeed {
   // explicit found=false removes it from the next durable seed. Subscription
   // revocation withdraws Navigator DNS membership before credential cleanup.
   repeated TLSCertBundle tls_bundles = 26;
+  NodeBandwidthCapacity capacity = 27;
 }
 
 message BalancerCapabilityUpdate {

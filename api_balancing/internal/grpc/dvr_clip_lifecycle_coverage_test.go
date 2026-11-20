@@ -580,7 +580,7 @@ func TestGetNodeHealth_OwnerSnapshotFields(t *testing.T) {
 	if !resp.IsHealthy {
 		t.Fatalf("freshly-touched healthy node must report healthy")
 	}
-	if resp.CpuPercent != 42 || resp.RamUsedMb != 8000 || resp.RamMaxMb != 16000 {
+	if resp.CpuPercent != 42 || resp.RamUsedMb != 8000.0/(1024*1024) || resp.RamMaxMb != 16000.0/(1024*1024) {
 		t.Fatalf("metric fields wrong: cpu=%v ramUsed=%v ramMax=%v", resp.CpuPercent, resp.RamUsedMb, resp.RamMaxMb)
 	}
 	if resp.DiskTotalBytes != 1000 || resp.DiskUsedBytes != 250 {

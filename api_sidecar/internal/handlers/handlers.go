@@ -1054,6 +1054,11 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	if ss := mistTrigger.GetStreamSource(); ss != nil {
+		if processingSourceRetiring(ss.GetStreamName()) {
+			incMistWebhook("STREAM_SOURCE", "processing_retiring")
+			c.String(http.StatusOK, "offline:Processing generation is shutting down")
+			return
+		}
 		if sourceURL, ok := control.GetDVRSourceOverride(ss.GetStreamName()); ok {
 			logger.WithFields(logging.Fields{
 				"stream_name": ss.GetStreamName(),
@@ -1761,6 +1766,8 @@ func HandleUserNew(c *gin.Context) {
 		return
 	}
 
+	rememberProcessingRead(mistTrigger.GetViewerConnect())
+
 	if viewerConnect := mistTrigger.GetViewerConnect(); viewerConnect != nil && !mist.IsPlaybackViewerRequest(viewerConnect.GetConnector(), viewerConnect.GetRequestUrl()) {
 		incMistWebhook("USER_NEW", "ignored_non_viewer")
 		logger.WithFields(logging.Fields{
@@ -1895,6 +1902,8 @@ func HandleUserEnd(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+
+	forgetProcessingRead(mistTrigger.GetViewerDisconnect())
 
 	if viewerDisconnect := mistTrigger.GetViewerDisconnect(); viewerDisconnect != nil && !mist.IsPlaybackViewerRequest(viewerDisconnect.GetConnector(), "") {
 		incMistWebhook("USER_END", "ignored_non_viewer")

@@ -14,7 +14,8 @@ and real-time subscriptions.
 ## Authentication
 Most queries require a valid JWT or API token in the Authorization header.
 The dashboard may also authenticate via httpOnly cookies.
-Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and public orchestrator topology fields.
+Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, `serverInfo`, and public orchestrator topology fields.
+`bootstrapEdge` and `walletLogin` authenticate with a per-call credential in their input.
 Tenant isolation is enforced - you can only access your own data.
 """
 schema {
@@ -196,7 +197,7 @@ type Query {
   ): StreamValidation
 
   """
-  List all stream keys for a specific stream.
+  Deprecated compatibility view of the current primary key for a stream.
   Stream keys are publishing credentials, so an API token needs the
   streams:write scope.
   """
@@ -210,6 +211,9 @@ type Query {
     """
     streamId: ID!
   ): StreamKeysConnection!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   """
   Fetch a single clip by its global ID.
@@ -741,6 +745,9 @@ type Query {
     pageToken: String
   ): DVRChaptersPage
 
+  "A recording from the tenant catalog, readable with streams:read."
+  dvrRecording(id: ID!): DVRRequest
+
   """
   Fetch a single VOD asset by ID.
   """
@@ -868,6 +875,8 @@ type Query {
   panel to size sliders and explain the allowed range.
   """
   mediaRetentionPolicy: MediaRetentionPolicy!
+  "Allowed video ladders, account choice, and effective default."
+  transcodeLadderPolicy: TranscodeLadderPolicy!
 
   """
   Tenant-bound placement intent and actual enforcement progress.
@@ -1438,7 +1447,12 @@ type Mutation {
     The stream ID.
     """
     id: ID!
+    "Also end the publisher active when rotation is requested. Delivery retries preserve its generation."
+    endActiveSession: Boolean = false
   ): UpdateStreamResult!
+
+  "Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false."
+  disconnectIngest(streamId: ID!): DisconnectIngestResult!
 
   """
   Create a clip from a live or recorded stream.
@@ -1990,7 +2004,7 @@ type Mutation {
   ): RevokeBootstrapTokenResult! @internal(reason: "Requires the service token.")
 
   """
-  Create an additional stream key for a stream.
+  Deprecated. A stream has one key; this operation refuses creation. Use refreshStreamKey.
   """
   createStreamKey(
     """
@@ -2002,9 +2016,12 @@ type Mutation {
     """
     input: CreateStreamKeyInput!
   ): CreateStreamKeyResult!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   """
-  Delete a stream key.
+  Deprecated. A stream has one key; this operation refuses deletion. Use refreshStreamKey.
   """
   deleteStreamKey(
     """
@@ -2016,6 +2033,9 @@ type Mutation {
     """
     keyId: ID!
   ): DeleteStreamKeyResult!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   # ==================== Multistream Push Targets ====================
 
@@ -2181,6 +2201,8 @@ type Mutation {
   recorded in Foghorn's audit trail.
   """
   setNodeMode(input: SetNodeModeInput!): SetNodeModeResult!
+  "Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access."
+  setNodeCapacity(input: SetNodeCapacityInput!): SetNodeCapacityResult!
 
   """
   Open the MistServer admin UI on a specific edge node. Returns a short-TTL
@@ -2215,6 +2237,14 @@ type Mutation {
   cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
   """
   setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
+  "Set the account's video ladder. Empty or null inherits the plan default."
+  setTranscodeLadderPolicy(input: SetTranscodeLadderPolicyInput!): SetTranscodeLadderPolicyResult!
+  "Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged."
+  setVodOriginalPolicy(keepVodOriginals: Boolean): SetMediaRetentionPolicyResult!
+  "Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5."
+  createVodOriginalDownload(id: ID!): CreateVodOriginalDownloadResult!
+  "Permanently delete only the retained upload; processed playback remains available."
+  deleteVodOriginal(id: ID!): DeleteVodOriginalResult!
 
   """
   Atomically saves the requested verbs. Saved does not mean effective on every cell.
@@ -2313,13 +2343,23 @@ type DeleteSuccess {
 # Mutation Result union types
 union CreateStreamResult = Stream | ValidationError | AuthError
 union UpdateStreamResult = Stream | ValidationError | NotFoundError | AuthError
+
+"An accepted request to stop the currently claimed push publisher."
+type IngestDisconnectSuccess {
+  streamId: ID!
+  stopRequested: Boolean!
+}
+union DisconnectIngestResult = IngestDisconnectSuccess | ValidationError | NotFoundError | AuthError
+
 union DeleteStreamResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreateClipResult = Clip | ValidationError | NotFoundError | AuthError
 union DeleteClipResult = DeleteSuccess | NotFoundError | AuthError
 
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 union CreateStreamKeyResult = StreamKey | ValidationError | NotFoundError | AuthError
-union DeleteStreamKeyResult = DeleteSuccess | NotFoundError | AuthError
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
+union DeleteStreamKeyResult = DeleteSuccess | ValidationError | NotFoundError | AuthError
 
 union StartDVRResult = DVRRequest | ValidationError | NotFoundError | AuthError
 union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
@@ -2332,6 +2372,14 @@ union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
 union VodUploadStatusResult = VodUploadStatus | ValidationError | NotFoundError | AuthError
 
+union SetTranscodeLadderPolicyResult = TranscodeLadderPolicy | ValidationError | AuthError
+union CreateVodOriginalDownloadResult =
+  | VodOriginalDownload
+  | ValidationError
+  | NotFoundError
+  | AuthError
+union DeleteVodOriginalResult = DeleteSuccess | ValidationError | NotFoundError | AuthError
+
 union SetMediaRetentionPolicyResult = MediaRetentionPolicy | ValidationError | AuthError
 union UpdateMediaRetentionResult = EffectiveRetention | ValidationError | NotFoundError | AuthError
 union SetStreamRetentionOverridesResult =
@@ -2341,6 +2389,43 @@ union SetStreamRetentionOverridesResult =
   | AuthError
 
 union SetNodeModeResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+union SetNodeCapacityResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+
+enum CapacityBudgetSource {
+  DEFAULT
+  OPERATOR
+}
+
+type NodeCapacity {
+  "Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+  egressBudgetBytesPerSec: Float!
+  "Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+  ingressBudgetBytesPerSec: Float!
+  egressSource: CapacityBudgetSource!
+  ingressSource: CapacityBudgetSource!
+  revision: Int!
+  updatedAt: Time
+  "Last revision applied by Helmsman; null when the node does not report one."
+  appliedRevision: Int
+}
+
+type ClusterCapacity {
+  egressBudgetBytesPerSec: Float!
+  ingressBudgetBytesPerSec: Float!
+  egressUsableBytesPerSec: Float!
+  ingressUsableBytesPerSec: Float!
+  defaultBudgetNodes: Int!
+}
+
+input SetNodeCapacityInput {
+  nodeId: ID!
+  "Positive whole bytes per second, or null to restore the default."
+  egressBudgetBytesPerSec: Float
+  "Positive whole bytes per second, or null to restore the default."
+  ingressBudgetBytesPerSec: Float
+  "Revision from the current capacity; a stale revision rejects the write."
+  expectedRevision: Int!
+}
 
 union OpenMistAdminSessionResult = MistAdminSession | ValidationError | NotFoundError | AuthError
 
@@ -2702,6 +2787,8 @@ input CreateStreamInput {
   pullSource: PullSourceInput
   "Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources."
   sourceLocation: SourceLocationInput
+  "Ladder name allowed by the plan. Empty inherits the account, then plan default."
+  transcodeLadder: String
 }
 
 """
@@ -2738,6 +2825,8 @@ input UpdateStreamInput {
   dvrChapterIntervalSeconds: Int
   "Per-stream Skipper monitoring override. INHERIT follows the tenant tier."
   monitoring: MonitoringToggle
+  "Ladder name; empty inherits the account, then plan. Applies from the next broadcast."
+  transcodeLadder: String
 }
 
 """
@@ -2793,6 +2882,8 @@ input CreateClipInput {
 
 # DVR types
 type DVRRequest {
+  "Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds."
+  chapters(page: ConnectionInput, rangeStartMs: Float, rangeEndMs: Float): DVRChapterConnection
   # Business metadata (from Commodore registry)
   id: ID # UUID from Commodore business registry
   dvrHash: ID!
@@ -2991,13 +3082,15 @@ input ImportVodAssetInput {
   url: String!
   """
   Filename to store the video under. Required when the URL path does not end
-  in a supported video extension (mp4, mov, mkv, webm, ts).
+  in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
   """
   filename: String
   "Optional display title for the asset."
   title: String
   "Optional description for the asset."
   description: String
+  "Video ladder for this import; empty inherits the account, then plan default."
+  transcodeLadder: String
 }
 
 """
@@ -3005,7 +3098,7 @@ Input for initiating a multipart VOD upload.
 Returns presigned S3 URLs for uploading file parts.
 """
 input CreateVodUploadInput {
-  "Original filename (for metadata and content-type detection)."
+  "Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused."
   filename: String!
   "Total file size in bytes (required for part calculation)."
   sizeBytes: Float!
@@ -3015,6 +3108,10 @@ input CreateVodUploadInput {
   title: String
   "Optional description for the asset."
   description: String
+  "Video ladder for this upload; empty inherits the account, then plan default."
+  transcodeLadder: String
+  "Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default."
+  keepOriginal: Boolean
 }
 
 """
@@ -3057,6 +3154,8 @@ type VodUploadSession {
   parts: [VodUploadPart!]!
   "When presigned URLs expire (typically 2 hours)."
   expiresAt: Time!
+  "Effective original-retention policy accepted for this upload. Null when an older server cannot report it."
+  keepOriginal: Boolean
 }
 
 """
@@ -3187,6 +3286,8 @@ type VodAsset implements Node {
   cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
   """
   storageCost: StorageCostProjection
+  "Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original."
+  originalFile: VodOriginalFile
 }
 
 enum StorageArtifactKind {
@@ -3228,6 +3329,10 @@ input StorageArtifactsInput {
 }
 
 type StorageArtifact {
+  "How the artifact was produced, such as dvr_chapter."
+  originType: String
+  "Catalog ID of the parent DVR recording, present on saved chapters."
+  parentRecordingId: ID
   key: ID!
   kind: StorageArtifactKind!
   id: ID!
@@ -3265,6 +3370,8 @@ type StorageArtifact {
   durationSeconds: Float
   "Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized."
   tracks: [ArtifactTrack!]!
+  "Retained original upload, when this VOD has one."
+  originalFile: VodOriginalFile
 }
 
 "A single A/V (or meta) track of a finalized artifact."
@@ -3398,9 +3505,7 @@ input CreateBootstrapTokenInput {
   clusterId: ID
 }
 
-"""
-Input for creating an additional stream key.
-"""
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 input CreateStreamKeyInput {
   "Human-readable name for the key."
   name: String!
@@ -3971,8 +4076,10 @@ type ViewerMetrics {
   sessionId: String
   connectionTime: Float # seconds connected
   position: Float # playback position
-  bandwidthInBps: Int # upload bandwidth (bits/sec)
-  bandwidthOutBps: Int # download bandwidth (bits/sec)
+  "Bandwidth in bytes per second sent to the viewer; legacy field name."
+  bandwidthInBps: Int
+  "Bandwidth in bytes per second received from the viewer; legacy field name."
+  bandwidthOutBps: Int
   bytesDownloaded: Float
   bytesUploaded: Float
   packetsSent: Int
@@ -4126,6 +4233,23 @@ type CustomDomainStatus {
   lastError: String
 }
 
+enum StreamIngestState {
+  IDLE
+  CONNECTED
+  LIVE
+}
+
+"Current ingest-session state, readable with streams:read."
+type StreamIngest {
+  state: StreamIngestState!
+  isLive: Boolean!
+  sessionId: ID
+  connectedAt: Time
+  liveSince: Time
+  endedAt: Time
+  resumableUntil: Time
+}
+
 """
 A live stream configuration with real-time operational metrics.
 Streams are the core entity for broadcasting and viewing live content.
@@ -4165,6 +4289,9 @@ type Stream implements Node {
   "When this stream was last modified."
   updatedAt: Time!
 
+  "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+  ingest: StreamIngest
+
   """
   Real-time operational metrics from the data plane.
   Includes viewer counts, quality metrics, and throughput data.
@@ -4173,6 +4300,11 @@ type Stream implements Node {
   carries a FORBIDDEN error at its path.
   """
   metrics: StreamMetrics
+
+  "Recordings from this stream's tenant catalog, newest first."
+  recordings(page: ConnectionInput): StreamArtifactsConnection
+  "Clips from this stream's tenant catalog, newest first."
+  clips(page: ConnectionInput): StreamArtifactsConnection
 
   "Configured multistream push targets for this stream."
   pushTargets: [PushTarget!]!
@@ -4212,6 +4344,9 @@ type Stream implements Node {
   stream-bound, so they don't appear here.
   """
   retentionOverrides: StreamRetentionOverrides
+  "Saved video ladder name; empty inherits the account, then plan default."
+  transcodeLadder: String!
+    @experimental(reason: "Transcode ladders are new in this release.", until: "v0.3.17")
 }
 
 """
@@ -4442,11 +4577,13 @@ type RebufferingEventsConnection {
 }
 
 # Stream Keys Connection
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKeyEdge {
   cursor: String!
   node: StreamKey!
 }
 
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKeysConnection {
   edges: [StreamKeyEdge!]!
   nodes: [StreamKey!]!
@@ -6123,8 +6260,10 @@ type Cluster implements Node {
   maxConcurrentStreams: Int!
   "Maximum allowed concurrent viewers."
   maxConcurrentViewers: Int!
-  "Maximum allowed bandwidth in Mbps."
-  maxBandwidthMbps: Int!
+  "Sum of node egress budgets in decimal Mbit/s."
+  maxBandwidthMbps: Int! @deprecated(reason: "Use capacity; bandwidth is managed per node.")
+  "Aggregate node budgets and usable capacity; null when the control plane is unavailable."
+  capacity: ClusterCapacity
   "Cluster health status (healthy, degraded, critical)."
   healthStatus: String!
   "Whether the cluster is operational."
@@ -6333,6 +6472,8 @@ type InfrastructureNode implements Node {
   Counts come from Foghorn's GetNodeHealth.
   """
   routingImpactPreview: RoutingImpactPreview!
+  "Operator-owned directional budgets; null when the control plane is unavailable."
+  capacity: NodeCapacity
 }
 
 """
@@ -6375,6 +6516,8 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
+  "Processing failure detail from the artifact catalog."
+  errorMessage: String
   "When the clip was requested."
   createdAt: Time
   "When the clip was last updated."
@@ -6962,6 +7105,8 @@ type NetworkClusterStatus {
   currentViewers: Int!
   egressMbps: Int!
   egressCapacityMbps: Int!
+  egressUsableMbps: Int!
+  defaultBudgetNodes: Int!
   ingressMbps: Int!
   services: [String!]!
 }
@@ -7509,6 +7654,7 @@ type ServiceInstanceHealth {
 # ============================================================================
 
 # Stream key management
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKey {
   id: ID!
   streamId: ID!
@@ -7581,6 +7727,7 @@ type IngestEndpointResponse {
 
 "Playback format required when selecting and preparing a viewer destination."
 enum MediaViewerProtocol {
+  WEBVTT
   WEBRTC
   WHEP
   HLS
@@ -8401,6 +8548,10 @@ type MediaRetentionPolicy {
   effectiveDvrRetentionDays: Int!
   "Effective clip horizon the cascade resolves to today (0 = keep forever)."
   effectiveClipRetentionDays: Int!
+  "Account default for new uploads. Null inherits the system default (keep)."
+  keepVodOriginals: Boolean
+  "Effective original-retention default for new uploads."
+  effectiveKeepVodOriginals: Boolean!
 }
 
 """
@@ -8907,7 +9058,11 @@ type ClusterLiveStats {
   uploadBytesPerSec: Float!
   downloadBytesPerSec: Float!
   activeNodes: Int!
-  egressCapacityBps: Float!
+  egressCapacityBps: Float! @deprecated(reason: "Use egressBudgetBytesPerSec.")
+  egressBudgetBytesPerSec: Float!
+  egressUsableBytesPerSec: Float!
+  egressObservedBytesPerSec: Float!
+  defaultBudgetNodes: Int!
 }
 
 enum MediaPlacementVerb {
@@ -9401,6 +9556,7 @@ union PublicEventData =
   | CustomDomainVerified
   | MultistreamStatusChanged
   | RecordingChapterFailed
+  | RecordingChapterReady
   | RecordingFailed
   | RecordingReady
   | RecordingStarted
@@ -9408,7 +9564,9 @@ union PublicEventData =
   | StreamConnected
   | StreamCreated
   | StreamDeleted
+  | StreamEnded
   | StreamIdle
+  | StreamIngestDisconnected
   | StreamKeyRotated
   | StreamLive
   | StreamUpdated
@@ -9551,6 +9709,17 @@ type RecordingChapterFailed {
 }
 
 """
+`recording.chapter_ready` event. Aggregate: `artifacts`.
+"""
+type RecordingChapterReady {
+  artifact: EventArtifact
+  chapterId: ID!
+  startMs: Int!
+  endMs: Int!
+  sizeBytes: Int!
+}
+
+"""
 `recording.failed` event. Aggregate: `artifacts`.
 """
 type RecordingFailed {
@@ -9588,6 +9757,7 @@ type StreamConnected {
   streamId: ID!
   protocol: EventIngestProtocol!
   playbackId: ID!
+  sessionId: ID!
 }
 
 """
@@ -9607,11 +9777,30 @@ type StreamDeleted {
 }
 
 """
+`stream.ended` event. Aggregate: `streams`.
+"""
+type StreamEnded {
+  streamId: ID!
+  playbackId: ID!
+  sessionId: ID!
+}
+
+"""
 `stream.idle` event. Aggregate: `streams`.
 """
 type StreamIdle {
   streamId: ID!
   playbackId: ID!
+  sessionId: ID!
+}
+
+"""
+`stream.ingest_disconnected` event. Aggregate: `streams`.
+"""
+type StreamIngestDisconnected {
+  streamId: ID!
+  sessionId: ID!
+  reason: String!
 }
 
 """
@@ -9627,6 +9816,7 @@ type StreamKeyRotated {
 type StreamLive {
   streamId: ID!
   playbackId: ID!
+  sessionId: ID!
 }
 
 """
@@ -9859,4 +10049,59 @@ type SecurityActivityConnection {
   nodes: [SecurityActivityEvent!]!
   pageInfo: PageInfo!
   totalCount: Int!
+}
+
+"A named video rendition ladder, with rungs skipped for smaller sources."
+type TranscodeLadder {
+  name: String!
+  displayName: String!
+  description: String!
+  renditionNames: [String!]!
+}
+
+type TranscodeLadderPolicy {
+  ladders: [TranscodeLadder!]!
+  planDefault: String!
+  tenantLadder: String
+  effectiveLadder: String!
+}
+
+input SetTranscodeLadderPolicyInput {
+  ladder: String
+}
+
+"Metadata of the byte-identical retained upload."
+type VodOriginalFile {
+  sizeBytes: Float!
+}
+
+"Short-lived download of the byte-identical original upload, without playback metering."
+type VodOriginalDownload {
+  url: String!
+  expiresAt: Time!
+  sizeBytes: Float!
+  filename: String!
+}
+
+"A keyset-paginated collection of one stream's saved recordings or clips."
+type StreamArtifactsConnection {
+  edges: [StreamArtifactEdge!]!
+  nodes: [StorageArtifact!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+type StreamArtifactEdge {
+  cursor: String!
+  node: StorageArtifact!
+}
+"A keyset-paginated view of a recording's saved chapters."
+type DVRChapterConnection {
+  edges: [DVRChapterEdge!]!
+  nodes: [DVRChapterRef!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+type DVRChapterEdge {
+  cursor: String!
+  node: DVRChapterRef!
 }

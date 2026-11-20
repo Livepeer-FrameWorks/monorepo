@@ -600,3 +600,27 @@ func TestWithdrawFederatedSource_FailedDeleteRetriedBySweep(t *testing.T) {
 		t.Fatalf("tombstone watermark = %d err=%v, want 4", rev, err)
 	}
 }
+
+func TestPullOwnerRestampPersistsAfterInactive(t *testing.T) {
+	store, _, _ := newTestRedis(t)
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	if _, _, err := r.EnableRedisSync(t.Context(), store, "pull-owner", logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.DisableRedisSync)
+	const internal = "pull-restamp-shared"
+	r.UpsertLocalSource(StreamEntry{InternalName: internal, TenantID: "tenant-a", IngestMode: IngestPull})
+	if owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-a"); !stamped || owner != "node-a" {
+		t.Fatalf("initial stamp owner=%q stamped=%v", owner, stamped)
+	}
+	if applied, err := r.PublishSourceInactive(internal, "node-a", "", 100); err != nil || !applied {
+		t.Fatalf("inactive: applied=%v err=%v", applied, err)
+	}
+	if owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-b"); !stamped || owner != "node-b" {
+		t.Fatalf("new stamp owner=%q stamped=%v", owner, stamped)
+	}
+	stored, found, err := store.GetSource(t.Context(), internal)
+	if err != nil || !found || stored.Locations["cluster-test"].OwnerNodeID != "node-b" || !stored.Locations["cluster-test"].SourceActive {
+		t.Fatalf("shared pull owner did not move: source=%+v found=%v err=%v", stored.Locations["cluster-test"], found, err)
+	}
+}

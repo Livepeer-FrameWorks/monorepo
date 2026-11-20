@@ -246,7 +246,7 @@ func buildCreateBootstrapTokenRequest(name, kind, ttl string, metadata *structpb
 // buildCreateClusterRequest assembles the gRPC request from parsed flag values.
 // The bool fields are pointers set only when their flag was explicitly changed,
 // so an unspecified flag leaves the field nil (server keeps its default).
-func buildCreateClusterRequest(cmd *cobra.Command, clusterID, clusterName, clusterType, baseURL, kafkaBrokers, databaseURL, periscopeURL, ownerTenantID, deploymentModel string, maxStreams, maxViewers, maxBandwidth, foghornCount int, isPlatformOfficial, isDefaultCluster bool) *quartermasterpb.CreateClusterRequest {
+func buildCreateClusterRequest(cmd *cobra.Command, clusterID, clusterName, clusterType, baseURL, kafkaBrokers, databaseURL, periscopeURL, ownerTenantID, deploymentModel string, maxStreams, maxViewers, foghornCount int, isPlatformOfficial, isDefaultCluster bool) *quartermasterpb.CreateClusterRequest {
 	req := &quartermasterpb.CreateClusterRequest{
 		ClusterId:            clusterID,
 		ClusterName:          clusterName,
@@ -255,7 +255,6 @@ func buildCreateClusterRequest(cmd *cobra.Command, clusterID, clusterName, clust
 		KafkaBrokers:         parseCommaList(kafkaBrokers),
 		MaxConcurrentStreams: int32(maxStreams),
 		MaxConcurrentViewers: int32(maxViewers),
-		MaxBandwidthMbps:     int32(maxBandwidth),
 		DeploymentModel:      deploymentModel,
 	}
 	if databaseURL != "" {
@@ -932,13 +931,13 @@ type adminTenantsClient interface {
 }
 
 func runTenantsList(ctx context.Context, w io.Writer, qm adminTenantsClient, jwt string, outputJSON bool) error {
-	cctx, cancel := adminRPCContext(ctx, jwt)
-	defer cancel()
 	resp := &quartermasterpb.ListTenantsResponse{}
 	page := &commonpb.CursorPaginationRequest{First: 50}
 	seen := make(map[string]bool)
 	for {
+		cctx, cancel := adminRPCContext(ctx, jwt)
 		batch, err := qm.ListTenants(cctx, page)
+		cancel()
 		if err != nil {
 			return err
 		}
@@ -1083,7 +1082,6 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	var kafkaBrokers string
 	var maxStreams int
 	var maxViewers int
-	var maxBandwidth int
 	var ownerTenantID string
 	var deploymentModel string
 	var foghornCount int
@@ -1123,7 +1121,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 
 		req := buildCreateClusterRequest(cmd, clusterID, clusterName, clusterType, baseURL, kafkaBrokers,
 			databaseURL, periscopeURL, ownerTenantID, deploymentModel,
-			maxStreams, maxViewers, maxBandwidth, foghornCount, isPlatformOfficial, isDefaultCluster)
+			maxStreams, maxViewers, foghornCount, isPlatformOfficial, isDefaultCluster)
 
 		return runClusterCreate(cmd.Context(), cmd.OutOrStdout(), qm, ctxCfg.Auth.JWT, req, output == "json")
 	}}
@@ -1136,7 +1134,6 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kafkaBrokers, "kafka-brokers", "", "comma-separated Kafka brokers (host:port)")
 	cmd.Flags().IntVar(&maxStreams, "max-concurrent-streams", 0, "max concurrent streams")
 	cmd.Flags().IntVar(&maxViewers, "max-concurrent-viewers", 0, "max concurrent viewers")
-	cmd.Flags().IntVar(&maxBandwidth, "max-bandwidth-mbps", 0, "max bandwidth (Mbps)")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, optional)")
 	cmd.Flags().StringVar(&deploymentModel, "deployment-model", "managed", "deployment model: managed|shared")
 	cmd.Flags().IntVar(&foghornCount, "foghorn-count", 0, "claim N idle Foghorn instances from pool (0 = skip)")
@@ -1154,7 +1151,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	var kafkaBrokers string
 	var maxStreams int
 	var maxViewers int
-	var maxBandwidth int
 	var healthStatus string
 	var isActive bool
 	var ownerTenantID string
@@ -1205,9 +1201,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		if v := optionalInt32Flag(cmd, "max-concurrent-viewers", maxViewers); v != nil {
 			req.MaxConcurrentViewers = v
 		}
-		if v := optionalInt32Flag(cmd, "max-bandwidth-mbps", maxBandwidth); v != nil {
-			req.MaxBandwidthMbps = v
-		}
 		if v := optionalStringFlag(cmd, "health-status", healthStatus); v != nil {
 			req.HealthStatus = v
 		}
@@ -1237,7 +1230,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kafkaBrokers, "kafka-brokers", "", "comma-separated Kafka brokers (host:port)")
 	cmd.Flags().IntVar(&maxStreams, "max-concurrent-streams", 0, "max concurrent streams")
 	cmd.Flags().IntVar(&maxViewers, "max-concurrent-viewers", 0, "max concurrent viewers")
-	cmd.Flags().IntVar(&maxBandwidth, "max-bandwidth-mbps", 0, "max bandwidth (Mbps)")
 	cmd.Flags().StringVar(&healthStatus, "health-status", "", "health status")
 	cmd.Flags().BoolVar(&isActive, "is-active", false, "set cluster active flag")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, empty clears)")

@@ -43,6 +43,7 @@
   import { formatDuration } from "$lib/utils/formatters.js";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import TranscodeLadderPanel from "$lib/components/transcode/TranscodeLadderPanel.svelte";
   import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
 
   // Houdini stores
@@ -124,6 +125,7 @@
   let newStreamDescription = $state("");
   let newStreamRecord = $state(false);
   let newStreamLiveVideoAbr = $state("INHERIT");
+  let newStreamTranscodeLadder = $state("");
   let newStreamIngestMode = $state<"PUSH" | "PULL">("PUSH");
   let newStreamPullSourceUri = $state("");
   let newStreamPullSourceEnabled = $state(true);
@@ -155,16 +157,16 @@
 
     // Filter by status
     if (statusFilter === "live") {
-      result = result.filter((s) => s.metrics?.isLive);
+      result = result.filter((s) => s.ingest?.isLive);
     } else if (statusFilter === "offline") {
-      result = result.filter((s) => !s.metrics?.isLive);
+      result = result.filter((s) => !s.ingest?.isLive);
     }
 
     return result;
   });
 
   // Stats - guard against undefined entries
-  let liveStreamCount = $derived(streams.filter((s) => s?.metrics?.isLive).length);
+  let liveStreamCount = $derived(streams.filter((s) => s?.ingest?.isLive).length);
   let offlineStreamCount = $derived(streams.length - liveStreamCount);
   let totalViewers = $derived(
     streams.reduce((acc, s) => acc + (s?.metrics?.currentViewers || 0), 0)
@@ -307,6 +309,7 @@
         description: newStreamDescription.trim() || undefined,
         record: newStreamRecord,
         liveVideoAbr: newStreamLiveVideoAbr,
+        transcodeLadder: newStreamTranscodeLadder || undefined,
         ingestMode: newStreamIngestMode,
         pullSource:
           newStreamIngestMode === "PULL"
@@ -337,6 +340,7 @@
         newStreamDescription = "";
         newStreamRecord = false;
         newStreamLiveVideoAbr = "INHERIT";
+        newStreamTranscodeLadder = "";
         newStreamIngestMode = "PUSH";
         newStreamPullSourceUri = "";
         newStreamPullSourceEnabled = true;
@@ -425,14 +429,14 @@
   function canWatchStream(stream: (typeof unmaskedStreams)[number]) {
     return (
       !!stream.playbackId &&
-      (stream.metrics?.isLive ||
+      (stream.ingest?.isLive ||
         (stream.ingestMode === "PULL" && stream.pullSource?.enabled !== false) ||
         stream.ingestMode === "MANAGED")
     );
   }
 
   function watchStreamTitle(stream: (typeof unmaskedStreams)[number]) {
-    if (stream.ingestMode === "PULL" && !stream.metrics?.isLive) {
+    if (stream.ingestMode === "PULL" && !stream.ingest?.isLive) {
       return "Start Pull Playback";
     }
     return "Watch Stream";
@@ -787,13 +791,13 @@
                           </TableCell>
 
                           <TableCell class="px-4 py-2">
-                            {@const status = stream.metrics?.status || "OFFLINE"}
+                            {@const status = stream.ingest?.state || "UNAVAILABLE"}
                             <span
                               class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(
                                 status
                               )}"
                             >
-                              {#if stream.metrics?.isLive}
+                              {#if stream.ingest?.isLive}
                                 <span
                                   class="w-1.5 h-1.5 rounded-full bg-success animate-pulse mr-1.5"
                                 ></span>
@@ -803,7 +807,7 @@
                           </TableCell>
 
                           <TableCell class="px-4 py-2">
-                            {#if stream.metrics?.isLive}
+                            {#if stream.ingest?.isLive}
                               <div class="flex flex-col gap-0.5">
                                 <div class="flex items-center gap-1.5">
                                   <BufferStateIndicator
@@ -832,12 +836,12 @@
                           </TableCell>
 
                           <TableCell class="px-4 py-2 text-sm text-foreground">
-                            {#if stream.metrics?.isLive && stream.metrics?.startedAt}
+                            {#if stream.ingest?.isLive && stream.ingest?.liveSince}
                               {formatDuration(
                                 Math.max(
                                   0,
                                   Math.floor(
-                                    (Date.now() - new Date(stream.metrics.startedAt).getTime()) /
+                                    (Date.now() - new Date(stream.ingest.liveSince).getTime()) /
                                       1000
                                   )
                                 )
@@ -891,6 +895,8 @@
               {/if}
             </div>
           </div>
+
+          <TranscodeLadderPanel />
         </div>
       </div>
     {/if}
@@ -903,6 +909,7 @@
   bind:description={newStreamDescription}
   bind:record={newStreamRecord}
   bind:liveVideoAbr={newStreamLiveVideoAbr}
+  bind:transcodeLadder={newStreamTranscodeLadder}
   bind:ingestMode={newStreamIngestMode}
   bind:pullSourceUri={newStreamPullSourceUri}
   bind:pullSourceEnabled={newStreamPullSourceEnabled}
@@ -916,6 +923,7 @@
     newStreamDescription = "";
     newStreamRecord = false;
     newStreamLiveVideoAbr = "INHERIT";
+    newStreamTranscodeLadder = "";
     newStreamIngestMode = "PUSH";
     newStreamPullSourceUri = "";
     newStreamPullSourceEnabled = true;

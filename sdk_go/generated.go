@@ -4291,6 +4291,8 @@ type ArtifactEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ArtifactEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -4370,6 +4372,11 @@ func (v *ArtifactEventDefaultFieldsStream) GetCreatedAt() time.Time { return v.C
 // GetUpdatedAt returns ArtifactEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ArtifactEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStream) GetIngest() *ArtifactEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ArtifactEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStream) GetMetrics() *ArtifactEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -4406,6 +4413,43 @@ func (v *ArtifactEventDefaultFieldsStream) GetThumbnailAssets() *ArtifactEventDe
 // GetRetentionOverrides returns ArtifactEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStream) GetRetentionOverrides() *ArtifactEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ArtifactEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ArtifactEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ArtifactEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ArtifactEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ArtifactEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ArtifactEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ArtifactEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ArtifactEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ArtifactEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ArtifactEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -4875,6 +4919,8 @@ type ArtifactEventInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ArtifactEventInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -4954,6 +5000,11 @@ func (v *ArtifactEventInNodeDefaultFieldsStream) GetCreatedAt() time.Time { retu
 // GetUpdatedAt returns ArtifactEventInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ArtifactEventInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStream) GetIngest() *ArtifactEventInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ArtifactEventInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStream) GetMetrics() *ArtifactEventInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -4992,6 +5043,45 @@ func (v *ArtifactEventInNodeDefaultFieldsStream) GetThumbnailAssets() *ArtifactE
 // GetRetentionOverrides returns ArtifactEventInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStream) GetRetentionOverrides() *ArtifactEventInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ArtifactEventInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ArtifactEventInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ArtifactEventInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ArtifactEventInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ArtifactEventInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ArtifactEventInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ArtifactEventInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ArtifactEventInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ArtifactEventInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ArtifactEventInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -5501,6 +5591,8 @@ type ArtifactStateDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ArtifactStateDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -5580,6 +5672,11 @@ func (v *ArtifactStateDefaultFieldsStream) GetCreatedAt() time.Time { return v.C
 // GetUpdatedAt returns ArtifactStateDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ArtifactStateDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStream) GetIngest() *ArtifactStateDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ArtifactStateDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStream) GetMetrics() *ArtifactStateDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -5616,6 +5713,43 @@ func (v *ArtifactStateDefaultFieldsStream) GetThumbnailAssets() *ArtifactStateDe
 // GetRetentionOverrides returns ArtifactStateDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStream) GetRetentionOverrides() *ArtifactStateDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ArtifactStateDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ArtifactStateDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ArtifactStateDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ArtifactStateDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ArtifactStateDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ArtifactStateDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ArtifactStateDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ArtifactStateDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ArtifactStateDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ArtifactStateDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -9608,6 +9742,18 @@ func (v *CapabilitiesDefaultFieldsTenantTenantCapabilitiesRecordingRetentionReco
 	return v.MaxDays
 }
 
+type CapacityBudgetSource string
+
+const (
+	CapacityBudgetSourceDefault  CapacityBudgetSource = "DEFAULT"
+	CapacityBudgetSourceOperator CapacityBudgetSource = "OPERATOR"
+)
+
+var AllCapacityBudgetSource = []CapacityBudgetSource{
+	CapacityBudgetSourceDefault,
+	CapacityBudgetSourceOperator,
+}
+
 // Card payment provider for top-ups.
 type CardPaymentProvider string
 
@@ -11100,6 +11246,8 @@ type ClientMetrics5mDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ClientMetrics5mDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -11179,6 +11327,11 @@ func (v *ClientMetrics5mDefaultFieldsStream) GetCreatedAt() time.Time { return v
 // GetUpdatedAt returns ClientMetrics5mDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ClientMetrics5mDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStream) GetIngest() *ClientMetrics5mDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ClientMetrics5mDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStream) GetMetrics() *ClientMetrics5mDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -11215,6 +11368,43 @@ func (v *ClientMetrics5mDefaultFieldsStream) GetThumbnailAssets() *ClientMetrics
 // GetRetentionOverrides returns ClientMetrics5mDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStream) GetRetentionOverrides() *ClientMetrics5mDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ClientMetrics5mDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ClientMetrics5mDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ClientMetrics5mDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ClientMetrics5mDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ClientMetrics5mDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ClientMetrics5mDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ClientMetrics5mDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ClientMetrics5mDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ClientMetrics5mDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ClientMetrics5mDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -12016,6 +12206,8 @@ type ClipInNodeDefaultFields struct {
 	SizeBytes *float64 `json:"sizeBytes"`
 	// Processing status (queued, processing, ready, failed).
 	Status string `json:"status"`
+	// Processing failure detail from the artifact catalog.
+	ErrorMessage *string `json:"errorMessage"`
 	// When the clip was requested.
 	ClipCreatedAt *time.Time `json:"clipCreatedAt"`
 	// When the clip was last updated.
@@ -12097,6 +12289,9 @@ func (v *ClipInNodeDefaultFields) GetSizeBytes() *float64 { return v.SizeBytes }
 
 // GetStatus returns ClipInNodeDefaultFields.Status, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFields) GetStatus() string { return v.Status }
+
+// GetErrorMessage returns ClipInNodeDefaultFields.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFields) GetErrorMessage() *string { return v.ErrorMessage }
 
 // GetClipCreatedAt returns ClipInNodeDefaultFields.ClipCreatedAt, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFields) GetClipCreatedAt() *time.Time { return v.ClipCreatedAt }
@@ -12334,6 +12529,8 @@ type ClipInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ClipInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -12413,6 +12610,11 @@ func (v *ClipInNodeDefaultFieldsStream) GetCreatedAt() time.Time { return v.Crea
 // GetUpdatedAt returns ClipInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ClipInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStream) GetIngest() *ClipInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ClipInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStream) GetMetrics() *ClipInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -12448,6 +12650,41 @@ func (v *ClipInNodeDefaultFieldsStream) GetThumbnailAssets() *ClipInNodeDefaultF
 func (v *ClipInNodeDefaultFieldsStream) GetRetentionOverrides() *ClipInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
 }
+
+// ClipInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ClipInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ClipInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ClipInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ClipInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ClipInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ClipInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ClipInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ClipInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time { return v.ResumableUntil }
 
 // ClipInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
 // The GraphQL type's documentation follows.
@@ -12914,8 +13151,8 @@ type ClusterDefaultFields struct {
 	MaxConcurrentStreams int `json:"maxConcurrentStreams"`
 	// Maximum allowed concurrent viewers.
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
-	// Maximum allowed bandwidth in Mbps.
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	// Aggregate node budgets and usable capacity; null when the control plane is unavailable.
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 	// Cluster health status (healthy, degraded, critical).
 	HealthStatus string `json:"healthStatus"`
 	// Whether the cluster is operational.
@@ -12979,8 +13216,10 @@ func (v *ClusterDefaultFields) GetMaxConcurrentStreams() int { return v.MaxConcu
 // GetMaxConcurrentViewers returns ClusterDefaultFields.MaxConcurrentViewers, and is useful for accessing the field via an interface.
 func (v *ClusterDefaultFields) GetMaxConcurrentViewers() int { return v.MaxConcurrentViewers }
 
-// GetMaxBandwidthMbps returns ClusterDefaultFields.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *ClusterDefaultFields) GetMaxBandwidthMbps() int { return v.MaxBandwidthMbps }
+// GetCapacity returns ClusterDefaultFields.Capacity, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFields) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.Capacity
+}
 
 // GetHealthStatus returns ClusterDefaultFields.HealthStatus, and is useful for accessing the field via an interface.
 func (v *ClusterDefaultFields) GetHealthStatus() string { return v.HealthStatus }
@@ -13024,6 +13263,40 @@ func (v *ClusterDefaultFields) GetRequiresApproval() bool { return v.RequiresApp
 // GetShortDescription returns ClusterDefaultFields.ShortDescription, and is useful for accessing the field via an interface.
 func (v *ClusterDefaultFields) GetShortDescription() *string { return v.ShortDescription }
 
+// ClusterDefaultFieldsCapacityClusterCapacity includes the requested fields of the GraphQL type ClusterCapacity.
+type ClusterDefaultFieldsCapacityClusterCapacity struct {
+	EgressBudgetBytesPerSec  float64 `json:"egressBudgetBytesPerSec"`
+	IngressBudgetBytesPerSec float64 `json:"ingressBudgetBytesPerSec"`
+	EgressUsableBytesPerSec  float64 `json:"egressUsableBytesPerSec"`
+	IngressUsableBytesPerSec float64 `json:"ingressUsableBytesPerSec"`
+	DefaultBudgetNodes       int     `json:"defaultBudgetNodes"`
+}
+
+// GetEgressBudgetBytesPerSec returns ClusterDefaultFieldsCapacityClusterCapacity.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFieldsCapacityClusterCapacity) GetEgressBudgetBytesPerSec() float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns ClusterDefaultFieldsCapacityClusterCapacity.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFieldsCapacityClusterCapacity) GetIngressBudgetBytesPerSec() float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetEgressUsableBytesPerSec returns ClusterDefaultFieldsCapacityClusterCapacity.EgressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFieldsCapacityClusterCapacity) GetEgressUsableBytesPerSec() float64 {
+	return v.EgressUsableBytesPerSec
+}
+
+// GetIngressUsableBytesPerSec returns ClusterDefaultFieldsCapacityClusterCapacity.IngressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFieldsCapacityClusterCapacity) GetIngressUsableBytesPerSec() float64 {
+	return v.IngressUsableBytesPerSec
+}
+
+// GetDefaultBudgetNodes returns ClusterDefaultFieldsCapacityClusterCapacity.DefaultBudgetNodes, and is useful for accessing the field via an interface.
+func (v *ClusterDefaultFieldsCapacityClusterCapacity) GetDefaultBudgetNodes() int {
+	return v.DefaultBudgetNodes
+}
+
 // ClusterInNodeDefaultFields includes the GraphQL fields of Cluster requested by the fragment ClusterInNodeDefaultFields.
 // The GraphQL type's documentation follows.
 //
@@ -13052,8 +13325,8 @@ type ClusterInNodeDefaultFields struct {
 	MaxConcurrentStreams int `json:"maxConcurrentStreams"`
 	// Maximum allowed concurrent viewers.
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
-	// Maximum allowed bandwidth in Mbps.
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	// Aggregate node budgets and usable capacity; null when the control plane is unavailable.
+	Capacity *ClusterInNodeDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 	// Cluster health status (healthy, degraded, critical).
 	HealthStatus string `json:"healthStatus"`
 	// Whether the cluster is operational.
@@ -13117,8 +13390,10 @@ func (v *ClusterInNodeDefaultFields) GetMaxConcurrentStreams() int { return v.Ma
 // GetMaxConcurrentViewers returns ClusterInNodeDefaultFields.MaxConcurrentViewers, and is useful for accessing the field via an interface.
 func (v *ClusterInNodeDefaultFields) GetMaxConcurrentViewers() int { return v.MaxConcurrentViewers }
 
-// GetMaxBandwidthMbps returns ClusterInNodeDefaultFields.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *ClusterInNodeDefaultFields) GetMaxBandwidthMbps() int { return v.MaxBandwidthMbps }
+// GetCapacity returns ClusterInNodeDefaultFields.Capacity, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFields) GetCapacity() *ClusterInNodeDefaultFieldsCapacityClusterCapacity {
+	return v.Capacity
+}
 
 // GetHealthStatus returns ClusterInNodeDefaultFields.HealthStatus, and is useful for accessing the field via an interface.
 func (v *ClusterInNodeDefaultFields) GetHealthStatus() string { return v.HealthStatus }
@@ -13161,6 +13436,40 @@ func (v *ClusterInNodeDefaultFields) GetRequiresApproval() bool { return v.Requi
 
 // GetShortDescription returns ClusterInNodeDefaultFields.ShortDescription, and is useful for accessing the field via an interface.
 func (v *ClusterInNodeDefaultFields) GetShortDescription() *string { return v.ShortDescription }
+
+// ClusterInNodeDefaultFieldsCapacityClusterCapacity includes the requested fields of the GraphQL type ClusterCapacity.
+type ClusterInNodeDefaultFieldsCapacityClusterCapacity struct {
+	EgressBudgetBytesPerSec  float64 `json:"egressBudgetBytesPerSec"`
+	IngressBudgetBytesPerSec float64 `json:"ingressBudgetBytesPerSec"`
+	EgressUsableBytesPerSec  float64 `json:"egressUsableBytesPerSec"`
+	IngressUsableBytesPerSec float64 `json:"ingressUsableBytesPerSec"`
+	DefaultBudgetNodes       int     `json:"defaultBudgetNodes"`
+}
+
+// GetEgressBudgetBytesPerSec returns ClusterInNodeDefaultFieldsCapacityClusterCapacity.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFieldsCapacityClusterCapacity) GetEgressBudgetBytesPerSec() float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns ClusterInNodeDefaultFieldsCapacityClusterCapacity.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFieldsCapacityClusterCapacity) GetIngressBudgetBytesPerSec() float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetEgressUsableBytesPerSec returns ClusterInNodeDefaultFieldsCapacityClusterCapacity.EgressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFieldsCapacityClusterCapacity) GetEgressUsableBytesPerSec() float64 {
+	return v.EgressUsableBytesPerSec
+}
+
+// GetIngressUsableBytesPerSec returns ClusterInNodeDefaultFieldsCapacityClusterCapacity.IngressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFieldsCapacityClusterCapacity) GetIngressUsableBytesPerSec() float64 {
+	return v.IngressUsableBytesPerSec
+}
+
+// GetDefaultBudgetNodes returns ClusterInNodeDefaultFieldsCapacityClusterCapacity.DefaultBudgetNodes, and is useful for accessing the field via an interface.
+func (v *ClusterInNodeDefaultFieldsCapacityClusterCapacity) GetDefaultBudgetNodes() int {
+	return v.DefaultBudgetNodes
+}
 
 // ClusterInviteDefaultFields includes the GraphQL fields of ClusterInvite requested by the fragment ClusterInviteDefaultFields.
 type ClusterInviteDefaultFields struct {
@@ -14305,6 +14614,8 @@ type ConnectionEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ConnectionEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -14384,6 +14695,11 @@ func (v *ConnectionEventDefaultFieldsStream) GetCreatedAt() time.Time { return v
 // GetUpdatedAt returns ConnectionEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ConnectionEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStream) GetIngest() *ConnectionEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ConnectionEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStream) GetMetrics() *ConnectionEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -14420,6 +14736,43 @@ func (v *ConnectionEventDefaultFieldsStream) GetThumbnailAssets() *ConnectionEve
 // GetRetentionOverrides returns ConnectionEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStream) GetRetentionOverrides() *ConnectionEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ConnectionEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ConnectionEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ConnectionEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ConnectionEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ConnectionEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ConnectionEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ConnectionEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ConnectionEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ConnectionEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ConnectionEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -14963,6 +15316,8 @@ type ConnectionEventInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ConnectionEventInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -15042,6 +15397,11 @@ func (v *ConnectionEventInNodeDefaultFieldsStream) GetCreatedAt() time.Time { re
 // GetUpdatedAt returns ConnectionEventInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ConnectionEventInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStream) GetIngest() *ConnectionEventInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ConnectionEventInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStream) GetMetrics() *ConnectionEventInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -15080,6 +15440,47 @@ func (v *ConnectionEventInNodeDefaultFieldsStream) GetThumbnailAssets() *Connect
 // GetRetentionOverrides returns ConnectionEventInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStream) GetRetentionOverrides() *ConnectionEventInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ConnectionEventInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ConnectionEventInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ConnectionEventInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ConnectionEventInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ConnectionEventInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ConnectionEventInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ConnectionEventInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns ConnectionEventInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ConnectionEventInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ConnectionEventInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -18908,8 +19309,8 @@ type CreateEdgeClusterResponseDefaultFieldsCluster struct {
 	MaxConcurrentStreams int `json:"maxConcurrentStreams"`
 	// Maximum allowed concurrent viewers.
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
-	// Maximum allowed bandwidth in Mbps.
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	// Aggregate node budgets and usable capacity; null when the control plane is unavailable.
+	Capacity *CreateEdgeClusterResponseDefaultFieldsClusterCapacity `json:"capacity"`
 	// Cluster health status (healthy, degraded, critical).
 	HealthStatus string `json:"healthStatus"`
 	// Whether the cluster is operational.
@@ -18985,9 +19386,9 @@ func (v *CreateEdgeClusterResponseDefaultFieldsCluster) GetMaxConcurrentViewers(
 	return v.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns CreateEdgeClusterResponseDefaultFieldsCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *CreateEdgeClusterResponseDefaultFieldsCluster) GetMaxBandwidthMbps() int {
-	return v.MaxBandwidthMbps
+// GetCapacity returns CreateEdgeClusterResponseDefaultFieldsCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsCluster) GetCapacity() *CreateEdgeClusterResponseDefaultFieldsClusterCapacity {
+	return v.Capacity
 }
 
 // GetHealthStatus returns CreateEdgeClusterResponseDefaultFieldsCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -19048,6 +19449,40 @@ func (v *CreateEdgeClusterResponseDefaultFieldsCluster) GetRequiresApproval() bo
 // GetShortDescription returns CreateEdgeClusterResponseDefaultFieldsCluster.ShortDescription, and is useful for accessing the field via an interface.
 func (v *CreateEdgeClusterResponseDefaultFieldsCluster) GetShortDescription() *string {
 	return v.ShortDescription
+}
+
+// CreateEdgeClusterResponseDefaultFieldsClusterCapacity includes the requested fields of the GraphQL type ClusterCapacity.
+type CreateEdgeClusterResponseDefaultFieldsClusterCapacity struct {
+	EgressBudgetBytesPerSec  float64 `json:"egressBudgetBytesPerSec"`
+	IngressBudgetBytesPerSec float64 `json:"ingressBudgetBytesPerSec"`
+	EgressUsableBytesPerSec  float64 `json:"egressUsableBytesPerSec"`
+	IngressUsableBytesPerSec float64 `json:"ingressUsableBytesPerSec"`
+	DefaultBudgetNodes       int     `json:"defaultBudgetNodes"`
+}
+
+// GetEgressBudgetBytesPerSec returns CreateEdgeClusterResponseDefaultFieldsClusterCapacity.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsClusterCapacity) GetEgressBudgetBytesPerSec() float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns CreateEdgeClusterResponseDefaultFieldsClusterCapacity.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsClusterCapacity) GetIngressBudgetBytesPerSec() float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetEgressUsableBytesPerSec returns CreateEdgeClusterResponseDefaultFieldsClusterCapacity.EgressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsClusterCapacity) GetEgressUsableBytesPerSec() float64 {
+	return v.EgressUsableBytesPerSec
+}
+
+// GetIngressUsableBytesPerSec returns CreateEdgeClusterResponseDefaultFieldsClusterCapacity.IngressUsableBytesPerSec, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsClusterCapacity) GetIngressUsableBytesPerSec() float64 {
+	return v.IngressUsableBytesPerSec
+}
+
+// GetDefaultBudgetNodes returns CreateEdgeClusterResponseDefaultFieldsClusterCapacity.DefaultBudgetNodes, and is useful for accessing the field via an interface.
+func (v *CreateEdgeClusterResponseDefaultFieldsClusterCapacity) GetDefaultBudgetNodes() int {
+	return v.DefaultBudgetNodes
 }
 
 // CreateEnrollmentTokenCreateEnrollmentTokenAuthError includes the requested fields of the GraphQL type AuthError.
@@ -22292,6 +22727,8 @@ type CreateStreamInput struct {
 	PullSource *PullSourceInput `json:"pullSource"`
 	// Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.
 	SourceLocation *SourceLocationInput `json:"sourceLocation"`
+	// Ladder name allowed by the plan. Empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder"`
 }
 
 // GetName returns CreateStreamInput.Name, and is useful for accessing the field via an interface.
@@ -22315,541 +22752,8 @@ func (v *CreateStreamInput) GetPullSource() *PullSourceInput { return v.PullSour
 // GetSourceLocation returns CreateStreamInput.SourceLocation, and is useful for accessing the field via an interface.
 func (v *CreateStreamInput) GetSourceLocation() *SourceLocationInput { return v.SourceLocation }
 
-// CreateStreamKeyCreateStreamKey includes the requested fields of the GraphQL type StreamKey.
-type CreateStreamKeyCreateStreamKey struct {
-	Typename        *string `json:"__typename"`
-	StreamKeyFields `json:"-"`
-}
-
-// GetTypename returns CreateStreamKeyCreateStreamKey.Typename, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetTypename() *string { return v.Typename }
-
-// GetId returns CreateStreamKeyCreateStreamKey.Id, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetId() string { return v.StreamKeyFields.Id }
-
-// GetStreamId returns CreateStreamKeyCreateStreamKey.StreamId, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetStreamId() string { return v.StreamKeyFields.StreamId }
-
-// GetKeyValue returns CreateStreamKeyCreateStreamKey.KeyValue, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetKeyValue() string { return v.StreamKeyFields.KeyValue }
-
-// GetKeyName returns CreateStreamKeyCreateStreamKey.KeyName, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetKeyName() *string { return v.StreamKeyFields.KeyName }
-
-// GetIsActive returns CreateStreamKeyCreateStreamKey.IsActive, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetIsActive() bool { return v.StreamKeyFields.IsActive }
-
-// GetLastUsedAt returns CreateStreamKeyCreateStreamKey.LastUsedAt, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetLastUsedAt() *time.Time {
-	return v.StreamKeyFields.LastUsedAt
-}
-
-// GetCreatedAt returns CreateStreamKeyCreateStreamKey.CreatedAt, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKey) GetCreatedAt() time.Time { return v.StreamKeyFields.CreatedAt }
-
-func (v *CreateStreamKeyCreateStreamKey) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*CreateStreamKeyCreateStreamKey
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.CreateStreamKeyCreateStreamKey = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.StreamKeyFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalCreateStreamKeyCreateStreamKey struct {
-	Typename *string `json:"__typename"`
-
-	Id string `json:"id"`
-
-	StreamId string `json:"streamId"`
-
-	KeyValue string `json:"keyValue"`
-
-	KeyName *string `json:"keyName"`
-
-	IsActive bool `json:"isActive"`
-
-	LastUsedAt *time.Time `json:"lastUsedAt"`
-
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-func (v *CreateStreamKeyCreateStreamKey) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *CreateStreamKeyCreateStreamKey) __premarshalJSON() (*__premarshalCreateStreamKeyCreateStreamKey, error) {
-	var retval __premarshalCreateStreamKeyCreateStreamKey
-
-	retval.Typename = v.Typename
-	retval.Id = v.StreamKeyFields.Id
-	retval.StreamId = v.StreamKeyFields.StreamId
-	retval.KeyValue = v.StreamKeyFields.KeyValue
-	retval.KeyName = v.StreamKeyFields.KeyName
-	retval.IsActive = v.StreamKeyFields.IsActive
-	retval.LastUsedAt = v.StreamKeyFields.LastUsedAt
-	retval.CreatedAt = v.StreamKeyFields.CreatedAt
-	return &retval, nil
-}
-
-// CreateStreamKeyCreateStreamKeyAuthError includes the requested fields of the GraphQL type AuthError.
-type CreateStreamKeyCreateStreamKeyAuthError struct {
-	Typename        *string `json:"__typename"`
-	AuthErrorFields `json:"-"`
-}
-
-// GetTypename returns CreateStreamKeyCreateStreamKeyAuthError.Typename, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyAuthError) GetTypename() *string { return v.Typename }
-
-// GetMessage returns CreateStreamKeyCreateStreamKeyAuthError.Message, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyAuthError) GetMessage() string {
-	return v.AuthErrorFields.Message
-}
-
-// GetCode returns CreateStreamKeyCreateStreamKeyAuthError.Code, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyAuthError) GetCode() *string { return v.AuthErrorFields.Code }
-
-func (v *CreateStreamKeyCreateStreamKeyAuthError) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*CreateStreamKeyCreateStreamKeyAuthError
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.CreateStreamKeyCreateStreamKeyAuthError = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.AuthErrorFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalCreateStreamKeyCreateStreamKeyAuthError struct {
-	Typename *string `json:"__typename"`
-
-	Message string `json:"message"`
-
-	Code *string `json:"code"`
-}
-
-func (v *CreateStreamKeyCreateStreamKeyAuthError) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *CreateStreamKeyCreateStreamKeyAuthError) __premarshalJSON() (*__premarshalCreateStreamKeyCreateStreamKeyAuthError, error) {
-	var retval __premarshalCreateStreamKeyCreateStreamKeyAuthError
-
-	retval.Typename = v.Typename
-	retval.Message = v.AuthErrorFields.Message
-	retval.Code = v.AuthErrorFields.Code
-	return &retval, nil
-}
-
-// CreateStreamKeyCreateStreamKeyCreateStreamKeyResult includes the requested fields of the GraphQL interface CreateStreamKeyResult.
-//
-// CreateStreamKeyCreateStreamKeyCreateStreamKeyResult is implemented by the following types:
-// CreateStreamKeyCreateStreamKeyAuthError
-// CreateStreamKeyCreateStreamKeyNotFoundError
-// CreateStreamKeyCreateStreamKey
-// CreateStreamKeyCreateStreamKeyValidationError
-type CreateStreamKeyCreateStreamKeyCreateStreamKeyResult interface {
-	implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult()
-	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
-	GetTypename() *string
-}
-
-func (v *CreateStreamKeyCreateStreamKeyAuthError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
-}
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
-}
-func (v *CreateStreamKeyCreateStreamKey) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
-}
-func (v *CreateStreamKeyCreateStreamKeyValidationError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
-}
-
-func __unmarshalCreateStreamKeyCreateStreamKeyCreateStreamKeyResult(b []byte, v *CreateStreamKeyCreateStreamKeyCreateStreamKeyResult) error {
-	if string(b) == "null" {
-		return nil
-	}
-
-	var tn struct {
-		TypeName string `json:"__typename"`
-	}
-	err := json.Unmarshal(b, &tn)
-	if err != nil {
-		return err
-	}
-
-	switch tn.TypeName {
-	case "AuthError":
-		*v = new(CreateStreamKeyCreateStreamKeyAuthError)
-		return json.Unmarshal(b, *v)
-	case "NotFoundError":
-		*v = new(CreateStreamKeyCreateStreamKeyNotFoundError)
-		return json.Unmarshal(b, *v)
-	case "StreamKey":
-		*v = new(CreateStreamKeyCreateStreamKey)
-		return json.Unmarshal(b, *v)
-	case "ValidationError":
-		*v = new(CreateStreamKeyCreateStreamKeyValidationError)
-		return json.Unmarshal(b, *v)
-	case "":
-		return fmt.Errorf(
-			"response was missing CreateStreamKeyResult.__typename")
-	default:
-		*v = newUnknownMember(tn.TypeName, b)
-		return nil
-	}
-}
-
-func __marshalCreateStreamKeyCreateStreamKeyCreateStreamKeyResult(v *CreateStreamKeyCreateStreamKeyCreateStreamKeyResult) ([]byte, error) {
-
-	var typename string
-	switch v := (*v).(type) {
-	case *CreateStreamKeyCreateStreamKeyAuthError:
-		typename = "AuthError"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalCreateStreamKeyCreateStreamKeyAuthError
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case *CreateStreamKeyCreateStreamKeyNotFoundError:
-		typename = "NotFoundError"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalCreateStreamKeyCreateStreamKeyNotFoundError
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case *CreateStreamKeyCreateStreamKey:
-		typename = "StreamKey"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalCreateStreamKeyCreateStreamKey
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case *CreateStreamKeyCreateStreamKeyValidationError:
-		typename = "ValidationError"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalCreateStreamKeyCreateStreamKeyValidationError
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case nil:
-		return []byte("null"), nil
-	case *UnknownMember:
-		return v.MarshalJSON()
-	default:
-		return nil, fmt.Errorf(
-			`unexpected concrete type for CreateStreamKeyCreateStreamKeyCreateStreamKeyResult: "%T"`, v)
-	}
-}
-
-// CreateStreamKeyCreateStreamKeyNotFoundError includes the requested fields of the GraphQL type NotFoundError.
-type CreateStreamKeyCreateStreamKeyNotFoundError struct {
-	Typename            *string `json:"__typename"`
-	NotFoundErrorFields `json:"-"`
-}
-
-// GetTypename returns CreateStreamKeyCreateStreamKeyNotFoundError.Typename, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) GetTypename() *string { return v.Typename }
-
-// GetMessage returns CreateStreamKeyCreateStreamKeyNotFoundError.Message, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) GetMessage() string {
-	return v.NotFoundErrorFields.Message
-}
-
-// GetCode returns CreateStreamKeyCreateStreamKeyNotFoundError.Code, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) GetCode() *string {
-	return v.NotFoundErrorFields.Code
-}
-
-// GetResourceType returns CreateStreamKeyCreateStreamKeyNotFoundError.ResourceType, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) GetResourceType() string {
-	return v.NotFoundErrorFields.ResourceType
-}
-
-// GetResourceId returns CreateStreamKeyCreateStreamKeyNotFoundError.ResourceId, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) GetResourceId() string {
-	return v.NotFoundErrorFields.ResourceId
-}
-
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*CreateStreamKeyCreateStreamKeyNotFoundError
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.CreateStreamKeyCreateStreamKeyNotFoundError = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.NotFoundErrorFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalCreateStreamKeyCreateStreamKeyNotFoundError struct {
-	Typename *string `json:"__typename"`
-
-	Message string `json:"message"`
-
-	Code *string `json:"code"`
-
-	ResourceType string `json:"resourceType"`
-
-	ResourceId string `json:"resourceId"`
-}
-
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *CreateStreamKeyCreateStreamKeyNotFoundError) __premarshalJSON() (*__premarshalCreateStreamKeyCreateStreamKeyNotFoundError, error) {
-	var retval __premarshalCreateStreamKeyCreateStreamKeyNotFoundError
-
-	retval.Typename = v.Typename
-	retval.Message = v.NotFoundErrorFields.Message
-	retval.Code = v.NotFoundErrorFields.Code
-	retval.ResourceType = v.NotFoundErrorFields.ResourceType
-	retval.ResourceId = v.NotFoundErrorFields.ResourceId
-	return &retval, nil
-}
-
-// CreateStreamKeyCreateStreamKeyValidationError includes the requested fields of the GraphQL type ValidationError.
-type CreateStreamKeyCreateStreamKeyValidationError struct {
-	Typename              *string `json:"__typename"`
-	ValidationErrorFields `json:"-"`
-}
-
-// GetTypename returns CreateStreamKeyCreateStreamKeyValidationError.Typename, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyValidationError) GetTypename() *string { return v.Typename }
-
-// GetMessage returns CreateStreamKeyCreateStreamKeyValidationError.Message, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyValidationError) GetMessage() string {
-	return v.ValidationErrorFields.Message
-}
-
-// GetCode returns CreateStreamKeyCreateStreamKeyValidationError.Code, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyValidationError) GetCode() *string {
-	return v.ValidationErrorFields.Code
-}
-
-// GetField returns CreateStreamKeyCreateStreamKeyValidationError.Field, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyValidationError) GetField() *string {
-	return v.ValidationErrorFields.Field
-}
-
-// GetConstraint returns CreateStreamKeyCreateStreamKeyValidationError.Constraint, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyCreateStreamKeyValidationError) GetConstraint() *string {
-	return v.ValidationErrorFields.Constraint
-}
-
-func (v *CreateStreamKeyCreateStreamKeyValidationError) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*CreateStreamKeyCreateStreamKeyValidationError
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.CreateStreamKeyCreateStreamKeyValidationError = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.ValidationErrorFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalCreateStreamKeyCreateStreamKeyValidationError struct {
-	Typename *string `json:"__typename"`
-
-	Message string `json:"message"`
-
-	Code *string `json:"code"`
-
-	Field *string `json:"field"`
-
-	Constraint *string `json:"constraint"`
-}
-
-func (v *CreateStreamKeyCreateStreamKeyValidationError) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *CreateStreamKeyCreateStreamKeyValidationError) __premarshalJSON() (*__premarshalCreateStreamKeyCreateStreamKeyValidationError, error) {
-	var retval __premarshalCreateStreamKeyCreateStreamKeyValidationError
-
-	retval.Typename = v.Typename
-	retval.Message = v.ValidationErrorFields.Message
-	retval.Code = v.ValidationErrorFields.Code
-	retval.Field = v.ValidationErrorFields.Field
-	retval.Constraint = v.ValidationErrorFields.Constraint
-	return &retval, nil
-}
-
-// Input for creating an additional stream key.
-type CreateStreamKeyInput struct {
-	// Human-readable name for the key.
-	Name string `json:"name"`
-}
-
-// GetName returns CreateStreamKeyInput.Name, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyInput) GetName() string { return v.Name }
-
-// CreateStreamKeyResponse is returned by CreateStreamKey on success.
-type CreateStreamKeyResponse struct {
-	// Create an additional stream key for a stream.
-	CreateStreamKey CreateStreamKeyCreateStreamKeyCreateStreamKeyResult `json:"-"`
-}
-
-// GetCreateStreamKey returns CreateStreamKeyResponse.CreateStreamKey, and is useful for accessing the field via an interface.
-func (v *CreateStreamKeyResponse) GetCreateStreamKey() CreateStreamKeyCreateStreamKeyCreateStreamKeyResult {
-	return v.CreateStreamKey
-}
-
-func (v *CreateStreamKeyResponse) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*CreateStreamKeyResponse
-		CreateStreamKey json.RawMessage `json:"createStreamKey"`
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.CreateStreamKeyResponse = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	{
-		dst := &v.CreateStreamKey
-		src := firstPass.CreateStreamKey
-		if len(src) != 0 && string(src) != "null" {
-			err = __unmarshalCreateStreamKeyCreateStreamKeyCreateStreamKeyResult(
-				src, dst)
-			if err != nil {
-				return fmt.Errorf(
-					"unable to unmarshal CreateStreamKeyResponse.CreateStreamKey: %w", err)
-			}
-		}
-	}
-	return nil
-}
-
-type __premarshalCreateStreamKeyResponse struct {
-	CreateStreamKey json.RawMessage `json:"createStreamKey"`
-}
-
-func (v *CreateStreamKeyResponse) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *CreateStreamKeyResponse) __premarshalJSON() (*__premarshalCreateStreamKeyResponse, error) {
-	var retval __premarshalCreateStreamKeyResponse
-
-	{
-
-		dst := &retval.CreateStreamKey
-		src := v.CreateStreamKey
-		var err error
-		*dst, err = __marshalCreateStreamKeyCreateStreamKeyCreateStreamKeyResult(
-			&src)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"unable to marshal CreateStreamKeyResponse.CreateStreamKey: %w", err)
-		}
-	}
-	return &retval, nil
-}
+// GetTranscodeLadder returns CreateStreamInput.TranscodeLadder, and is useful for accessing the field via an interface.
+func (v *CreateStreamInput) GetTranscodeLadder() *string { return v.TranscodeLadder }
 
 // CreateStreamResponse is returned by CreateStream on success.
 type CreateStreamResponse struct {
@@ -23942,6 +23846,532 @@ func (v *CreateStripeCheckoutResponse) __premarshalJSON() (*__premarshalCreateSt
 	return &retval, nil
 }
 
+// CreateVodOriginalDownloadCreateVodOriginalDownload includes the requested fields of the GraphQL type VodOriginalDownload.
+// The GraphQL type's documentation follows.
+//
+// Short-lived download of the byte-identical original upload, without playback metering.
+type CreateVodOriginalDownloadCreateVodOriginalDownload struct {
+	Typename                         *string `json:"__typename"`
+	VodOriginalDownloadDefaultFields `json:"-"`
+}
+
+// GetTypename returns CreateVodOriginalDownloadCreateVodOriginalDownload.Typename, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) GetTypename() *string { return v.Typename }
+
+// GetUrl returns CreateVodOriginalDownloadCreateVodOriginalDownload.Url, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) GetUrl() string {
+	return v.VodOriginalDownloadDefaultFields.Url
+}
+
+// GetExpiresAt returns CreateVodOriginalDownloadCreateVodOriginalDownload.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) GetExpiresAt() time.Time {
+	return v.VodOriginalDownloadDefaultFields.ExpiresAt
+}
+
+// GetSizeBytes returns CreateVodOriginalDownloadCreateVodOriginalDownload.SizeBytes, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) GetSizeBytes() float64 {
+	return v.VodOriginalDownloadDefaultFields.SizeBytes
+}
+
+// GetFilename returns CreateVodOriginalDownloadCreateVodOriginalDownload.Filename, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) GetFilename() string {
+	return v.VodOriginalDownloadDefaultFields.Filename
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*CreateVodOriginalDownloadCreateVodOriginalDownload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.CreateVodOriginalDownloadCreateVodOriginalDownload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.VodOriginalDownloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalCreateVodOriginalDownloadCreateVodOriginalDownload struct {
+	Typename *string `json:"__typename"`
+
+	Url string `json:"url"`
+
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	SizeBytes float64 `json:"sizeBytes"`
+
+	Filename string `json:"filename"`
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) __premarshalJSON() (*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownload, error) {
+	var retval __premarshalCreateVodOriginalDownloadCreateVodOriginalDownload
+
+	retval.Typename = v.Typename
+	retval.Url = v.VodOriginalDownloadDefaultFields.Url
+	retval.ExpiresAt = v.VodOriginalDownloadDefaultFields.ExpiresAt
+	retval.SizeBytes = v.VodOriginalDownloadDefaultFields.SizeBytes
+	retval.Filename = v.VodOriginalDownloadDefaultFields.Filename
+	return &retval, nil
+}
+
+// CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError includes the requested fields of the GraphQL type AuthError.
+type CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError.Message, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError.Code, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) __premarshalJSON() (*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadAuthError, error) {
+	var retval __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult includes the requested fields of the GraphQL interface CreateVodOriginalDownloadResult.
+//
+// CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult is implemented by the following types:
+// CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError
+// CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError
+// CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError
+// CreateVodOriginalDownloadCreateVodOriginalDownload
+type CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult interface {
+	implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError) implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult() {
+}
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult() {
+}
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult() {
+}
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownload) implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult() {
+}
+
+func __unmarshalCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult(b []byte, v *CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError)
+		return json.Unmarshal(b, *v)
+	case "VodOriginalDownload":
+		*v = new(CreateVodOriginalDownloadCreateVodOriginalDownload)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing CreateVodOriginalDownloadResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult(v *CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *CreateVodOriginalDownloadCreateVodOriginalDownloadAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *CreateVodOriginalDownloadCreateVodOriginalDownload:
+		typename = "VodOriginalDownload"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownload
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult: "%T"`, v)
+	}
+}
+
+// CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError) __premarshalJSON() (*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError, error) {
+	var retval __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError includes the requested fields of the GraphQL type ValidationError.
+type CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError.Message, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError.Code, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError.Field, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *CreateVodOriginalDownloadCreateVodOriginalDownloadValidationError) __premarshalJSON() (*__premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadValidationError, error) {
+	var retval __premarshalCreateVodOriginalDownloadCreateVodOriginalDownloadValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// CreateVodOriginalDownloadResponse is returned by CreateVodOriginalDownload on success.
+type CreateVodOriginalDownloadResponse struct {
+	// Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5.
+	CreateVodOriginalDownload CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult `json:"-"`
+}
+
+// GetCreateVodOriginalDownload returns CreateVodOriginalDownloadResponse.CreateVodOriginalDownload, and is useful for accessing the field via an interface.
+func (v *CreateVodOriginalDownloadResponse) GetCreateVodOriginalDownload() CreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult {
+	return v.CreateVodOriginalDownload
+}
+
+func (v *CreateVodOriginalDownloadResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*CreateVodOriginalDownloadResponse
+		CreateVodOriginalDownload json.RawMessage `json:"createVodOriginalDownload"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.CreateVodOriginalDownloadResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.CreateVodOriginalDownload
+		src := firstPass.CreateVodOriginalDownload
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal CreateVodOriginalDownloadResponse.CreateVodOriginalDownload: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalCreateVodOriginalDownloadResponse struct {
+	CreateVodOriginalDownload json.RawMessage `json:"createVodOriginalDownload"`
+}
+
+func (v *CreateVodOriginalDownloadResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *CreateVodOriginalDownloadResponse) __premarshalJSON() (*__premarshalCreateVodOriginalDownloadResponse, error) {
+	var retval __premarshalCreateVodOriginalDownloadResponse
+
+	{
+
+		dst := &retval.CreateVodOriginalDownload
+		src := v.CreateVodOriginalDownload
+		var err error
+		*dst, err = __marshalCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal CreateVodOriginalDownloadResponse.CreateVodOriginalDownload: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
 // CreateVodUploadCreateVodUploadAuthError includes the requested fields of the GraphQL type AuthError.
 type CreateVodUploadCreateVodUploadAuthError struct {
 	Typename        *string `json:"__typename"`
@@ -24266,7 +24696,7 @@ func (v *CreateVodUploadCreateVodUploadVodUploadSessionPartsVodUploadPart) GetPr
 // Input for initiating a multipart VOD upload.
 // Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
-	// Original filename (for metadata and content-type detection).
+	// Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused.
 	Filename string `json:"filename"`
 	// Total file size in bytes (required for part calculation).
 	SizeBytes float64 `json:"sizeBytes"`
@@ -24276,6 +24706,10 @@ type CreateVodUploadInput struct {
 	Title *string `json:"title"`
 	// Optional description for the asset.
 	Description *string `json:"description"`
+	// Video ladder for this upload; empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder"`
+	// Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default.
+	KeepOriginal *bool `json:"keepOriginal"`
 }
 
 // GetFilename returns CreateVodUploadInput.Filename, and is useful for accessing the field via an interface.
@@ -24292,6 +24726,12 @@ func (v *CreateVodUploadInput) GetTitle() *string { return v.Title }
 
 // GetDescription returns CreateVodUploadInput.Description, and is useful for accessing the field via an interface.
 func (v *CreateVodUploadInput) GetDescription() *string { return v.Description }
+
+// GetTranscodeLadder returns CreateVodUploadInput.TranscodeLadder, and is useful for accessing the field via an interface.
+func (v *CreateVodUploadInput) GetTranscodeLadder() *string { return v.TranscodeLadder }
+
+// GetKeepOriginal returns CreateVodUploadInput.KeepOriginal, and is useful for accessing the field via an interface.
+func (v *CreateVodUploadInput) GetKeepOriginal() *bool { return v.KeepOriginal }
 
 // CreateVodUploadResponse is returned by CreateVodUpload on success.
 type CreateVodUploadResponse struct {
@@ -26677,410 +27117,6 @@ func (v *DeleteStreamDeleteStreamNotFoundError) __premarshalJSON() (*__premarsha
 	return &retval, nil
 }
 
-// DeleteStreamKeyDeleteStreamKeyAuthError includes the requested fields of the GraphQL type AuthError.
-type DeleteStreamKeyDeleteStreamKeyAuthError struct {
-	Typename        *string `json:"__typename"`
-	AuthErrorFields `json:"-"`
-}
-
-// GetTypename returns DeleteStreamKeyDeleteStreamKeyAuthError.Typename, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) GetTypename() *string { return v.Typename }
-
-// GetMessage returns DeleteStreamKeyDeleteStreamKeyAuthError.Message, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) GetMessage() string {
-	return v.AuthErrorFields.Message
-}
-
-// GetCode returns DeleteStreamKeyDeleteStreamKeyAuthError.Code, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) GetCode() *string { return v.AuthErrorFields.Code }
-
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*DeleteStreamKeyDeleteStreamKeyAuthError
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.DeleteStreamKeyDeleteStreamKeyAuthError = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.AuthErrorFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalDeleteStreamKeyDeleteStreamKeyAuthError struct {
-	Typename *string `json:"__typename"`
-
-	Message string `json:"message"`
-
-	Code *string `json:"code"`
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) __premarshalJSON() (*__premarshalDeleteStreamKeyDeleteStreamKeyAuthError, error) {
-	var retval __premarshalDeleteStreamKeyDeleteStreamKeyAuthError
-
-	retval.Typename = v.Typename
-	retval.Message = v.AuthErrorFields.Message
-	retval.Code = v.AuthErrorFields.Code
-	return &retval, nil
-}
-
-// DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult includes the requested fields of the GraphQL interface DeleteStreamKeyResult.
-//
-// DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult is implemented by the following types:
-// DeleteStreamKeyDeleteStreamKeyAuthError
-// DeleteStreamKeyDeleteStreamKeyDeleteSuccess
-// DeleteStreamKeyDeleteStreamKeyNotFoundError
-type DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult interface {
-	implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult()
-	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
-	GetTypename() *string
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyAuthError) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
-}
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
-}
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
-}
-
-func __unmarshalDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult(b []byte, v *DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult) error {
-	if string(b) == "null" {
-		return nil
-	}
-
-	var tn struct {
-		TypeName string `json:"__typename"`
-	}
-	err := json.Unmarshal(b, &tn)
-	if err != nil {
-		return err
-	}
-
-	switch tn.TypeName {
-	case "AuthError":
-		*v = new(DeleteStreamKeyDeleteStreamKeyAuthError)
-		return json.Unmarshal(b, *v)
-	case "DeleteSuccess":
-		*v = new(DeleteStreamKeyDeleteStreamKeyDeleteSuccess)
-		return json.Unmarshal(b, *v)
-	case "NotFoundError":
-		*v = new(DeleteStreamKeyDeleteStreamKeyNotFoundError)
-		return json.Unmarshal(b, *v)
-	case "":
-		return fmt.Errorf(
-			"response was missing DeleteStreamKeyResult.__typename")
-	default:
-		*v = newUnknownMember(tn.TypeName, b)
-		return nil
-	}
-}
-
-func __marshalDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult(v *DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult) ([]byte, error) {
-
-	var typename string
-	switch v := (*v).(type) {
-	case *DeleteStreamKeyDeleteStreamKeyAuthError:
-		typename = "AuthError"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalDeleteStreamKeyDeleteStreamKeyAuthError
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case *DeleteStreamKeyDeleteStreamKeyDeleteSuccess:
-		typename = "DeleteSuccess"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalDeleteStreamKeyDeleteStreamKeyDeleteSuccess
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case *DeleteStreamKeyDeleteStreamKeyNotFoundError:
-		typename = "NotFoundError"
-
-		premarshaled, err := v.__premarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-		result := struct {
-			TypeName string `json:"__typename"`
-			*__premarshalDeleteStreamKeyDeleteStreamKeyNotFoundError
-		}{typename, premarshaled}
-		return json.Marshal(result)
-	case nil:
-		return []byte("null"), nil
-	case *UnknownMember:
-		return v.MarshalJSON()
-	default:
-		return nil, fmt.Errorf(
-			`unexpected concrete type for DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult: "%T"`, v)
-	}
-}
-
-// DeleteStreamKeyDeleteStreamKeyDeleteSuccess includes the requested fields of the GraphQL type DeleteSuccess.
-type DeleteStreamKeyDeleteStreamKeyDeleteSuccess struct {
-	Typename            *string `json:"__typename"`
-	DeleteSuccessFields `json:"-"`
-}
-
-// GetTypename returns DeleteStreamKeyDeleteStreamKeyDeleteSuccess.Typename, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) GetTypename() *string { return v.Typename }
-
-// GetSuccess returns DeleteStreamKeyDeleteStreamKeyDeleteSuccess.Success, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) GetSuccess() bool {
-	return v.DeleteSuccessFields.Success
-}
-
-// GetDeletedId returns DeleteStreamKeyDeleteStreamKeyDeleteSuccess.DeletedId, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) GetDeletedId() string {
-	return v.DeleteSuccessFields.DeletedId
-}
-
-// GetPending returns DeleteStreamKeyDeleteStreamKeyDeleteSuccess.Pending, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) GetPending() *bool {
-	return v.DeleteSuccessFields.Pending
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*DeleteStreamKeyDeleteStreamKeyDeleteSuccess
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.DeleteStreamKeyDeleteStreamKeyDeleteSuccess = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.DeleteSuccessFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalDeleteStreamKeyDeleteStreamKeyDeleteSuccess struct {
-	Typename *string `json:"__typename"`
-
-	Success bool `json:"success"`
-
-	DeletedId string `json:"deletedId"`
-
-	Pending *bool `json:"pending"`
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) __premarshalJSON() (*__premarshalDeleteStreamKeyDeleteStreamKeyDeleteSuccess, error) {
-	var retval __premarshalDeleteStreamKeyDeleteStreamKeyDeleteSuccess
-
-	retval.Typename = v.Typename
-	retval.Success = v.DeleteSuccessFields.Success
-	retval.DeletedId = v.DeleteSuccessFields.DeletedId
-	retval.Pending = v.DeleteSuccessFields.Pending
-	return &retval, nil
-}
-
-// DeleteStreamKeyDeleteStreamKeyNotFoundError includes the requested fields of the GraphQL type NotFoundError.
-type DeleteStreamKeyDeleteStreamKeyNotFoundError struct {
-	Typename            *string `json:"__typename"`
-	NotFoundErrorFields `json:"-"`
-}
-
-// GetTypename returns DeleteStreamKeyDeleteStreamKeyNotFoundError.Typename, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) GetTypename() *string { return v.Typename }
-
-// GetMessage returns DeleteStreamKeyDeleteStreamKeyNotFoundError.Message, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) GetMessage() string {
-	return v.NotFoundErrorFields.Message
-}
-
-// GetCode returns DeleteStreamKeyDeleteStreamKeyNotFoundError.Code, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) GetCode() *string {
-	return v.NotFoundErrorFields.Code
-}
-
-// GetResourceType returns DeleteStreamKeyDeleteStreamKeyNotFoundError.ResourceType, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) GetResourceType() string {
-	return v.NotFoundErrorFields.ResourceType
-}
-
-// GetResourceId returns DeleteStreamKeyDeleteStreamKeyNotFoundError.ResourceId, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) GetResourceId() string {
-	return v.NotFoundErrorFields.ResourceId
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*DeleteStreamKeyDeleteStreamKeyNotFoundError
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.DeleteStreamKeyDeleteStreamKeyNotFoundError = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(
-		b, &v.NotFoundErrorFields)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-type __premarshalDeleteStreamKeyDeleteStreamKeyNotFoundError struct {
-	Typename *string `json:"__typename"`
-
-	Message string `json:"message"`
-
-	Code *string `json:"code"`
-
-	ResourceType string `json:"resourceType"`
-
-	ResourceId string `json:"resourceId"`
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) __premarshalJSON() (*__premarshalDeleteStreamKeyDeleteStreamKeyNotFoundError, error) {
-	var retval __premarshalDeleteStreamKeyDeleteStreamKeyNotFoundError
-
-	retval.Typename = v.Typename
-	retval.Message = v.NotFoundErrorFields.Message
-	retval.Code = v.NotFoundErrorFields.Code
-	retval.ResourceType = v.NotFoundErrorFields.ResourceType
-	retval.ResourceId = v.NotFoundErrorFields.ResourceId
-	return &retval, nil
-}
-
-// DeleteStreamKeyResponse is returned by DeleteStreamKey on success.
-type DeleteStreamKeyResponse struct {
-	// Delete a stream key.
-	DeleteStreamKey DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult `json:"-"`
-}
-
-// GetDeleteStreamKey returns DeleteStreamKeyResponse.DeleteStreamKey, and is useful for accessing the field via an interface.
-func (v *DeleteStreamKeyResponse) GetDeleteStreamKey() DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult {
-	return v.DeleteStreamKey
-}
-
-func (v *DeleteStreamKeyResponse) UnmarshalJSON(b []byte) error {
-
-	if string(b) == "null" {
-		return nil
-	}
-
-	var firstPass struct {
-		*DeleteStreamKeyResponse
-		DeleteStreamKey json.RawMessage `json:"deleteStreamKey"`
-		graphql.NoUnmarshalJSON
-	}
-	firstPass.DeleteStreamKeyResponse = v
-
-	err := json.Unmarshal(b, &firstPass)
-	if err != nil {
-		return err
-	}
-
-	{
-		dst := &v.DeleteStreamKey
-		src := firstPass.DeleteStreamKey
-		if len(src) != 0 && string(src) != "null" {
-			err = __unmarshalDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult(
-				src, dst)
-			if err != nil {
-				return fmt.Errorf(
-					"unable to unmarshal DeleteStreamKeyResponse.DeleteStreamKey: %w", err)
-			}
-		}
-	}
-	return nil
-}
-
-type __premarshalDeleteStreamKeyResponse struct {
-	DeleteStreamKey json.RawMessage `json:"deleteStreamKey"`
-}
-
-func (v *DeleteStreamKeyResponse) MarshalJSON() ([]byte, error) {
-	premarshaled, err := v.__premarshalJSON()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(premarshaled)
-}
-
-func (v *DeleteStreamKeyResponse) __premarshalJSON() (*__premarshalDeleteStreamKeyResponse, error) {
-	var retval __premarshalDeleteStreamKeyResponse
-
-	{
-
-		dst := &retval.DeleteStreamKey
-		src := v.DeleteStreamKey
-		var err error
-		*dst, err = __marshalDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult(
-			&src)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"unable to marshal DeleteStreamKeyResponse.DeleteStreamKey: %w", err)
-		}
-	}
-	return &retval, nil
-}
-
 // DeleteStreamResponse is returned by DeleteStream on success.
 type DeleteStreamResponse struct {
 	// Delete a stream and all associated data.
@@ -27592,6 +27628,515 @@ func (v *DeleteVodAssetResponse) __premarshalJSON() (*__premarshalDeleteVodAsset
 		if err != nil {
 			return nil, fmt.Errorf(
 				"unable to marshal DeleteVodAssetResponse.DeleteVodAsset: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// DeleteVodOriginalDeleteVodOriginalAuthError includes the requested fields of the GraphQL type AuthError.
+type DeleteVodOriginalDeleteVodOriginalAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DeleteVodOriginalDeleteVodOriginalAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DeleteVodOriginalDeleteVodOriginalAuthError.Message, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns DeleteVodOriginalDeleteVodOriginalAuthError.Code, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DeleteVodOriginalDeleteVodOriginalAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DeleteVodOriginalDeleteVodOriginalAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDeleteVodOriginalDeleteVodOriginalAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) __premarshalJSON() (*__premarshalDeleteVodOriginalDeleteVodOriginalAuthError, error) {
+	var retval __premarshalDeleteVodOriginalDeleteVodOriginalAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// DeleteVodOriginalDeleteVodOriginalDeleteSuccess includes the requested fields of the GraphQL type DeleteSuccess.
+type DeleteVodOriginalDeleteVodOriginalDeleteSuccess struct {
+	Typename                   *string `json:"__typename"`
+	DeleteSuccessDefaultFields `json:"-"`
+}
+
+// GetTypename returns DeleteVodOriginalDeleteVodOriginalDeleteSuccess.Typename, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) GetTypename() *string { return v.Typename }
+
+// GetSuccess returns DeleteVodOriginalDeleteVodOriginalDeleteSuccess.Success, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) GetSuccess() bool {
+	return v.DeleteSuccessDefaultFields.Success
+}
+
+// GetDeletedId returns DeleteVodOriginalDeleteVodOriginalDeleteSuccess.DeletedId, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) GetDeletedId() string {
+	return v.DeleteSuccessDefaultFields.DeletedId
+}
+
+// GetPending returns DeleteVodOriginalDeleteVodOriginalDeleteSuccess.Pending, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) GetPending() *bool {
+	return v.DeleteSuccessDefaultFields.Pending
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DeleteVodOriginalDeleteVodOriginalDeleteSuccess
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DeleteVodOriginalDeleteVodOriginalDeleteSuccess = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.DeleteSuccessDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDeleteVodOriginalDeleteVodOriginalDeleteSuccess struct {
+	Typename *string `json:"__typename"`
+
+	Success bool `json:"success"`
+
+	DeletedId string `json:"deletedId"`
+
+	Pending *bool `json:"pending"`
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) __premarshalJSON() (*__premarshalDeleteVodOriginalDeleteVodOriginalDeleteSuccess, error) {
+	var retval __premarshalDeleteVodOriginalDeleteVodOriginalDeleteSuccess
+
+	retval.Typename = v.Typename
+	retval.Success = v.DeleteSuccessDefaultFields.Success
+	retval.DeletedId = v.DeleteSuccessDefaultFields.DeletedId
+	retval.Pending = v.DeleteSuccessDefaultFields.Pending
+	return &retval, nil
+}
+
+// DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult includes the requested fields of the GraphQL interface DeleteVodOriginalResult.
+//
+// DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult is implemented by the following types:
+// DeleteVodOriginalDeleteVodOriginalAuthError
+// DeleteVodOriginalDeleteVodOriginalDeleteSuccess
+// DeleteVodOriginalDeleteVodOriginalNotFoundError
+// DeleteVodOriginalDeleteVodOriginalValidationError
+type DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult interface {
+	implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalAuthError) implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult() {
+}
+func (v *DeleteVodOriginalDeleteVodOriginalDeleteSuccess) implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult() {
+}
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult() {
+}
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult() {
+}
+
+func __unmarshalDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult(b []byte, v *DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(DeleteVodOriginalDeleteVodOriginalAuthError)
+		return json.Unmarshal(b, *v)
+	case "DeleteSuccess":
+		*v = new(DeleteVodOriginalDeleteVodOriginalDeleteSuccess)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(DeleteVodOriginalDeleteVodOriginalNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(DeleteVodOriginalDeleteVodOriginalValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing DeleteVodOriginalResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult(v *DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *DeleteVodOriginalDeleteVodOriginalAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDeleteVodOriginalDeleteVodOriginalAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DeleteVodOriginalDeleteVodOriginalDeleteSuccess:
+		typename = "DeleteSuccess"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDeleteVodOriginalDeleteVodOriginalDeleteSuccess
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DeleteVodOriginalDeleteVodOriginalNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDeleteVodOriginalDeleteVodOriginalNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DeleteVodOriginalDeleteVodOriginalValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDeleteVodOriginalDeleteVodOriginalValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult: "%T"`, v)
+	}
+}
+
+// DeleteVodOriginalDeleteVodOriginalNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type DeleteVodOriginalDeleteVodOriginalNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DeleteVodOriginalDeleteVodOriginalNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DeleteVodOriginalDeleteVodOriginalNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns DeleteVodOriginalDeleteVodOriginalNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns DeleteVodOriginalDeleteVodOriginalNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns DeleteVodOriginalDeleteVodOriginalNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DeleteVodOriginalDeleteVodOriginalNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DeleteVodOriginalDeleteVodOriginalNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDeleteVodOriginalDeleteVodOriginalNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalNotFoundError) __premarshalJSON() (*__premarshalDeleteVodOriginalDeleteVodOriginalNotFoundError, error) {
+	var retval __premarshalDeleteVodOriginalDeleteVodOriginalNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// DeleteVodOriginalDeleteVodOriginalValidationError includes the requested fields of the GraphQL type ValidationError.
+type DeleteVodOriginalDeleteVodOriginalValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DeleteVodOriginalDeleteVodOriginalValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DeleteVodOriginalDeleteVodOriginalValidationError.Message, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns DeleteVodOriginalDeleteVodOriginalValidationError.Code, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns DeleteVodOriginalDeleteVodOriginalValidationError.Field, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns DeleteVodOriginalDeleteVodOriginalValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DeleteVodOriginalDeleteVodOriginalValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DeleteVodOriginalDeleteVodOriginalValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDeleteVodOriginalDeleteVodOriginalValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DeleteVodOriginalDeleteVodOriginalValidationError) __premarshalJSON() (*__premarshalDeleteVodOriginalDeleteVodOriginalValidationError, error) {
+	var retval __premarshalDeleteVodOriginalDeleteVodOriginalValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// DeleteVodOriginalResponse is returned by DeleteVodOriginal on success.
+type DeleteVodOriginalResponse struct {
+	// Permanently delete only the retained upload; processed playback remains available.
+	DeleteVodOriginal DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult `json:"-"`
+}
+
+// GetDeleteVodOriginal returns DeleteVodOriginalResponse.DeleteVodOriginal, and is useful for accessing the field via an interface.
+func (v *DeleteVodOriginalResponse) GetDeleteVodOriginal() DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult {
+	return v.DeleteVodOriginal
+}
+
+func (v *DeleteVodOriginalResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DeleteVodOriginalResponse
+		DeleteVodOriginal json.RawMessage `json:"deleteVodOriginal"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DeleteVodOriginalResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.DeleteVodOriginal
+		src := firstPass.DeleteVodOriginal
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal DeleteVodOriginalResponse.DeleteVodOriginal: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalDeleteVodOriginalResponse struct {
+	DeleteVodOriginal json.RawMessage `json:"deleteVodOriginal"`
+}
+
+func (v *DeleteVodOriginalResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DeleteVodOriginalResponse) __premarshalJSON() (*__premarshalDeleteVodOriginalResponse, error) {
+	var retval __premarshalDeleteVodOriginalResponse
+
+	{
+
+		dst := &retval.DeleteVodOriginal
+		src := v.DeleteVodOriginal
+		var err error
+		*dst, err = __marshalDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal DeleteVodOriginalResponse.DeleteVodOriginal: %w", err)
 		}
 	}
 	return &retval, nil
@@ -28567,6 +29112,512 @@ func (v *DisableWebhookEndpointResponse) __premarshalJSON() (*__premarshalDisabl
 		if err != nil {
 			return nil, fmt.Errorf(
 				"unable to marshal DisableWebhookEndpointResponse.DisableWebhookEndpoint: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// DisconnectIngestDisconnectIngestAuthError includes the requested fields of the GraphQL type AuthError.
+type DisconnectIngestDisconnectIngestAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DisconnectIngestDisconnectIngestAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DisconnectIngestDisconnectIngestAuthError.Message, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns DisconnectIngestDisconnectIngestAuthError.Code, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *DisconnectIngestDisconnectIngestAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DisconnectIngestDisconnectIngestAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DisconnectIngestDisconnectIngestAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDisconnectIngestDisconnectIngestAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *DisconnectIngestDisconnectIngestAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DisconnectIngestDisconnectIngestAuthError) __premarshalJSON() (*__premarshalDisconnectIngestDisconnectIngestAuthError, error) {
+	var retval __premarshalDisconnectIngestDisconnectIngestAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// DisconnectIngestDisconnectIngestDisconnectIngestResult includes the requested fields of the GraphQL interface DisconnectIngestResult.
+//
+// DisconnectIngestDisconnectIngestDisconnectIngestResult is implemented by the following types:
+// DisconnectIngestDisconnectIngestAuthError
+// DisconnectIngestDisconnectIngestIngestDisconnectSuccess
+// DisconnectIngestDisconnectIngestNotFoundError
+// DisconnectIngestDisconnectIngestValidationError
+type DisconnectIngestDisconnectIngestDisconnectIngestResult interface {
+	implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *DisconnectIngestDisconnectIngestAuthError) implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult() {
+}
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult() {
+}
+func (v *DisconnectIngestDisconnectIngestNotFoundError) implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult() {
+}
+func (v *DisconnectIngestDisconnectIngestValidationError) implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult() {
+}
+
+func __unmarshalDisconnectIngestDisconnectIngestDisconnectIngestResult(b []byte, v *DisconnectIngestDisconnectIngestDisconnectIngestResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(DisconnectIngestDisconnectIngestAuthError)
+		return json.Unmarshal(b, *v)
+	case "IngestDisconnectSuccess":
+		*v = new(DisconnectIngestDisconnectIngestIngestDisconnectSuccess)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(DisconnectIngestDisconnectIngestNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(DisconnectIngestDisconnectIngestValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing DisconnectIngestResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalDisconnectIngestDisconnectIngestDisconnectIngestResult(v *DisconnectIngestDisconnectIngestDisconnectIngestResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *DisconnectIngestDisconnectIngestAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDisconnectIngestDisconnectIngestAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DisconnectIngestDisconnectIngestIngestDisconnectSuccess:
+		typename = "IngestDisconnectSuccess"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDisconnectIngestDisconnectIngestIngestDisconnectSuccess
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DisconnectIngestDisconnectIngestNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDisconnectIngestDisconnectIngestNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *DisconnectIngestDisconnectIngestValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalDisconnectIngestDisconnectIngestValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for DisconnectIngestDisconnectIngestDisconnectIngestResult: "%T"`, v)
+	}
+}
+
+// DisconnectIngestDisconnectIngestIngestDisconnectSuccess includes the requested fields of the GraphQL type IngestDisconnectSuccess.
+// The GraphQL type's documentation follows.
+//
+// An accepted request to stop the currently claimed push publisher.
+type DisconnectIngestDisconnectIngestIngestDisconnectSuccess struct {
+	Typename                             *string `json:"__typename"`
+	IngestDisconnectSuccessDefaultFields `json:"-"`
+}
+
+// GetTypename returns DisconnectIngestDisconnectIngestIngestDisconnectSuccess.Typename, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) GetTypename() *string {
+	return v.Typename
+}
+
+// GetStreamId returns DisconnectIngestDisconnectIngestIngestDisconnectSuccess.StreamId, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) GetStreamId() string {
+	return v.IngestDisconnectSuccessDefaultFields.StreamId
+}
+
+// GetStopRequested returns DisconnectIngestDisconnectIngestIngestDisconnectSuccess.StopRequested, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) GetStopRequested() bool {
+	return v.IngestDisconnectSuccessDefaultFields.StopRequested
+}
+
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DisconnectIngestDisconnectIngestIngestDisconnectSuccess
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DisconnectIngestDisconnectIngestIngestDisconnectSuccess = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.IngestDisconnectSuccessDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDisconnectIngestDisconnectIngestIngestDisconnectSuccess struct {
+	Typename *string `json:"__typename"`
+
+	StreamId string `json:"streamId"`
+
+	StopRequested bool `json:"stopRequested"`
+}
+
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DisconnectIngestDisconnectIngestIngestDisconnectSuccess) __premarshalJSON() (*__premarshalDisconnectIngestDisconnectIngestIngestDisconnectSuccess, error) {
+	var retval __premarshalDisconnectIngestDisconnectIngestIngestDisconnectSuccess
+
+	retval.Typename = v.Typename
+	retval.StreamId = v.IngestDisconnectSuccessDefaultFields.StreamId
+	retval.StopRequested = v.IngestDisconnectSuccessDefaultFields.StopRequested
+	return &retval, nil
+}
+
+// DisconnectIngestDisconnectIngestNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type DisconnectIngestDisconnectIngestNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DisconnectIngestDisconnectIngestNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestNotFoundError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DisconnectIngestDisconnectIngestNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns DisconnectIngestDisconnectIngestNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns DisconnectIngestDisconnectIngestNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns DisconnectIngestDisconnectIngestNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *DisconnectIngestDisconnectIngestNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DisconnectIngestDisconnectIngestNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DisconnectIngestDisconnectIngestNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDisconnectIngestDisconnectIngestNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *DisconnectIngestDisconnectIngestNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DisconnectIngestDisconnectIngestNotFoundError) __premarshalJSON() (*__premarshalDisconnectIngestDisconnectIngestNotFoundError, error) {
+	var retval __premarshalDisconnectIngestDisconnectIngestNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// DisconnectIngestDisconnectIngestValidationError includes the requested fields of the GraphQL type ValidationError.
+type DisconnectIngestDisconnectIngestValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns DisconnectIngestDisconnectIngestValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns DisconnectIngestDisconnectIngestValidationError.Message, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns DisconnectIngestDisconnectIngestValidationError.Code, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns DisconnectIngestDisconnectIngestValidationError.Field, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns DisconnectIngestDisconnectIngestValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestDisconnectIngestValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *DisconnectIngestDisconnectIngestValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DisconnectIngestDisconnectIngestValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DisconnectIngestDisconnectIngestValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalDisconnectIngestDisconnectIngestValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *DisconnectIngestDisconnectIngestValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DisconnectIngestDisconnectIngestValidationError) __premarshalJSON() (*__premarshalDisconnectIngestDisconnectIngestValidationError, error) {
+	var retval __premarshalDisconnectIngestDisconnectIngestValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// DisconnectIngestResponse is returned by DisconnectIngest on success.
+type DisconnectIngestResponse struct {
+	// Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false.
+	DisconnectIngest DisconnectIngestDisconnectIngestDisconnectIngestResult `json:"-"`
+}
+
+// GetDisconnectIngest returns DisconnectIngestResponse.DisconnectIngest, and is useful for accessing the field via an interface.
+func (v *DisconnectIngestResponse) GetDisconnectIngest() DisconnectIngestDisconnectIngestDisconnectIngestResult {
+	return v.DisconnectIngest
+}
+
+func (v *DisconnectIngestResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*DisconnectIngestResponse
+		DisconnectIngest json.RawMessage `json:"disconnectIngest"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.DisconnectIngestResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.DisconnectIngest
+		src := firstPass.DisconnectIngest
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalDisconnectIngestDisconnectIngestDisconnectIngestResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal DisconnectIngestResponse.DisconnectIngest: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalDisconnectIngestResponse struct {
+	DisconnectIngest json.RawMessage `json:"disconnectIngest"`
+}
+
+func (v *DisconnectIngestResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *DisconnectIngestResponse) __premarshalJSON() (*__premarshalDisconnectIngestResponse, error) {
+	var retval __premarshalDisconnectIngestResponse
+
+	{
+
+		dst := &retval.DisconnectIngest
+		src := v.DisconnectIngest
+		var err error
+		*dst, err = __marshalDisconnectIngestDisconnectIngestDisconnectIngestResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal DisconnectIngestResponse.DisconnectIngest: %w", err)
 		}
 	}
 	return &retval, nil
@@ -29567,6 +30618,8 @@ type GeographicDistributionDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *GeographicDistributionDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -29646,6 +30699,11 @@ func (v *GeographicDistributionDefaultFieldsStream) GetCreatedAt() time.Time { r
 // GetUpdatedAt returns GeographicDistributionDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns GeographicDistributionDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStream) GetIngest() *GeographicDistributionDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns GeographicDistributionDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStream) GetMetrics() *GeographicDistributionDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -29684,6 +30742,49 @@ func (v *GeographicDistributionDefaultFieldsStream) GetThumbnailAssets() *Geogra
 // GetRetentionOverrides returns GeographicDistributionDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStream) GetRetentionOverrides() *GeographicDistributionDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// GeographicDistributionDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type GeographicDistributionDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns GeographicDistributionDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns GeographicDistributionDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns GeographicDistributionDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns GeographicDistributionDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns GeographicDistributionDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns GeographicDistributionDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns GeographicDistributionDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // GeographicDistributionDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -33867,8 +34968,10 @@ func (v *GetClusterCluster) GetMaxConcurrentViewers() int {
 	return v.ClusterDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns GetClusterCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *GetClusterCluster) GetMaxBandwidthMbps() int { return v.ClusterDefaultFields.MaxBandwidthMbps }
+// GetCapacity returns GetClusterCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *GetClusterCluster) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterDefaultFields.Capacity
+}
 
 // GetHealthStatus returns GetClusterCluster.HealthStatus, and is useful for accessing the field via an interface.
 func (v *GetClusterCluster) GetHealthStatus() string { return v.ClusterDefaultFields.HealthStatus }
@@ -33974,7 +35077,7 @@ type __premarshalGetClusterCluster struct {
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -34027,7 +35130,7 @@ func (v *GetClusterCluster) __premarshalJSON() (*__premarshalGetClusterCluster, 
 	retval.KafkaBrokers = v.ClusterDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterDefaultFields.IsDefaultCluster
@@ -35620,6 +36723,11 @@ func (v *GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrast
 	return v.InfrastructureNodeDefaultFields.RoutingImpactPreview
 }
 
+// GetCapacity returns GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrastructureNode.Capacity, and is useful for accessing the field via an interface.
+func (v *GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) GetCapacity() *InfrastructureNodeDefaultFieldsCapacityNodeCapacity {
+	return v.InfrastructureNodeDefaultFields.Capacity
+}
+
 func (v *GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -35693,6 +36801,8 @@ type __premarshalGetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNod
 	EffectiveMode NodeOperationalMode `json:"effectiveMode"`
 
 	RoutingImpactPreview InfrastructureNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+
+	Capacity *InfrastructureNodeDefaultFieldsCapacityNodeCapacity `json:"capacity"`
 }
 
 func (v *GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) MarshalJSON() ([]byte, error) {
@@ -35730,6 +36840,7 @@ func (v *GetClusterNodesConnectionClusterNodesConnectionEdgesNodeEdgeNodeInfrast
 	retval.LiveState = v.InfrastructureNodeDefaultFields.LiveState
 	retval.EffectiveMode = v.InfrastructureNodeDefaultFields.EffectiveMode
 	retval.RoutingImpactPreview = v.InfrastructureNodeDefaultFields.RoutingImpactPreview
+	retval.Capacity = v.InfrastructureNodeDefaultFields.Capacity
 	return &retval, nil
 }
 
@@ -36849,9 +37960,9 @@ func (v *GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster) Get
 	return v.ClusterDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster) GetMaxBandwidthMbps() int {
-	return v.ClusterDefaultFields.MaxBandwidthMbps
+// GetCapacity returns GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterDefaultFields.Capacity
 }
 
 // GetHealthStatus returns GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -36972,7 +38083,7 @@ type __premarshalGetClustersConnectionClustersConnectionEdgesClusterEdgeNodeClus
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -37025,7 +38136,7 @@ func (v *GetClustersConnectionClustersConnectionEdgesClusterEdgeNodeCluster) __p
 	retval.KafkaBrokers = v.ClusterDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterDefaultFields.IsDefaultCluster
@@ -38371,6 +39482,185 @@ type GetDiscoverServicesConnectionResponse struct {
 // GetDiscoverServicesConnection returns GetDiscoverServicesConnectionResponse.DiscoverServicesConnection, and is useful for accessing the field via an interface.
 func (v *GetDiscoverServicesConnectionResponse) GetDiscoverServicesConnection() GetDiscoverServicesConnectionDiscoverServicesConnectionServiceInstancesConnection {
 	return v.DiscoverServicesConnection
+}
+
+// GetDvrRecordingDvrRecordingDVRRequest includes the requested fields of the GraphQL type DVRRequest.
+type GetDvrRecordingDvrRecordingDVRRequest struct {
+	DVRRequestFields `json:"-"`
+}
+
+// GetTypename returns GetDvrRecordingDvrRecordingDVRRequest.Typename, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetTypename() *string {
+	return v.DVRRequestFields.Typename
+}
+
+// GetId returns GetDvrRecordingDvrRecordingDVRRequest.Id, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetId() *string { return v.DVRRequestFields.Id }
+
+// GetDvrHash returns GetDvrRecordingDvrRecordingDVRRequest.DvrHash, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetDvrHash() string {
+	return v.DVRRequestFields.DvrHash
+}
+
+// GetPlaybackId returns GetDvrRecordingDvrRecordingDVRRequest.PlaybackId, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetPlaybackId() string {
+	return v.DVRRequestFields.PlaybackId
+}
+
+// GetStreamId returns GetDvrRecordingDvrRecordingDVRRequest.StreamId, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetStreamId() string {
+	return v.DVRRequestFields.StreamId
+}
+
+// GetTitle returns GetDvrRecordingDvrRecordingDVRRequest.Title, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetTitle() *string { return v.DVRRequestFields.Title }
+
+// GetStatus returns GetDvrRecordingDvrRecordingDVRRequest.Status, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetStatus() *string { return v.DVRRequestFields.Status }
+
+// GetCreatedAt returns GetDvrRecordingDvrRecordingDVRRequest.CreatedAt, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetCreatedAt() time.Time {
+	return v.DVRRequestFields.CreatedAt
+}
+
+// GetUpdatedAt returns GetDvrRecordingDvrRecordingDVRRequest.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetUpdatedAt() time.Time {
+	return v.DVRRequestFields.UpdatedAt
+}
+
+// GetStartedAt returns GetDvrRecordingDvrRecordingDVRRequest.StartedAt, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetStartedAt() *time.Time {
+	return v.DVRRequestFields.StartedAt
+}
+
+// GetEndedAt returns GetDvrRecordingDvrRecordingDVRRequest.EndedAt, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetEndedAt() *time.Time {
+	return v.DVRRequestFields.EndedAt
+}
+
+// GetExpiresAt returns GetDvrRecordingDvrRecordingDVRRequest.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetExpiresAt() *time.Time {
+	return v.DVRRequestFields.ExpiresAt
+}
+
+// GetIsExpired returns GetDvrRecordingDvrRecordingDVRRequest.IsExpired, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetIsExpired() bool {
+	return v.DVRRequestFields.IsExpired
+}
+
+// GetDurationSeconds returns GetDvrRecordingDvrRecordingDVRRequest.DurationSeconds, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetDurationSeconds() *int {
+	return v.DVRRequestFields.DurationSeconds
+}
+
+// GetSizeBytes returns GetDvrRecordingDvrRecordingDVRRequest.SizeBytes, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetSizeBytes() *float64 {
+	return v.DVRRequestFields.SizeBytes
+}
+
+// GetErrorMessage returns GetDvrRecordingDvrRecordingDVRRequest.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingDvrRecordingDVRRequest) GetErrorMessage() *string {
+	return v.DVRRequestFields.ErrorMessage
+}
+
+func (v *GetDvrRecordingDvrRecordingDVRRequest) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetDvrRecordingDvrRecordingDVRRequest
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetDvrRecordingDvrRecordingDVRRequest = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.DVRRequestFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetDvrRecordingDvrRecordingDVRRequest struct {
+	Typename *string `json:"__typename"`
+
+	Id *string `json:"id"`
+
+	DvrHash string `json:"dvrHash"`
+
+	PlaybackId string `json:"playbackId"`
+
+	StreamId string `json:"streamId"`
+
+	Title *string `json:"title"`
+
+	Status *string `json:"status"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	StartedAt *time.Time `json:"startedAt"`
+
+	EndedAt *time.Time `json:"endedAt"`
+
+	ExpiresAt *time.Time `json:"expiresAt"`
+
+	IsExpired bool `json:"isExpired"`
+
+	DurationSeconds *int `json:"durationSeconds"`
+
+	SizeBytes *float64 `json:"sizeBytes"`
+
+	ErrorMessage *string `json:"errorMessage"`
+}
+
+func (v *GetDvrRecordingDvrRecordingDVRRequest) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetDvrRecordingDvrRecordingDVRRequest) __premarshalJSON() (*__premarshalGetDvrRecordingDvrRecordingDVRRequest, error) {
+	var retval __premarshalGetDvrRecordingDvrRecordingDVRRequest
+
+	retval.Typename = v.DVRRequestFields.Typename
+	retval.Id = v.DVRRequestFields.Id
+	retval.DvrHash = v.DVRRequestFields.DvrHash
+	retval.PlaybackId = v.DVRRequestFields.PlaybackId
+	retval.StreamId = v.DVRRequestFields.StreamId
+	retval.Title = v.DVRRequestFields.Title
+	retval.Status = v.DVRRequestFields.Status
+	retval.CreatedAt = v.DVRRequestFields.CreatedAt
+	retval.UpdatedAt = v.DVRRequestFields.UpdatedAt
+	retval.StartedAt = v.DVRRequestFields.StartedAt
+	retval.EndedAt = v.DVRRequestFields.EndedAt
+	retval.ExpiresAt = v.DVRRequestFields.ExpiresAt
+	retval.IsExpired = v.DVRRequestFields.IsExpired
+	retval.DurationSeconds = v.DVRRequestFields.DurationSeconds
+	retval.SizeBytes = v.DVRRequestFields.SizeBytes
+	retval.ErrorMessage = v.DVRRequestFields.ErrorMessage
+	return &retval, nil
+}
+
+// GetDvrRecordingResponse is returned by GetDvrRecording on success.
+type GetDvrRecordingResponse struct {
+	// A recording from the tenant catalog, readable with streams:read.
+	DvrRecording *GetDvrRecordingDvrRecordingDVRRequest `json:"dvrRecording"`
+}
+
+// GetDvrRecording returns GetDvrRecordingResponse.DvrRecording, and is useful for accessing the field via an interface.
+func (v *GetDvrRecordingResponse) GetDvrRecording() *GetDvrRecordingDvrRecordingDVRRequest {
+	return v.DvrRecording
 }
 
 // GetFederationEventsConnectionAnalytics includes the requested fields of the GraphQL type Analytics.
@@ -44582,6 +45872,16 @@ func (v *GetMediaRetentionPolicyMediaRetentionPolicy) GetEffectiveClipRetentionD
 	return v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
 }
 
+// GetKeepVodOriginals returns GetMediaRetentionPolicyMediaRetentionPolicy.KeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *GetMediaRetentionPolicyMediaRetentionPolicy) GetKeepVodOriginals() *bool {
+	return v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+}
+
+// GetEffectiveKeepVodOriginals returns GetMediaRetentionPolicyMediaRetentionPolicy.EffectiveKeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *GetMediaRetentionPolicyMediaRetentionPolicy) GetEffectiveKeepVodOriginals() bool {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
+}
+
 func (v *GetMediaRetentionPolicyMediaRetentionPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -44625,6 +45925,10 @@ type __premarshalGetMediaRetentionPolicyMediaRetentionPolicy struct {
 	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
 
 	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
+
+	KeepVodOriginals *bool `json:"keepVodOriginals"`
+
+	EffectiveKeepVodOriginals bool `json:"effectiveKeepVodOriginals"`
 }
 
 func (v *GetMediaRetentionPolicyMediaRetentionPolicy) MarshalJSON() ([]byte, error) {
@@ -44647,6 +45951,8 @@ func (v *GetMediaRetentionPolicyMediaRetentionPolicy) __premarshalJSON() (*__pre
 	retval.EffectiveVodRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveVodRetentionDays
 	retval.EffectiveDvrRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveDvrRetentionDays
 	retval.EffectiveClipRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
+	retval.KeepVodOriginals = v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+	retval.EffectiveKeepVodOriginals = v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
 	return &retval, nil
 }
 
@@ -45375,9 +46681,9 @@ func (v *GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptio
 	return v.ClusterDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptionEdgeNodeCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptionEdgeNodeCluster) GetMaxBandwidthMbps() int {
-	return v.ClusterDefaultFields.MaxBandwidthMbps
+// GetCapacity returns GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptionEdgeNodeCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptionEdgeNodeCluster) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterDefaultFields.Capacity
 }
 
 // GetHealthStatus returns GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptionEdgeNodeCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -45498,7 +46804,7 @@ type __premarshalGetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySub
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -45551,7 +46857,7 @@ func (v *GetMySubscriptionsConnectionMySubscriptionsConnectionEdgesMySubscriptio
 	retval.KafkaBrokers = v.ClusterDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterDefaultFields.IsDefaultCluster
@@ -47801,6 +49107,9 @@ func (v *GetNodeNodeClip) GetSizeBytes() *float64 { return v.ClipInNodeDefaultFi
 // GetStatus returns GetNodeNodeClip.Status, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeClip) GetStatus() string { return v.ClipInNodeDefaultFields.Status }
 
+// GetErrorMessage returns GetNodeNodeClip.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeClip) GetErrorMessage() *string { return v.ClipInNodeDefaultFields.ErrorMessage }
+
 // GetClipCreatedAt returns GetNodeNodeClip.ClipCreatedAt, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeClip) GetClipCreatedAt() *time.Time {
 	return v.ClipInNodeDefaultFields.ClipCreatedAt
@@ -47916,6 +49225,8 @@ type __premarshalGetNodeNodeClip struct {
 
 	Status string `json:"status"`
 
+	ErrorMessage *string `json:"errorMessage"`
+
 	ClipCreatedAt *time.Time `json:"clipCreatedAt"`
 
 	UpdatedAt *time.Time `json:"updatedAt"`
@@ -47973,6 +49284,7 @@ func (v *GetNodeNodeClip) __premarshalJSON() (*__premarshalGetNodeNodeClip, erro
 	retval.StoragePath = v.ClipInNodeDefaultFields.StoragePath
 	retval.SizeBytes = v.ClipInNodeDefaultFields.SizeBytes
 	retval.Status = v.ClipInNodeDefaultFields.Status
+	retval.ErrorMessage = v.ClipInNodeDefaultFields.ErrorMessage
 	retval.ClipCreatedAt = v.ClipInNodeDefaultFields.ClipCreatedAt
 	retval.UpdatedAt = v.ClipInNodeDefaultFields.UpdatedAt
 	retval.ClipMode = v.ClipInNodeDefaultFields.ClipMode
@@ -48051,9 +49363,9 @@ func (v *GetNodeNodeCluster) GetMaxConcurrentViewers() int {
 	return v.ClusterInNodeDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns GetNodeNodeCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *GetNodeNodeCluster) GetMaxBandwidthMbps() int {
-	return v.ClusterInNodeDefaultFields.MaxBandwidthMbps
+// GetCapacity returns GetNodeNodeCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeCluster) GetCapacity() *ClusterInNodeDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterInNodeDefaultFields.Capacity
 }
 
 // GetHealthStatus returns GetNodeNodeCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -48168,7 +49480,7 @@ type __premarshalGetNodeNodeCluster struct {
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterInNodeDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -48222,7 +49534,7 @@ func (v *GetNodeNodeCluster) __premarshalJSON() (*__premarshalGetNodeNodeCluster
 	retval.KafkaBrokers = v.ClusterInNodeDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterInNodeDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterInNodeDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterInNodeDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterInNodeDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterInNodeDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterInNodeDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterInNodeDefaultFields.IsDefaultCluster
@@ -48711,6 +50023,11 @@ func (v *GetNodeNodeInfrastructureNode) GetRoutingImpactPreview() Infrastructure
 	return v.InfrastructureNodeInNodeDefaultFields.RoutingImpactPreview
 }
 
+// GetInfrastructureNodeCapacity returns GetNodeNodeInfrastructureNode.InfrastructureNodeCapacity, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeInfrastructureNode) GetInfrastructureNodeCapacity() *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity {
+	return v.InfrastructureNodeInNodeDefaultFields.InfrastructureNodeCapacity
+}
+
 func (v *GetNodeNodeInfrastructureNode) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -48786,6 +50103,8 @@ type __premarshalGetNodeNodeInfrastructureNode struct {
 	EffectiveMode NodeOperationalMode `json:"effectiveMode"`
 
 	RoutingImpactPreview InfrastructureNodeInNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+
+	InfrastructureNodeCapacity *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity `json:"infrastructureNodeCapacity"`
 }
 
 func (v *GetNodeNodeInfrastructureNode) MarshalJSON() ([]byte, error) {
@@ -48824,6 +50143,7 @@ func (v *GetNodeNodeInfrastructureNode) __premarshalJSON() (*__premarshalGetNode
 	retval.LiveState = v.InfrastructureNodeInNodeDefaultFields.LiveState
 	retval.EffectiveMode = v.InfrastructureNodeInNodeDefaultFields.EffectiveMode
 	retval.RoutingImpactPreview = v.InfrastructureNodeInNodeDefaultFields.RoutingImpactPreview
+	retval.InfrastructureNodeCapacity = v.InfrastructureNodeInNodeDefaultFields.InfrastructureNodeCapacity
 	return &retval, nil
 }
 
@@ -50583,6 +51903,11 @@ func (v *GetNodeNodeStream) GetStreamUpdatedAt() time.Time {
 	return v.StreamInNodeDefaultFields.StreamUpdatedAt
 }
 
+// GetIngest returns GetNodeNodeStream.Ingest, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeStream) GetIngest() *StreamInNodeDefaultFieldsIngestStreamIngest {
+	return v.StreamInNodeDefaultFields.Ingest
+}
+
 // GetMetrics returns GetNodeNodeStream.Metrics, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeStream) GetMetrics() *StreamInNodeDefaultFieldsMetricsStreamMetrics {
 	return v.StreamInNodeDefaultFields.Metrics
@@ -50679,6 +52004,8 @@ type __premarshalGetNodeNodeStream struct {
 
 	StreamUpdatedAt time.Time `json:"streamUpdatedAt"`
 
+	Ingest *StreamInNodeDefaultFieldsIngestStreamIngest `json:"ingest"`
+
 	Metrics *StreamInNodeDefaultFieldsMetricsStreamMetrics `json:"metrics"`
 
 	PushTargets []StreamInNodeDefaultFieldsPushTargetsPushTarget `json:"pushTargets"`
@@ -50722,6 +52049,7 @@ func (v *GetNodeNodeStream) __premarshalJSON() (*__premarshalGetNodeNodeStream, 
 	retval.SourceLocation = v.StreamInNodeDefaultFields.SourceLocation
 	retval.CreatedAt = v.StreamInNodeDefaultFields.CreatedAt
 	retval.StreamUpdatedAt = v.StreamInNodeDefaultFields.StreamUpdatedAt
+	retval.Ingest = v.StreamInNodeDefaultFields.Ingest
 	retval.Metrics = v.StreamInNodeDefaultFields.Metrics
 	retval.PushTargets = v.StreamInNodeDefaultFields.PushTargets
 	retval.PlaybackPolicy = v.StreamInNodeDefaultFields.PlaybackPolicy
@@ -52563,6 +53891,11 @@ func (v *GetNodeNodeVodAsset) GetStorageCost() *VodAssetInNodeDefaultFieldsStora
 	return v.VodAssetInNodeDefaultFields.StorageCost
 }
 
+// GetOriginalFile returns GetNodeNodeVodAsset.OriginalFile, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeVodAsset) GetOriginalFile() *VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile {
+	return v.VodAssetInNodeDefaultFields.OriginalFile
+}
+
 func (v *GetNodeNodeVodAsset) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -52648,6 +53981,8 @@ type __premarshalGetNodeNodeVodAsset struct {
 	EffectiveRetention *VodAssetInNodeDefaultFieldsEffectiveRetention `json:"effectiveRetention"`
 
 	StorageCost *VodAssetInNodeDefaultFieldsStorageCostStorageCostProjection `json:"storageCost"`
+
+	OriginalFile *VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile `json:"originalFile"`
 }
 
 func (v *GetNodeNodeVodAsset) MarshalJSON() ([]byte, error) {
@@ -52691,6 +54026,7 @@ func (v *GetNodeNodeVodAsset) __premarshalJSON() (*__premarshalGetNodeNodeVodAss
 	retval.ThumbnailAssets = v.VodAssetInNodeDefaultFields.ThumbnailAssets
 	retval.EffectiveRetention = v.VodAssetInNodeDefaultFields.EffectiveRetention
 	retval.StorageCost = v.VodAssetInNodeDefaultFields.StorageCost
+	retval.OriginalFile = v.VodAssetInNodeDefaultFields.OriginalFile
 	return &retval, nil
 }
 
@@ -53215,6 +54551,11 @@ func (v *GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) G
 	return v.InfrastructureNodeDefaultFields.RoutingImpactPreview
 }
 
+// GetCapacity returns GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode.Capacity, and is useful for accessing the field via an interface.
+func (v *GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) GetCapacity() *InfrastructureNodeDefaultFieldsCapacityNodeCapacity {
+	return v.InfrastructureNodeDefaultFields.Capacity
+}
+
 func (v *GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -53288,6 +54629,8 @@ type __premarshalGetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructur
 	EffectiveMode NodeOperationalMode `json:"effectiveMode"`
 
 	RoutingImpactPreview InfrastructureNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+
+	Capacity *InfrastructureNodeDefaultFieldsCapacityNodeCapacity `json:"capacity"`
 }
 
 func (v *GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) MarshalJSON() ([]byte, error) {
@@ -53325,6 +54668,7 @@ func (v *GetNodesConnectionNodesConnectionEdgesNodeEdgeNodeInfrastructureNode) _
 	retval.LiveState = v.InfrastructureNodeDefaultFields.LiveState
 	retval.EffectiveMode = v.InfrastructureNodeDefaultFields.EffectiveMode
 	retval.RoutingImpactPreview = v.InfrastructureNodeDefaultFields.RoutingImpactPreview
+	retval.Capacity = v.InfrastructureNodeDefaultFields.Capacity
 	return &retval, nil
 }
 
@@ -64187,6 +65531,75 @@ func (v *GetStreamHealthSummaryResponse) GetAnalytics() GetStreamHealthSummaryAn
 	return v.Analytics
 }
 
+// GetStreamIngestResponse is returned by GetStreamIngest on success.
+type GetStreamIngestResponse struct {
+	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	Stream *GetStreamIngestStream `json:"stream"`
+}
+
+// GetStream returns GetStreamIngestResponse.Stream, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestResponse) GetStream() *GetStreamIngestStream { return v.Stream }
+
+// GetStreamIngestStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type GetStreamIngestStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
+	// Public stream UUID used for analytics and service APIs (not the Relay ID).
+	StreamId string `json:"streamId"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *GetStreamIngestStreamIngest `json:"ingest"`
+}
+
+// GetId returns GetStreamIngestStream.Id, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStream) GetId() string { return v.Id }
+
+// GetStreamId returns GetStreamIngestStream.StreamId, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStream) GetStreamId() string { return v.StreamId }
+
+// GetIngest returns GetStreamIngestStream.Ingest, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStream) GetIngest() *GetStreamIngestStreamIngest { return v.Ingest }
+
+// GetStreamIngestStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type GetStreamIngestStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns GetStreamIngestStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns GetStreamIngestStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns GetStreamIngestStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns GetStreamIngestStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns GetStreamIngestStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns GetStreamIngestStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns GetStreamIngestStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *GetStreamIngestStreamIngest) GetResumableUntil() *time.Time { return v.ResumableUntil }
+
 // GetStreamKeyResponse is returned by GetStreamKey on success.
 type GetStreamKeyResponse struct {
 	// Fetch a single stream by its global ID.
@@ -65673,6 +67086,95 @@ type GetTrackListConnectionResponse struct {
 // GetAnalytics returns GetTrackListConnectionResponse.Analytics, and is useful for accessing the field via an interface.
 func (v *GetTrackListConnectionResponse) GetAnalytics() GetTrackListConnectionAnalytics {
 	return v.Analytics
+}
+
+// GetTranscodeLadderPolicyResponse is returned by GetTranscodeLadderPolicy on success.
+type GetTranscodeLadderPolicyResponse struct {
+	// Allowed video ladders, account choice, and effective default.
+	TranscodeLadderPolicy GetTranscodeLadderPolicyTranscodeLadderPolicy `json:"transcodeLadderPolicy"`
+}
+
+// GetTranscodeLadderPolicy returns GetTranscodeLadderPolicyResponse.TranscodeLadderPolicy, and is useful for accessing the field via an interface.
+func (v *GetTranscodeLadderPolicyResponse) GetTranscodeLadderPolicy() GetTranscodeLadderPolicyTranscodeLadderPolicy {
+	return v.TranscodeLadderPolicy
+}
+
+// GetTranscodeLadderPolicyTranscodeLadderPolicy includes the requested fields of the GraphQL type TranscodeLadderPolicy.
+type GetTranscodeLadderPolicyTranscodeLadderPolicy struct {
+	TranscodeLadderPolicyDefaultFields `json:"-"`
+}
+
+// GetLadders returns GetTranscodeLadderPolicyTranscodeLadderPolicy.Ladders, and is useful for accessing the field via an interface.
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) GetLadders() []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder {
+	return v.TranscodeLadderPolicyDefaultFields.Ladders
+}
+
+// GetPlanDefault returns GetTranscodeLadderPolicyTranscodeLadderPolicy.PlanDefault, and is useful for accessing the field via an interface.
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) GetPlanDefault() string {
+	return v.TranscodeLadderPolicyDefaultFields.PlanDefault
+}
+
+// GetTenantLadder returns GetTranscodeLadderPolicyTranscodeLadderPolicy.TenantLadder, and is useful for accessing the field via an interface.
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) GetTenantLadder() *string {
+	return v.TranscodeLadderPolicyDefaultFields.TenantLadder
+}
+
+// GetEffectiveLadder returns GetTranscodeLadderPolicyTranscodeLadderPolicy.EffectiveLadder, and is useful for accessing the field via an interface.
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) GetEffectiveLadder() string {
+	return v.TranscodeLadderPolicyDefaultFields.EffectiveLadder
+}
+
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetTranscodeLadderPolicyTranscodeLadderPolicy
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetTranscodeLadderPolicyTranscodeLadderPolicy = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.TranscodeLadderPolicyDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetTranscodeLadderPolicyTranscodeLadderPolicy struct {
+	Ladders []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder `json:"ladders"`
+
+	PlanDefault string `json:"planDefault"`
+
+	TenantLadder *string `json:"tenantLadder"`
+
+	EffectiveLadder string `json:"effectiveLadder"`
+}
+
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetTranscodeLadderPolicyTranscodeLadderPolicy) __premarshalJSON() (*__premarshalGetTranscodeLadderPolicyTranscodeLadderPolicy, error) {
+	var retval __premarshalGetTranscodeLadderPolicyTranscodeLadderPolicy
+
+	retval.Ladders = v.TranscodeLadderPolicyDefaultFields.Ladders
+	retval.PlanDefault = v.TranscodeLadderPolicyDefaultFields.PlanDefault
+	retval.TenantLadder = v.TranscodeLadderPolicyDefaultFields.TenantLadder
+	retval.EffectiveLadder = v.TranscodeLadderPolicyDefaultFields.EffectiveLadder
+	return &retval, nil
 }
 
 // GetUsageAggregatesResponse is returned by GetUsageAggregates on success.
@@ -69828,12 +71330,14 @@ type ImportVodAssetInput struct {
 	// range requests; private and internal addresses are refused.
 	Url string `json:"url"`
 	// Filename to store the video under. Required when the URL path does not end
-	// in a supported video extension (mp4, mov, mkv, webm, ts).
+	// in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
 	Filename *string `json:"filename"`
 	// Optional display title for the asset.
 	Title *string `json:"title"`
 	// Optional description for the asset.
 	Description *string `json:"description"`
+	// Video ladder for this import; empty inherits the account, then plan default.
+	TranscodeLadder *string `json:"transcodeLadder"`
 }
 
 // GetUrl returns ImportVodAssetInput.Url, and is useful for accessing the field via an interface.
@@ -69847,6 +71351,9 @@ func (v *ImportVodAssetInput) GetTitle() *string { return v.Title }
 
 // GetDescription returns ImportVodAssetInput.Description, and is useful for accessing the field via an interface.
 func (v *ImportVodAssetInput) GetDescription() *string { return v.Description }
+
+// GetTranscodeLadder returns ImportVodAssetInput.TranscodeLadder, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetInput) GetTranscodeLadder() *string { return v.TranscodeLadder }
 
 // ImportVodAssetResponse is returned by ImportVodAsset on success.
 type ImportVodAssetResponse struct {
@@ -70419,6 +71926,8 @@ type InfrastructureNodeDefaultFields struct {
 	// how much live traffic is affected before draining or entering maintenance.
 	// Counts come from Foghorn's GetNodeHealth.
 	RoutingImpactPreview InfrastructureNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+	// Operator-owned directional budgets; null when the control plane is unavailable.
+	Capacity *InfrastructureNodeDefaultFieldsCapacityNodeCapacity `json:"capacity"`
 }
 
 // GetId returns InfrastructureNodeDefaultFields.Id, and is useful for accessing the field via an interface.
@@ -70499,6 +72008,58 @@ func (v *InfrastructureNodeDefaultFields) GetEffectiveMode() NodeOperationalMode
 // GetRoutingImpactPreview returns InfrastructureNodeDefaultFields.RoutingImpactPreview, and is useful for accessing the field via an interface.
 func (v *InfrastructureNodeDefaultFields) GetRoutingImpactPreview() InfrastructureNodeDefaultFieldsRoutingImpactPreview {
 	return v.RoutingImpactPreview
+}
+
+// GetCapacity returns InfrastructureNodeDefaultFields.Capacity, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFields) GetCapacity() *InfrastructureNodeDefaultFieldsCapacityNodeCapacity {
+	return v.Capacity
+}
+
+// InfrastructureNodeDefaultFieldsCapacityNodeCapacity includes the requested fields of the GraphQL type NodeCapacity.
+type InfrastructureNodeDefaultFieldsCapacityNodeCapacity struct {
+	// Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	EgressBudgetBytesPerSec float64 `json:"egressBudgetBytesPerSec"`
+	// Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	IngressBudgetBytesPerSec float64              `json:"ingressBudgetBytesPerSec"`
+	EgressSource             CapacityBudgetSource `json:"egressSource"`
+	IngressSource            CapacityBudgetSource `json:"ingressSource"`
+	Revision                 int                  `json:"revision"`
+	UpdatedAt                *time.Time           `json:"updatedAt"`
+	// Last revision applied by Helmsman; null when the node does not report one.
+	AppliedRevision *int `json:"appliedRevision"`
+}
+
+// GetEgressBudgetBytesPerSec returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetEgressBudgetBytesPerSec() float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetIngressBudgetBytesPerSec() float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetEgressSource returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.EgressSource, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetEgressSource() CapacityBudgetSource {
+	return v.EgressSource
+}
+
+// GetIngressSource returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.IngressSource, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetIngressSource() CapacityBudgetSource {
+	return v.IngressSource
+}
+
+// GetRevision returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.Revision, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetRevision() int { return v.Revision }
+
+// GetUpdatedAt returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetUpdatedAt() *time.Time {
+	return v.UpdatedAt
+}
+
+// GetAppliedRevision returns InfrastructureNodeDefaultFieldsCapacityNodeCapacity.AppliedRevision, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeDefaultFieldsCapacityNodeCapacity) GetAppliedRevision() *int {
+	return v.AppliedRevision
 }
 
 // InfrastructureNodeDefaultFieldsLiveStateLiveNode includes the requested fields of the GraphQL type LiveNode.
@@ -70663,6 +72224,8 @@ type InfrastructureNodeInNodeDefaultFields struct {
 	// how much live traffic is affected before draining or entering maintenance.
 	// Counts come from Foghorn's GetNodeHealth.
 	RoutingImpactPreview InfrastructureNodeInNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+	// Operator-owned directional budgets; null when the control plane is unavailable.
+	InfrastructureNodeCapacity *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity `json:"infrastructureNodeCapacity"`
 }
 
 // GetId returns InfrastructureNodeInNodeDefaultFields.Id, and is useful for accessing the field via an interface.
@@ -70749,6 +72312,60 @@ func (v *InfrastructureNodeInNodeDefaultFields) GetEffectiveMode() NodeOperation
 // GetRoutingImpactPreview returns InfrastructureNodeInNodeDefaultFields.RoutingImpactPreview, and is useful for accessing the field via an interface.
 func (v *InfrastructureNodeInNodeDefaultFields) GetRoutingImpactPreview() InfrastructureNodeInNodeDefaultFieldsRoutingImpactPreview {
 	return v.RoutingImpactPreview
+}
+
+// GetInfrastructureNodeCapacity returns InfrastructureNodeInNodeDefaultFields.InfrastructureNodeCapacity, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFields) GetInfrastructureNodeCapacity() *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity {
+	return v.InfrastructureNodeCapacity
+}
+
+// InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity includes the requested fields of the GraphQL type NodeCapacity.
+type InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity struct {
+	// Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	EgressBudgetBytesPerSec float64 `json:"egressBudgetBytesPerSec"`
+	// Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+	IngressBudgetBytesPerSec float64              `json:"ingressBudgetBytesPerSec"`
+	EgressSource             CapacityBudgetSource `json:"egressSource"`
+	IngressSource            CapacityBudgetSource `json:"ingressSource"`
+	Revision                 int                  `json:"revision"`
+	UpdatedAt                *time.Time           `json:"updatedAt"`
+	// Last revision applied by Helmsman; null when the node does not report one.
+	AppliedRevision *int `json:"appliedRevision"`
+}
+
+// GetEgressBudgetBytesPerSec returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetEgressBudgetBytesPerSec() float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetIngressBudgetBytesPerSec() float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetEgressSource returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.EgressSource, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetEgressSource() CapacityBudgetSource {
+	return v.EgressSource
+}
+
+// GetIngressSource returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.IngressSource, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetIngressSource() CapacityBudgetSource {
+	return v.IngressSource
+}
+
+// GetRevision returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.Revision, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetRevision() int {
+	return v.Revision
+}
+
+// GetUpdatedAt returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetUpdatedAt() *time.Time {
+	return v.UpdatedAt
+}
+
+// GetAppliedRevision returns InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity.AppliedRevision, and is useful for accessing the field via an interface.
+func (v *InfrastructureNodeInNodeDefaultFieldsInfrastructureNodeCapacity) GetAppliedRevision() *int {
+	return v.AppliedRevision
 }
 
 // InfrastructureNodeInNodeDefaultFieldsLiveStateLiveNode includes the requested fields of the GraphQL type LiveNode.
@@ -70869,6 +72486,21 @@ func (v *InfrastructureNodeInNodeDefaultFieldsRoutingImpactPreview) GetActiveStr
 func (v *InfrastructureNodeInNodeDefaultFieldsRoutingImpactPreview) GetActiveViewers() int {
 	return v.ActiveViewers
 }
+
+// IngestDisconnectSuccessDefaultFields includes the GraphQL fields of IngestDisconnectSuccess requested by the fragment IngestDisconnectSuccessDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// An accepted request to stop the currently claimed push publisher.
+type IngestDisconnectSuccessDefaultFields struct {
+	StreamId      string `json:"streamId"`
+	StopRequested bool   `json:"stopRequested"`
+}
+
+// GetStreamId returns IngestDisconnectSuccessDefaultFields.StreamId, and is useful for accessing the field via an interface.
+func (v *IngestDisconnectSuccessDefaultFields) GetStreamId() string { return v.StreamId }
+
+// GetStopRequested returns IngestDisconnectSuccessDefaultFields.StopRequested, and is useful for accessing the field via an interface.
+func (v *IngestDisconnectSuccessDefaultFields) GetStopRequested() bool { return v.StopRequested }
 
 // IngestEndpointFields includes the GraphQL fields of IngestEndpoint requested by the fragment IngestEndpointFields.
 type IngestEndpointFields struct {
@@ -72209,6 +73841,16 @@ type ListArtifactsStorageArtifactsConnectionNodesStorageArtifact struct {
 	StorageArtifactFields `json:"-"`
 }
 
+// GetOriginType returns ListArtifactsStorageArtifactsConnectionNodesStorageArtifact.OriginType, and is useful for accessing the field via an interface.
+func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) GetOriginType() *string {
+	return v.StorageArtifactFields.OriginType
+}
+
+// GetParentRecordingId returns ListArtifactsStorageArtifactsConnectionNodesStorageArtifact.ParentRecordingId, and is useful for accessing the field via an interface.
+func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) GetParentRecordingId() *string {
+	return v.StorageArtifactFields.ParentRecordingId
+}
+
 // GetKey returns ListArtifactsStorageArtifactsConnectionNodesStorageArtifact.Key, and is useful for accessing the field via an interface.
 func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) GetKey() string {
 	return v.StorageArtifactFields.Key
@@ -72325,6 +73967,10 @@ func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) UnmarshalJ
 }
 
 type __premarshalListArtifactsStorageArtifactsConnectionNodesStorageArtifact struct {
+	OriginType *string `json:"originType"`
+
+	ParentRecordingId *string `json:"parentRecordingId"`
+
 	Key string `json:"key"`
 
 	Kind StorageArtifactKind `json:"kind"`
@@ -72373,6 +74019,8 @@ func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) MarshalJSO
 func (v *ListArtifactsStorageArtifactsConnectionNodesStorageArtifact) __premarshalJSON() (*__premarshalListArtifactsStorageArtifactsConnectionNodesStorageArtifact, error) {
 	var retval __premarshalListArtifactsStorageArtifactsConnectionNodesStorageArtifact
 
+	retval.OriginType = v.StorageArtifactFields.OriginType
+	retval.ParentRecordingId = v.StorageArtifactFields.ParentRecordingId
 	retval.Key = v.StorageArtifactFields.Key
 	retval.Kind = v.StorageArtifactFields.Kind
 	retval.Id = v.StorageArtifactFields.Id
@@ -72957,6 +74605,293 @@ func (v *ListPushTargetsStreamPushTargetsPushTarget) __premarshalJSON() (*__prem
 	return &retval, nil
 }
 
+// ListRecordingChaptersDvrRecordingDVRRequest includes the requested fields of the GraphQL type DVRRequest.
+type ListRecordingChaptersDvrRecordingDVRRequest struct {
+	Id      *string `json:"id"`
+	DvrHash string  `json:"dvrHash"`
+	// Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds.
+	Chapters *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection `json:"chapters"`
+}
+
+// GetId returns ListRecordingChaptersDvrRecordingDVRRequest.Id, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequest) GetId() *string { return v.Id }
+
+// GetDvrHash returns ListRecordingChaptersDvrRecordingDVRRequest.DvrHash, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequest) GetDvrHash() string { return v.DvrHash }
+
+// GetChapters returns ListRecordingChaptersDvrRecordingDVRRequest.Chapters, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequest) GetChapters() *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection {
+	return v.Chapters
+}
+
+// ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection includes the requested fields of the GraphQL type DVRChapterConnection.
+// The GraphQL type's documentation follows.
+//
+// A keyset-paginated view of a recording's saved chapters.
+type ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection struct {
+	Edges      []ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge `json:"edges"`
+	PageInfo   ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo              `json:"pageInfo"`
+	TotalCount int                                                                                          `json:"totalCount"`
+}
+
+// GetEdges returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection.Edges, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection) GetEdges() []ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection) GetPageInfo() ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge includes the requested fields of the GraphQL type DVRChapterEdge.
+type ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge struct {
+	Cursor string                                                                                                      `json:"cursor"`
+	Node   ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef `json:"node"`
+}
+
+// GetCursor returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge.Node, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdge) GetNode() ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef {
+	return v.Node
+}
+
+// ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef includes the requested fields of the GraphQL type DVRChapterRef.
+// The GraphQL type's documentation follows.
+//
+// A reference to a chapter for the chapter list UI. Same shape as
+// DVRChapter without the timeline-zero derivations.
+type ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef struct {
+	DVRChapterRefFields `json:"-"`
+}
+
+// GetChapterId returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.ChapterId, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetChapterId() string {
+	return v.DVRChapterRefFields.ChapterId
+}
+
+// GetMode returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.Mode, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetMode() DVRChapterMode {
+	return v.DVRChapterRefFields.Mode
+}
+
+// GetIntervalSeconds returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.IntervalSeconds, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetIntervalSeconds() *int {
+	return v.DVRChapterRefFields.IntervalSeconds
+}
+
+// GetStartMs returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.StartMs, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetStartMs() float64 {
+	return v.DVRChapterRefFields.StartMs
+}
+
+// GetEndMs returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.EndMs, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetEndMs() float64 {
+	return v.DVRChapterRefFields.EndMs
+}
+
+// GetIsCurrent returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.IsCurrent, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetIsCurrent() bool {
+	return v.DVRChapterRefFields.IsCurrent
+}
+
+// GetState returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.State, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetState() DVRChapterState {
+	return v.DVRChapterRefFields.State
+}
+
+// GetPlaybackId returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.PlaybackId, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetPlaybackId() *string {
+	return v.DVRChapterRefFields.PlaybackId
+}
+
+// GetHasGaps returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.HasGaps, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetHasGaps() bool {
+	return v.DVRChapterRefFields.HasGaps
+}
+
+// GetSegmentCount returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.SegmentCount, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetSegmentCount() int {
+	return v.DVRChapterRefFields.SegmentCount
+}
+
+// GetLastFailureReason returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef.LastFailureReason, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) GetLastFailureReason() *string {
+	return v.DVRChapterRefFields.LastFailureReason
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.DVRChapterRefFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef struct {
+	ChapterId string `json:"chapterId"`
+
+	Mode DVRChapterMode `json:"mode"`
+
+	IntervalSeconds *int `json:"intervalSeconds"`
+
+	StartMs float64 `json:"startMs"`
+
+	EndMs float64 `json:"endMs"`
+
+	IsCurrent bool `json:"isCurrent"`
+
+	State DVRChapterState `json:"state"`
+
+	PlaybackId *string `json:"playbackId"`
+
+	HasGaps bool `json:"hasGaps"`
+
+	SegmentCount int `json:"segmentCount"`
+
+	LastFailureReason *string `json:"lastFailureReason"`
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef) __premarshalJSON() (*__premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef, error) {
+	var retval __premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionEdgesDVRChapterEdgeNodeDVRChapterRef
+
+	retval.ChapterId = v.DVRChapterRefFields.ChapterId
+	retval.Mode = v.DVRChapterRefFields.Mode
+	retval.IntervalSeconds = v.DVRChapterRefFields.IntervalSeconds
+	retval.StartMs = v.DVRChapterRefFields.StartMs
+	retval.EndMs = v.DVRChapterRefFields.EndMs
+	retval.IsCurrent = v.DVRChapterRefFields.IsCurrent
+	retval.State = v.DVRChapterRefFields.State
+	retval.PlaybackId = v.DVRChapterRefFields.PlaybackId
+	retval.HasGaps = v.DVRChapterRefFields.HasGaps
+	retval.SegmentCount = v.DVRChapterRefFields.SegmentCount
+	retval.LastFailureReason = v.DVRChapterRefFields.LastFailureReason
+	return &retval, nil
+}
+
+// ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo struct {
+	PageInfoFields `json:"-"`
+}
+
+// GetStartCursor returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoFields.StartCursor
+}
+
+// GetEndCursor returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoFields.EndCursor
+}
+
+// GetHasNextPage returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoFields.HasNextPage
+}
+
+// GetHasPreviousPage returns ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoFields.HasPreviousPage
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo) __premarshalJSON() (*__premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo, error) {
+	var retval __premarshalListRecordingChaptersDvrRecordingDVRRequestChaptersDVRChapterConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoFields.StartCursor
+	retval.EndCursor = v.PageInfoFields.EndCursor
+	retval.HasNextPage = v.PageInfoFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoFields.HasPreviousPage
+	return &retval, nil
+}
+
+// ListRecordingChaptersResponse is returned by ListRecordingChapters on success.
+type ListRecordingChaptersResponse struct {
+	// A recording from the tenant catalog, readable with streams:read.
+	DvrRecording *ListRecordingChaptersDvrRecordingDVRRequest `json:"dvrRecording"`
+}
+
+// GetDvrRecording returns ListRecordingChaptersResponse.DvrRecording, and is useful for accessing the field via an interface.
+func (v *ListRecordingChaptersResponse) GetDvrRecording() *ListRecordingChaptersDvrRecordingDVRRequest {
+	return v.DvrRecording
+}
+
 // ListSigningKeysResponse is returned by ListSigningKeys on success.
 type ListSigningKeysResponse struct {
 	// List the tenant's playback signing keys with optional status filter.
@@ -73197,95 +75132,189 @@ func (v *ListSigningKeysSigningKeysConnectionPageInfo) __premarshalJSON() (*__pr
 	return &retval, nil
 }
 
-// ListStreamKeysResponse is returned by ListStreamKeys on success.
-type ListStreamKeysResponse struct {
-	// List all stream keys for a specific stream.
-	// Stream keys are publishing credentials, so an API token needs the
-	// streams:write scope.
-	StreamKeysConnection ListStreamKeysStreamKeysConnection `json:"streamKeysConnection"`
+// ListStreamClipsResponse is returned by ListStreamClips on success.
+type ListStreamClipsResponse struct {
+	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	Stream *ListStreamClipsStream `json:"stream"`
 }
 
-// GetStreamKeysConnection returns ListStreamKeysResponse.StreamKeysConnection, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysResponse) GetStreamKeysConnection() ListStreamKeysStreamKeysConnection {
-	return v.StreamKeysConnection
+// GetStream returns ListStreamClipsResponse.Stream, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsResponse) GetStream() *ListStreamClipsStream { return v.Stream }
+
+// ListStreamClipsStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type ListStreamClipsStream struct {
+	// Clips from this stream's tenant catalog, newest first.
+	Clips *ListStreamClipsStreamClipsStreamArtifactsConnection `json:"clips"`
 }
 
-// ListStreamKeysStreamKeysConnection includes the requested fields of the GraphQL type StreamKeysConnection.
-type ListStreamKeysStreamKeysConnection struct {
-	Nodes      []ListStreamKeysStreamKeysConnectionNodesStreamKey `json:"nodes"`
-	PageInfo   ListStreamKeysStreamKeysConnectionPageInfo         `json:"pageInfo"`
-	TotalCount int                                                `json:"totalCount"`
+// GetClips returns ListStreamClipsStream.Clips, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStream) GetClips() *ListStreamClipsStreamClipsStreamArtifactsConnection {
+	return v.Clips
 }
 
-// GetNodes returns ListStreamKeysStreamKeysConnection.Nodes, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnection) GetNodes() []ListStreamKeysStreamKeysConnectionNodesStreamKey {
-	return v.Nodes
+// ListStreamClipsStreamClipsStreamArtifactsConnection includes the requested fields of the GraphQL type StreamArtifactsConnection.
+// The GraphQL type's documentation follows.
+//
+// A keyset-paginated collection of one stream's saved recordings or clips.
+type ListStreamClipsStreamClipsStreamArtifactsConnection struct {
+	Edges      []ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge `json:"edges"`
+	PageInfo   ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo                  `json:"pageInfo"`
+	TotalCount int                                                                          `json:"totalCount"`
 }
 
-// GetPageInfo returns ListStreamKeysStreamKeysConnection.PageInfo, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnection) GetPageInfo() ListStreamKeysStreamKeysConnectionPageInfo {
+// GetEdges returns ListStreamClipsStreamClipsStreamArtifactsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnection) GetEdges() []ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns ListStreamClipsStreamClipsStreamArtifactsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnection) GetPageInfo() ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo {
 	return v.PageInfo
 }
 
-// GetTotalCount returns ListStreamKeysStreamKeysConnection.TotalCount, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnection) GetTotalCount() int { return v.TotalCount }
-
-// ListStreamKeysStreamKeysConnectionNodesStreamKey includes the requested fields of the GraphQL type StreamKey.
-type ListStreamKeysStreamKeysConnectionNodesStreamKey struct {
-	StreamKeyFields `json:"-"`
+// GetTotalCount returns ListStreamClipsStreamClipsStreamArtifactsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnection) GetTotalCount() int {
+	return v.TotalCount
 }
 
-// GetTypename returns ListStreamKeysStreamKeysConnectionNodesStreamKey.Typename, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetTypename() *string {
-	return v.StreamKeyFields.Typename
+// ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge includes the requested fields of the GraphQL type StreamArtifactEdge.
+type ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge struct {
+	Cursor string                                                                                        `json:"cursor"`
+	Node   ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact `json:"node"`
 }
 
-// GetId returns ListStreamKeysStreamKeysConnectionNodesStreamKey.Id, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetId() string {
-	return v.StreamKeyFields.Id
+// GetCursor returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge) GetCursor() string {
+	return v.Cursor
 }
 
-// GetStreamId returns ListStreamKeysStreamKeysConnectionNodesStreamKey.StreamId, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetStreamId() string {
-	return v.StreamKeyFields.StreamId
+// GetNode returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge.Node, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdge) GetNode() ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact {
+	return v.Node
 }
 
-// GetKeyValue returns ListStreamKeysStreamKeysConnectionNodesStreamKey.KeyValue, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetKeyValue() string {
-	return v.StreamKeyFields.KeyValue
+// ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact includes the requested fields of the GraphQL type StorageArtifact.
+type ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact struct {
+	StorageArtifactFields `json:"-"`
 }
 
-// GetKeyName returns ListStreamKeysStreamKeysConnectionNodesStreamKey.KeyName, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetKeyName() *string {
-	return v.StreamKeyFields.KeyName
+// GetOriginType returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.OriginType, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetOriginType() *string {
+	return v.StorageArtifactFields.OriginType
 }
 
-// GetIsActive returns ListStreamKeysStreamKeysConnectionNodesStreamKey.IsActive, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetIsActive() bool {
-	return v.StreamKeyFields.IsActive
+// GetParentRecordingId returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ParentRecordingId, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetParentRecordingId() *string {
+	return v.StorageArtifactFields.ParentRecordingId
 }
 
-// GetLastUsedAt returns ListStreamKeysStreamKeysConnectionNodesStreamKey.LastUsedAt, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetLastUsedAt() *time.Time {
-	return v.StreamKeyFields.LastUsedAt
+// GetKey returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Key, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetKey() string {
+	return v.StorageArtifactFields.Key
 }
 
-// GetCreatedAt returns ListStreamKeysStreamKeysConnectionNodesStreamKey.CreatedAt, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) GetCreatedAt() time.Time {
-	return v.StreamKeyFields.CreatedAt
+// GetKind returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Kind, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetKind() StorageArtifactKind {
+	return v.StorageArtifactFields.Kind
 }
 
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) UnmarshalJSON(b []byte) error {
+// GetId returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Id, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetId() string {
+	return v.StorageArtifactFields.Id
+}
+
+// GetHash returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Hash, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetHash() string {
+	return v.StorageArtifactFields.Hash
+}
+
+// GetPlaybackId returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.PlaybackId, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetPlaybackId() *string {
+	return v.StorageArtifactFields.PlaybackId
+}
+
+// GetStreamId returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.StreamId, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStreamId() *string {
+	return v.StorageArtifactFields.StreamId
+}
+
+// GetStreamTitle returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.StreamTitle, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStreamTitle() string {
+	return v.StorageArtifactFields.StreamTitle
+}
+
+// GetTitle returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Title, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetTitle() string {
+	return v.StorageArtifactFields.Title
+}
+
+// GetDescription returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Description, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDescription() *string {
+	return v.StorageArtifactFields.Description
+}
+
+// GetErrorMessage returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetErrorMessage() *string {
+	return v.StorageArtifactFields.ErrorMessage
+}
+
+// GetSizeBytes returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.SizeBytes, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetSizeBytes() *float64 {
+	return v.StorageArtifactFields.SizeBytes
+}
+
+// GetStatus returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Status, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStatus() string {
+	return v.StorageArtifactFields.Status
+}
+
+// GetCreatedAt returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.CreatedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetCreatedAt() time.Time {
+	return v.StorageArtifactFields.CreatedAt
+}
+
+// GetUpdatedAt returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetUpdatedAt() time.Time {
+	return v.StorageArtifactFields.UpdatedAt
+}
+
+// GetExpiresAt returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetExpiresAt() *time.Time {
+	return v.StorageArtifactFields.ExpiresAt
+}
+
+// GetDeleteId returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.DeleteId, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDeleteId() string {
+	return v.StorageArtifactFields.DeleteId
+}
+
+// GetDurationSeconds returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.DurationSeconds, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDurationSeconds() *float64 {
+	return v.StorageArtifactFields.DurationSeconds
+}
+
+// GetThumbnailAssets returns ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ThumbnailAssets, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetThumbnailAssets() *StorageArtifactFieldsThumbnailAssets {
+	return v.StorageArtifactFields.ThumbnailAssets
+}
+
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
 		return nil
 	}
 
 	var firstPass struct {
-		*ListStreamKeysStreamKeysConnectionNodesStreamKey
+		*ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact
 		graphql.NoUnmarshalJSON
 	}
-	firstPass.ListStreamKeysStreamKeysConnectionNodesStreamKey = v
+	firstPass.ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact = v
 
 	err := json.Unmarshal(b, &firstPass)
 	if err != nil {
@@ -73293,32 +75322,56 @@ func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) UnmarshalJSON(b []byt
 	}
 
 	err = json.Unmarshal(
-		b, &v.StreamKeyFields)
+		b, &v.StorageArtifactFields)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-type __premarshalListStreamKeysStreamKeysConnectionNodesStreamKey struct {
-	Typename *string `json:"__typename"`
+type __premarshalListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact struct {
+	OriginType *string `json:"originType"`
+
+	ParentRecordingId *string `json:"parentRecordingId"`
+
+	Key string `json:"key"`
+
+	Kind StorageArtifactKind `json:"kind"`
 
 	Id string `json:"id"`
 
-	StreamId string `json:"streamId"`
+	Hash string `json:"hash"`
 
-	KeyValue string `json:"keyValue"`
+	PlaybackId *string `json:"playbackId"`
 
-	KeyName *string `json:"keyName"`
+	StreamId *string `json:"streamId"`
 
-	IsActive bool `json:"isActive"`
+	StreamTitle string `json:"streamTitle"`
 
-	LastUsedAt *time.Time `json:"lastUsedAt"`
+	Title string `json:"title"`
+
+	Description *string `json:"description"`
+
+	ErrorMessage *string `json:"errorMessage"`
+
+	SizeBytes *float64 `json:"sizeBytes"`
+
+	Status string `json:"status"`
 
 	CreatedAt time.Time `json:"createdAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	ExpiresAt *time.Time `json:"expiresAt"`
+
+	DeleteId string `json:"deleteId"`
+
+	DurationSeconds *float64 `json:"durationSeconds"`
+
+	ThumbnailAssets *StorageArtifactFieldsThumbnailAssets `json:"thumbnailAssets"`
 }
 
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) MarshalJSON() ([]byte, error) {
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) MarshalJSON() ([]byte, error) {
 	premarshaled, err := v.__premarshalJSON()
 	if err != nil {
 		return nil, err
@@ -73326,56 +75379,68 @@ func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) MarshalJSON() ([]byte
 	return json.Marshal(premarshaled)
 }
 
-func (v *ListStreamKeysStreamKeysConnectionNodesStreamKey) __premarshalJSON() (*__premarshalListStreamKeysStreamKeysConnectionNodesStreamKey, error) {
-	var retval __premarshalListStreamKeysStreamKeysConnectionNodesStreamKey
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) __premarshalJSON() (*__premarshalListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact, error) {
+	var retval __premarshalListStreamClipsStreamClipsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact
 
-	retval.Typename = v.StreamKeyFields.Typename
-	retval.Id = v.StreamKeyFields.Id
-	retval.StreamId = v.StreamKeyFields.StreamId
-	retval.KeyValue = v.StreamKeyFields.KeyValue
-	retval.KeyName = v.StreamKeyFields.KeyName
-	retval.IsActive = v.StreamKeyFields.IsActive
-	retval.LastUsedAt = v.StreamKeyFields.LastUsedAt
-	retval.CreatedAt = v.StreamKeyFields.CreatedAt
+	retval.OriginType = v.StorageArtifactFields.OriginType
+	retval.ParentRecordingId = v.StorageArtifactFields.ParentRecordingId
+	retval.Key = v.StorageArtifactFields.Key
+	retval.Kind = v.StorageArtifactFields.Kind
+	retval.Id = v.StorageArtifactFields.Id
+	retval.Hash = v.StorageArtifactFields.Hash
+	retval.PlaybackId = v.StorageArtifactFields.PlaybackId
+	retval.StreamId = v.StorageArtifactFields.StreamId
+	retval.StreamTitle = v.StorageArtifactFields.StreamTitle
+	retval.Title = v.StorageArtifactFields.Title
+	retval.Description = v.StorageArtifactFields.Description
+	retval.ErrorMessage = v.StorageArtifactFields.ErrorMessage
+	retval.SizeBytes = v.StorageArtifactFields.SizeBytes
+	retval.Status = v.StorageArtifactFields.Status
+	retval.CreatedAt = v.StorageArtifactFields.CreatedAt
+	retval.UpdatedAt = v.StorageArtifactFields.UpdatedAt
+	retval.ExpiresAt = v.StorageArtifactFields.ExpiresAt
+	retval.DeleteId = v.StorageArtifactFields.DeleteId
+	retval.DurationSeconds = v.StorageArtifactFields.DurationSeconds
+	retval.ThumbnailAssets = v.StorageArtifactFields.ThumbnailAssets
 	return &retval, nil
 }
 
-// ListStreamKeysStreamKeysConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
-type ListStreamKeysStreamKeysConnectionPageInfo struct {
+// ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo struct {
 	PageInfoFields `json:"-"`
 }
 
-// GetStartCursor returns ListStreamKeysStreamKeysConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) GetStartCursor() *string {
+// GetStartCursor returns ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) GetStartCursor() *string {
 	return v.PageInfoFields.StartCursor
 }
 
-// GetEndCursor returns ListStreamKeysStreamKeysConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) GetEndCursor() *string {
+// GetEndCursor returns ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) GetEndCursor() *string {
 	return v.PageInfoFields.EndCursor
 }
 
-// GetHasNextPage returns ListStreamKeysStreamKeysConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) GetHasNextPage() bool {
+// GetHasNextPage returns ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) GetHasNextPage() bool {
 	return v.PageInfoFields.HasNextPage
 }
 
-// GetHasPreviousPage returns ListStreamKeysStreamKeysConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) GetHasPreviousPage() bool {
+// GetHasPreviousPage returns ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) GetHasPreviousPage() bool {
 	return v.PageInfoFields.HasPreviousPage
 }
 
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) UnmarshalJSON(b []byte) error {
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
 		return nil
 	}
 
 	var firstPass struct {
-		*ListStreamKeysStreamKeysConnectionPageInfo
+		*ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo
 		graphql.NoUnmarshalJSON
 	}
-	firstPass.ListStreamKeysStreamKeysConnectionPageInfo = v
+	firstPass.ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo = v
 
 	err := json.Unmarshal(b, &firstPass)
 	if err != nil {
@@ -73390,7 +75455,7 @@ func (v *ListStreamKeysStreamKeysConnectionPageInfo) UnmarshalJSON(b []byte) err
 	return nil
 }
 
-type __premarshalListStreamKeysStreamKeysConnectionPageInfo struct {
+type __premarshalListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo struct {
 	StartCursor *string `json:"startCursor"`
 
 	EndCursor *string `json:"endCursor"`
@@ -73400,7 +75465,7 @@ type __premarshalListStreamKeysStreamKeysConnectionPageInfo struct {
 	HasPreviousPage bool `json:"hasPreviousPage"`
 }
 
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) MarshalJSON() ([]byte, error) {
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) MarshalJSON() ([]byte, error) {
 	premarshaled, err := v.__premarshalJSON()
 	if err != nil {
 		return nil, err
@@ -73408,8 +75473,191 @@ func (v *ListStreamKeysStreamKeysConnectionPageInfo) MarshalJSON() ([]byte, erro
 	return json.Marshal(premarshaled)
 }
 
-func (v *ListStreamKeysStreamKeysConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamKeysStreamKeysConnectionPageInfo, error) {
-	var retval __premarshalListStreamKeysStreamKeysConnectionPageInfo
+func (v *ListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo, error) {
+	var retval __premarshalListStreamClipsStreamClipsStreamArtifactsConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoFields.StartCursor
+	retval.EndCursor = v.PageInfoFields.EndCursor
+	retval.HasNextPage = v.PageInfoFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoFields.HasPreviousPage
+	return &retval, nil
+}
+
+// ListStreamIngestResponse is returned by ListStreamIngest on success.
+type ListStreamIngestResponse struct {
+	// List all streams for the current tenant with pagination.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	StreamsConnection ListStreamIngestStreamsConnection `json:"streamsConnection"`
+}
+
+// GetStreamsConnection returns ListStreamIngestResponse.StreamsConnection, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestResponse) GetStreamsConnection() ListStreamIngestStreamsConnection {
+	return v.StreamsConnection
+}
+
+// ListStreamIngestStreamsConnection includes the requested fields of the GraphQL type StreamsConnection.
+type ListStreamIngestStreamsConnection struct {
+	Nodes      []ListStreamIngestStreamsConnectionNodesStream `json:"nodes"`
+	PageInfo   ListStreamIngestStreamsConnectionPageInfo      `json:"pageInfo"`
+	TotalCount int                                            `json:"totalCount"`
+}
+
+// GetNodes returns ListStreamIngestStreamsConnection.Nodes, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnection) GetNodes() []ListStreamIngestStreamsConnectionNodesStream {
+	return v.Nodes
+}
+
+// GetPageInfo returns ListStreamIngestStreamsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnection) GetPageInfo() ListStreamIngestStreamsConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns ListStreamIngestStreamsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnection) GetTotalCount() int { return v.TotalCount }
+
+// ListStreamIngestStreamsConnectionNodesStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type ListStreamIngestStreamsConnectionNodesStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
+	// Public stream UUID used for analytics and service APIs (not the Relay ID).
+	StreamId string `json:"streamId"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ListStreamIngestStreamsConnectionNodesStreamIngest `json:"ingest"`
+}
+
+// GetId returns ListStreamIngestStreamsConnectionNodesStream.Id, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStream) GetId() string { return v.Id }
+
+// GetStreamId returns ListStreamIngestStreamsConnectionNodesStream.StreamId, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStream) GetStreamId() string { return v.StreamId }
+
+// GetIngest returns ListStreamIngestStreamsConnectionNodesStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStream) GetIngest() *ListStreamIngestStreamsConnectionNodesStreamIngest {
+	return v.Ingest
+}
+
+// ListStreamIngestStreamsConnectionNodesStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ListStreamIngestStreamsConnectionNodesStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ListStreamIngestStreamsConnectionNodesStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns ListStreamIngestStreamsConnectionNodesStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ListStreamIngestStreamsConnectionNodesStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetSessionId() *string {
+	return v.SessionId
+}
+
+// GetConnectedAt returns ListStreamIngestStreamsConnectionNodesStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ListStreamIngestStreamsConnectionNodesStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns ListStreamIngestStreamsConnectionNodesStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetEndedAt() *time.Time {
+	return v.EndedAt
+}
+
+// GetResumableUntil returns ListStreamIngestStreamsConnectionNodesStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionNodesStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
+}
+
+// ListStreamIngestStreamsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type ListStreamIngestStreamsConnectionPageInfo struct {
+	PageInfoFields `json:"-"`
+}
+
+// GetStartCursor returns ListStreamIngestStreamsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoFields.StartCursor
+}
+
+// GetEndCursor returns ListStreamIngestStreamsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoFields.EndCursor
+}
+
+// GetHasNextPage returns ListStreamIngestStreamsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoFields.HasNextPage
+}
+
+// GetHasPreviousPage returns ListStreamIngestStreamsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *ListStreamIngestStreamsConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoFields.HasPreviousPage
+}
+
+func (v *ListStreamIngestStreamsConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListStreamIngestStreamsConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListStreamIngestStreamsConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListStreamIngestStreamsConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *ListStreamIngestStreamsConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListStreamIngestStreamsConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamIngestStreamsConnectionPageInfo, error) {
+	var retval __premarshalListStreamIngestStreamsConnectionPageInfo
 
 	retval.StartCursor = v.PageInfoFields.StartCursor
 	retval.EndCursor = v.PageInfoFields.EndCursor
@@ -73672,6 +75920,357 @@ func (v *ListStreamMetricsStreamsConnectionPageInfo) MarshalJSON() ([]byte, erro
 
 func (v *ListStreamMetricsStreamsConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamMetricsStreamsConnectionPageInfo, error) {
 	var retval __premarshalListStreamMetricsStreamsConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoFields.StartCursor
+	retval.EndCursor = v.PageInfoFields.EndCursor
+	retval.HasNextPage = v.PageInfoFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoFields.HasPreviousPage
+	return &retval, nil
+}
+
+// ListStreamRecordingsResponse is returned by ListStreamRecordings on success.
+type ListStreamRecordingsResponse struct {
+	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	Stream *ListStreamRecordingsStream `json:"stream"`
+}
+
+// GetStream returns ListStreamRecordingsResponse.Stream, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsResponse) GetStream() *ListStreamRecordingsStream { return v.Stream }
+
+// ListStreamRecordingsStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type ListStreamRecordingsStream struct {
+	// Recordings from this stream's tenant catalog, newest first.
+	Recordings *ListStreamRecordingsStreamRecordingsStreamArtifactsConnection `json:"recordings"`
+}
+
+// GetRecordings returns ListStreamRecordingsStream.Recordings, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStream) GetRecordings() *ListStreamRecordingsStreamRecordingsStreamArtifactsConnection {
+	return v.Recordings
+}
+
+// ListStreamRecordingsStreamRecordingsStreamArtifactsConnection includes the requested fields of the GraphQL type StreamArtifactsConnection.
+// The GraphQL type's documentation follows.
+//
+// A keyset-paginated collection of one stream's saved recordings or clips.
+type ListStreamRecordingsStreamRecordingsStreamArtifactsConnection struct {
+	Edges      []ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge `json:"edges"`
+	PageInfo   ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo                  `json:"pageInfo"`
+	TotalCount int                                                                                    `json:"totalCount"`
+}
+
+// GetEdges returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnection) GetEdges() []ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnection) GetPageInfo() ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge includes the requested fields of the GraphQL type StreamArtifactEdge.
+type ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge struct {
+	Cursor string                                                                                                  `json:"cursor"`
+	Node   ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact `json:"node"`
+}
+
+// GetCursor returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge.Node, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdge) GetNode() ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact {
+	return v.Node
+}
+
+// ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact includes the requested fields of the GraphQL type StorageArtifact.
+type ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact struct {
+	StorageArtifactFields `json:"-"`
+}
+
+// GetOriginType returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.OriginType, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetOriginType() *string {
+	return v.StorageArtifactFields.OriginType
+}
+
+// GetParentRecordingId returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ParentRecordingId, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetParentRecordingId() *string {
+	return v.StorageArtifactFields.ParentRecordingId
+}
+
+// GetKey returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Key, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetKey() string {
+	return v.StorageArtifactFields.Key
+}
+
+// GetKind returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Kind, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetKind() StorageArtifactKind {
+	return v.StorageArtifactFields.Kind
+}
+
+// GetId returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Id, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetId() string {
+	return v.StorageArtifactFields.Id
+}
+
+// GetHash returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Hash, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetHash() string {
+	return v.StorageArtifactFields.Hash
+}
+
+// GetPlaybackId returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.PlaybackId, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetPlaybackId() *string {
+	return v.StorageArtifactFields.PlaybackId
+}
+
+// GetStreamId returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.StreamId, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStreamId() *string {
+	return v.StorageArtifactFields.StreamId
+}
+
+// GetStreamTitle returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.StreamTitle, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStreamTitle() string {
+	return v.StorageArtifactFields.StreamTitle
+}
+
+// GetTitle returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Title, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetTitle() string {
+	return v.StorageArtifactFields.Title
+}
+
+// GetDescription returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Description, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDescription() *string {
+	return v.StorageArtifactFields.Description
+}
+
+// GetErrorMessage returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetErrorMessage() *string {
+	return v.StorageArtifactFields.ErrorMessage
+}
+
+// GetSizeBytes returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.SizeBytes, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetSizeBytes() *float64 {
+	return v.StorageArtifactFields.SizeBytes
+}
+
+// GetStatus returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.Status, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetStatus() string {
+	return v.StorageArtifactFields.Status
+}
+
+// GetCreatedAt returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.CreatedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetCreatedAt() time.Time {
+	return v.StorageArtifactFields.CreatedAt
+}
+
+// GetUpdatedAt returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetUpdatedAt() time.Time {
+	return v.StorageArtifactFields.UpdatedAt
+}
+
+// GetExpiresAt returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetExpiresAt() *time.Time {
+	return v.StorageArtifactFields.ExpiresAt
+}
+
+// GetDeleteId returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.DeleteId, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDeleteId() string {
+	return v.StorageArtifactFields.DeleteId
+}
+
+// GetDurationSeconds returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.DurationSeconds, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetDurationSeconds() *float64 {
+	return v.StorageArtifactFields.DurationSeconds
+}
+
+// GetThumbnailAssets returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact.ThumbnailAssets, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) GetThumbnailAssets() *StorageArtifactFieldsThumbnailAssets {
+	return v.StorageArtifactFields.ThumbnailAssets
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.StorageArtifactFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact struct {
+	OriginType *string `json:"originType"`
+
+	ParentRecordingId *string `json:"parentRecordingId"`
+
+	Key string `json:"key"`
+
+	Kind StorageArtifactKind `json:"kind"`
+
+	Id string `json:"id"`
+
+	Hash string `json:"hash"`
+
+	PlaybackId *string `json:"playbackId"`
+
+	StreamId *string `json:"streamId"`
+
+	StreamTitle string `json:"streamTitle"`
+
+	Title string `json:"title"`
+
+	Description *string `json:"description"`
+
+	ErrorMessage *string `json:"errorMessage"`
+
+	SizeBytes *float64 `json:"sizeBytes"`
+
+	Status string `json:"status"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	ExpiresAt *time.Time `json:"expiresAt"`
+
+	DeleteId string `json:"deleteId"`
+
+	DurationSeconds *float64 `json:"durationSeconds"`
+
+	ThumbnailAssets *StorageArtifactFieldsThumbnailAssets `json:"thumbnailAssets"`
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact) __premarshalJSON() (*__premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact, error) {
+	var retval __premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionEdgesStreamArtifactEdgeNodeStorageArtifact
+
+	retval.OriginType = v.StorageArtifactFields.OriginType
+	retval.ParentRecordingId = v.StorageArtifactFields.ParentRecordingId
+	retval.Key = v.StorageArtifactFields.Key
+	retval.Kind = v.StorageArtifactFields.Kind
+	retval.Id = v.StorageArtifactFields.Id
+	retval.Hash = v.StorageArtifactFields.Hash
+	retval.PlaybackId = v.StorageArtifactFields.PlaybackId
+	retval.StreamId = v.StorageArtifactFields.StreamId
+	retval.StreamTitle = v.StorageArtifactFields.StreamTitle
+	retval.Title = v.StorageArtifactFields.Title
+	retval.Description = v.StorageArtifactFields.Description
+	retval.ErrorMessage = v.StorageArtifactFields.ErrorMessage
+	retval.SizeBytes = v.StorageArtifactFields.SizeBytes
+	retval.Status = v.StorageArtifactFields.Status
+	retval.CreatedAt = v.StorageArtifactFields.CreatedAt
+	retval.UpdatedAt = v.StorageArtifactFields.UpdatedAt
+	retval.ExpiresAt = v.StorageArtifactFields.ExpiresAt
+	retval.DeleteId = v.StorageArtifactFields.DeleteId
+	retval.DurationSeconds = v.StorageArtifactFields.DurationSeconds
+	retval.ThumbnailAssets = v.StorageArtifactFields.ThumbnailAssets
+	return &retval, nil
+}
+
+// ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo struct {
+	PageInfoFields `json:"-"`
+}
+
+// GetStartCursor returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoFields.StartCursor
+}
+
+// GetEndCursor returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoFields.EndCursor
+}
+
+// GetHasNextPage returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoFields.HasNextPage
+}
+
+// GetHasPreviousPage returns ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoFields.HasPreviousPage
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo, error) {
+	var retval __premarshalListStreamRecordingsStreamRecordingsStreamArtifactsConnectionPageInfo
 
 	retval.StartCursor = v.PageInfoFields.StartCursor
 	retval.EndCursor = v.PageInfoFields.EndCursor
@@ -78491,6 +81090,10 @@ type MediaRetentionPolicyDefaultFields struct {
 	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
 	// Effective clip horizon the cascade resolves to today (0 = keep forever).
 	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
+	// Account default for new uploads. Null inherits the system default (keep).
+	KeepVodOriginals *bool `json:"keepVodOriginals"`
+	// Effective original-retention default for new uploads.
+	EffectiveKeepVodOriginals bool `json:"effectiveKeepVodOriginals"`
 }
 
 // GetBounds returns MediaRetentionPolicyDefaultFields.Bounds, and is useful for accessing the field via an interface.
@@ -78534,6 +81137,14 @@ func (v *MediaRetentionPolicyDefaultFields) GetEffectiveClipRetentionDays() int 
 	return v.EffectiveClipRetentionDays
 }
 
+// GetKeepVodOriginals returns MediaRetentionPolicyDefaultFields.KeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *MediaRetentionPolicyDefaultFields) GetKeepVodOriginals() *bool { return v.KeepVodOriginals }
+
+// GetEffectiveKeepVodOriginals returns MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *MediaRetentionPolicyDefaultFields) GetEffectiveKeepVodOriginals() bool {
+	return v.EffectiveKeepVodOriginals
+}
+
 // MediaRetentionPolicyDefaultFieldsBoundsMediaRetentionBounds includes the requested fields of the GraphQL type MediaRetentionBounds.
 // The GraphQL type's documentation follows.
 //
@@ -78572,6 +81183,7 @@ var AllMediaRetentionTarget = []MediaRetentionTarget{
 type MediaViewerProtocol string
 
 const (
+	MediaViewerProtocolWebvtt          MediaViewerProtocol = "WEBVTT"
 	MediaViewerProtocolWebrtc          MediaViewerProtocol = "WEBRTC"
 	MediaViewerProtocolWhep            MediaViewerProtocol = "WHEP"
 	MediaViewerProtocolHls             MediaViewerProtocol = "HLS"
@@ -78600,6 +81212,7 @@ const (
 )
 
 var AllMediaViewerProtocol = []MediaViewerProtocol{
+	MediaViewerProtocolWebvtt,
 	MediaViewerProtocolWebrtc,
 	MediaViewerProtocolWhep,
 	MediaViewerProtocolHls,
@@ -78864,6 +81477,8 @@ type NetworkStatusDefaultFieldsClustersNetworkClusterStatus struct {
 	CurrentViewers     int      `json:"currentViewers"`
 	EgressMbps         int      `json:"egressMbps"`
 	EgressCapacityMbps int      `json:"egressCapacityMbps"`
+	EgressUsableMbps   int      `json:"egressUsableMbps"`
+	DefaultBudgetNodes int      `json:"defaultBudgetNodes"`
 	IngressMbps        int      `json:"ingressMbps"`
 	Services           []string `json:"services"`
 }
@@ -78935,6 +81550,16 @@ func (v *NetworkStatusDefaultFieldsClustersNetworkClusterStatus) GetEgressMbps()
 // GetEgressCapacityMbps returns NetworkStatusDefaultFieldsClustersNetworkClusterStatus.EgressCapacityMbps, and is useful for accessing the field via an interface.
 func (v *NetworkStatusDefaultFieldsClustersNetworkClusterStatus) GetEgressCapacityMbps() int {
 	return v.EgressCapacityMbps
+}
+
+// GetEgressUsableMbps returns NetworkStatusDefaultFieldsClustersNetworkClusterStatus.EgressUsableMbps, and is useful for accessing the field via an interface.
+func (v *NetworkStatusDefaultFieldsClustersNetworkClusterStatus) GetEgressUsableMbps() int {
+	return v.EgressUsableMbps
+}
+
+// GetDefaultBudgetNodes returns NetworkStatusDefaultFieldsClustersNetworkClusterStatus.DefaultBudgetNodes, and is useful for accessing the field via an interface.
+func (v *NetworkStatusDefaultFieldsClustersNetworkClusterStatus) GetDefaultBudgetNodes() int {
+	return v.DefaultBudgetNodes
 }
 
 // GetIngressMbps returns NetworkStatusDefaultFieldsClustersNetworkClusterStatus.IngressMbps, and is useful for accessing the field via an interface.
@@ -81513,6 +84138,8 @@ type ProcessingUsageRecordDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ProcessingUsageRecordDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -81592,6 +84219,11 @@ func (v *ProcessingUsageRecordDefaultFieldsStream) GetCreatedAt() time.Time { re
 // GetUpdatedAt returns ProcessingUsageRecordDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ProcessingUsageRecordDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStream) GetIngest() *ProcessingUsageRecordDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ProcessingUsageRecordDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStream) GetMetrics() *ProcessingUsageRecordDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -81630,6 +84262,47 @@ func (v *ProcessingUsageRecordDefaultFieldsStream) GetThumbnailAssets() *Process
 // GetRetentionOverrides returns ProcessingUsageRecordDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStream) GetRetentionOverrides() *ProcessingUsageRecordDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ProcessingUsageRecordDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ProcessingUsageRecordDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ProcessingUsageRecordDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ProcessingUsageRecordDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ProcessingUsageRecordDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ProcessingUsageRecordDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ProcessingUsageRecordDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns ProcessingUsageRecordDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ProcessingUsageRecordDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ProcessingUsageRecordDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -82323,6 +84996,8 @@ type ProcessingUsageRecordInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -82408,6 +85083,11 @@ func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetCreatedAt() time.Tim
 // GetUpdatedAt returns ProcessingUsageRecordInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ProcessingUsageRecordInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetIngest() *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ProcessingUsageRecordInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetMetrics() *ProcessingUsageRecordInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -82446,6 +85126,53 @@ func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetThumbnailAssets() *P
 // GetRetentionOverrides returns ProcessingUsageRecordInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetRetentionOverrides() *ProcessingUsageRecordInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ProcessingUsageRecordInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ProcessingUsageRecordInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetSessionId() *string {
+	return v.SessionId
+}
+
+// GetConnectedAt returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time {
+	return v.EndedAt
+}
+
+// GetResumableUntil returns ProcessingUsageRecordInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ProcessingUsageRecordInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -83526,6 +86253,8 @@ type QualityTierDailyDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *QualityTierDailyDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -83605,6 +86334,11 @@ func (v *QualityTierDailyDefaultFieldsStream) GetCreatedAt() time.Time { return 
 // GetUpdatedAt returns QualityTierDailyDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns QualityTierDailyDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStream) GetIngest() *QualityTierDailyDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns QualityTierDailyDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStream) GetMetrics() *QualityTierDailyDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -83641,6 +86375,43 @@ func (v *QualityTierDailyDefaultFieldsStream) GetThumbnailAssets() *QualityTierD
 // GetRetentionOverrides returns QualityTierDailyDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStream) GetRetentionOverrides() *QualityTierDailyDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// QualityTierDailyDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type QualityTierDailyDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns QualityTierDailyDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns QualityTierDailyDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns QualityTierDailyDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns QualityTierDailyDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns QualityTierDailyDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns QualityTierDailyDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns QualityTierDailyDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // QualityTierDailyDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -84132,6 +86903,8 @@ type RebufferingEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *RebufferingEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -84211,6 +86984,11 @@ func (v *RebufferingEventDefaultFieldsStream) GetCreatedAt() time.Time { return 
 // GetUpdatedAt returns RebufferingEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns RebufferingEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStream) GetIngest() *RebufferingEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns RebufferingEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStream) GetMetrics() *RebufferingEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -84247,6 +87025,43 @@ func (v *RebufferingEventDefaultFieldsStream) GetThumbnailAssets() *RebufferingE
 // GetRetentionOverrides returns RebufferingEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStream) GetRetentionOverrides() *RebufferingEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// RebufferingEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type RebufferingEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns RebufferingEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns RebufferingEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns RebufferingEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns RebufferingEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns RebufferingEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns RebufferingEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns RebufferingEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // RebufferingEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -92953,6 +95768,8 @@ type RoutingEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *RoutingEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -93032,6 +95849,11 @@ func (v *RoutingEventDefaultFieldsStream) GetCreatedAt() time.Time { return v.Cr
 // GetUpdatedAt returns RoutingEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns RoutingEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStream) GetIngest() *RoutingEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns RoutingEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStream) GetMetrics() *RoutingEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -93068,6 +95890,43 @@ func (v *RoutingEventDefaultFieldsStream) GetThumbnailAssets() *RoutingEventDefa
 // GetRetentionOverrides returns RoutingEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStream) GetRetentionOverrides() *RoutingEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// RoutingEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type RoutingEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns RoutingEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns RoutingEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns RoutingEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns RoutingEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns RoutingEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns RoutingEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns RoutingEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // RoutingEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -94395,6 +97254,16 @@ func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) GetEffectiveClipRetenti
 	return v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
 }
 
+// GetKeepVodOriginals returns SetMediaRetentionPolicySetMediaRetentionPolicy.KeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) GetKeepVodOriginals() *bool {
+	return v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+}
+
+// GetEffectiveKeepVodOriginals returns SetMediaRetentionPolicySetMediaRetentionPolicy.EffectiveKeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) GetEffectiveKeepVodOriginals() bool {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
+}
+
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -94440,6 +97309,10 @@ type __premarshalSetMediaRetentionPolicySetMediaRetentionPolicy struct {
 	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
 
 	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
+
+	KeepVodOriginals *bool `json:"keepVodOriginals"`
+
+	EffectiveKeepVodOriginals bool `json:"effectiveKeepVodOriginals"`
 }
 
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) MarshalJSON() ([]byte, error) {
@@ -94463,6 +97336,8 @@ func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) __premarshalJSON() (*__
 	retval.EffectiveVodRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveVodRetentionDays
 	retval.EffectiveDvrRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveDvrRetentionDays
 	retval.EffectiveClipRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
+	retval.KeepVodOriginals = v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+	retval.EffectiveKeepVodOriginals = v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
 	return &retval, nil
 }
 
@@ -94716,6 +97591,721 @@ func (v *SetMediaRetentionPolicySetMediaRetentionPolicyValidationError) MarshalJ
 
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicyValidationError) __premarshalJSON() (*__premarshalSetMediaRetentionPolicySetMediaRetentionPolicyValidationError, error) {
 	var retval __premarshalSetMediaRetentionPolicySetMediaRetentionPolicyValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+type SetNodeCapacityInput struct {
+	NodeId string `json:"nodeId"`
+	// Positive whole bytes per second, or null to restore the default.
+	EgressBudgetBytesPerSec *float64 `json:"egressBudgetBytesPerSec"`
+	// Positive whole bytes per second, or null to restore the default.
+	IngressBudgetBytesPerSec *float64 `json:"ingressBudgetBytesPerSec"`
+	// Revision from the current capacity; a stale revision rejects the write.
+	ExpectedRevision int `json:"expectedRevision"`
+}
+
+// GetNodeId returns SetNodeCapacityInput.NodeId, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacityInput) GetNodeId() string { return v.NodeId }
+
+// GetEgressBudgetBytesPerSec returns SetNodeCapacityInput.EgressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacityInput) GetEgressBudgetBytesPerSec() *float64 {
+	return v.EgressBudgetBytesPerSec
+}
+
+// GetIngressBudgetBytesPerSec returns SetNodeCapacityInput.IngressBudgetBytesPerSec, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacityInput) GetIngressBudgetBytesPerSec() *float64 {
+	return v.IngressBudgetBytesPerSec
+}
+
+// GetExpectedRevision returns SetNodeCapacityInput.ExpectedRevision, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacityInput) GetExpectedRevision() int { return v.ExpectedRevision }
+
+// SetNodeCapacityResponse is returned by SetNodeCapacity on success.
+type SetNodeCapacityResponse struct {
+	// Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access.
+	SetNodeCapacity SetNodeCapacitySetNodeCapacitySetNodeCapacityResult `json:"-"`
+}
+
+// GetSetNodeCapacity returns SetNodeCapacityResponse.SetNodeCapacity, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacityResponse) GetSetNodeCapacity() SetNodeCapacitySetNodeCapacitySetNodeCapacityResult {
+	return v.SetNodeCapacity
+}
+
+func (v *SetNodeCapacityResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetNodeCapacityResponse
+		SetNodeCapacity json.RawMessage `json:"setNodeCapacity"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetNodeCapacityResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.SetNodeCapacity
+		src := firstPass.SetNodeCapacity
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalSetNodeCapacitySetNodeCapacitySetNodeCapacityResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal SetNodeCapacityResponse.SetNodeCapacity: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalSetNodeCapacityResponse struct {
+	SetNodeCapacity json.RawMessage `json:"setNodeCapacity"`
+}
+
+func (v *SetNodeCapacityResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetNodeCapacityResponse) __premarshalJSON() (*__premarshalSetNodeCapacityResponse, error) {
+	var retval __premarshalSetNodeCapacityResponse
+
+	{
+
+		dst := &retval.SetNodeCapacity
+		src := v.SetNodeCapacity
+		var err error
+		*dst, err = __marshalSetNodeCapacitySetNodeCapacitySetNodeCapacityResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal SetNodeCapacityResponse.SetNodeCapacity: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// SetNodeCapacitySetNodeCapacityAuthError includes the requested fields of the GraphQL type AuthError.
+type SetNodeCapacitySetNodeCapacityAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetNodeCapacitySetNodeCapacityAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns SetNodeCapacitySetNodeCapacityAuthError.Message, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns SetNodeCapacitySetNodeCapacityAuthError.Code, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *SetNodeCapacitySetNodeCapacityAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetNodeCapacitySetNodeCapacityAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetNodeCapacitySetNodeCapacityAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetNodeCapacitySetNodeCapacityAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *SetNodeCapacitySetNodeCapacityAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetNodeCapacitySetNodeCapacityAuthError) __premarshalJSON() (*__premarshalSetNodeCapacitySetNodeCapacityAuthError, error) {
+	var retval __premarshalSetNodeCapacitySetNodeCapacityAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// SetNodeCapacitySetNodeCapacityInfrastructureNode includes the requested fields of the GraphQL type InfrastructureNode.
+// The GraphQL type's documentation follows.
+//
+// An infrastructure node in a cluster (edge server, origin, transcoder).
+// Nodes handle stream ingest, transcoding, and delivery to viewers.
+type SetNodeCapacitySetNodeCapacityInfrastructureNode struct {
+	Typename                        *string `json:"__typename"`
+	InfrastructureNodeDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Typename, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetTypename() *string { return v.Typename }
+
+// GetId returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Id, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetId() string {
+	return v.InfrastructureNodeDefaultFields.Id
+}
+
+// GetNodeId returns SetNodeCapacitySetNodeCapacityInfrastructureNode.NodeId, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetNodeId() string {
+	return v.InfrastructureNodeDefaultFields.NodeId
+}
+
+// GetClusterId returns SetNodeCapacitySetNodeCapacityInfrastructureNode.ClusterId, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetClusterId() string {
+	return v.InfrastructureNodeDefaultFields.ClusterId
+}
+
+// GetNodeName returns SetNodeCapacitySetNodeCapacityInfrastructureNode.NodeName, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetNodeName() string {
+	return v.InfrastructureNodeDefaultFields.NodeName
+}
+
+// GetNodeType returns SetNodeCapacitySetNodeCapacityInfrastructureNode.NodeType, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetNodeType() string {
+	return v.InfrastructureNodeDefaultFields.NodeType
+}
+
+// GetInternalIp returns SetNodeCapacitySetNodeCapacityInfrastructureNode.InternalIp, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetInternalIp() *string {
+	return v.InfrastructureNodeDefaultFields.InternalIp
+}
+
+// GetExternalIp returns SetNodeCapacitySetNodeCapacityInfrastructureNode.ExternalIp, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetExternalIp() *string {
+	return v.InfrastructureNodeDefaultFields.ExternalIp
+}
+
+// GetWireguardIp returns SetNodeCapacitySetNodeCapacityInfrastructureNode.WireguardIp, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetWireguardIp() *string {
+	return v.InfrastructureNodeDefaultFields.WireguardIp
+}
+
+// GetWireguardPublicKey returns SetNodeCapacitySetNodeCapacityInfrastructureNode.WireguardPublicKey, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetWireguardPublicKey() *string {
+	return v.InfrastructureNodeDefaultFields.WireguardPublicKey
+}
+
+// GetRegion returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Region, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetRegion() *string {
+	return v.InfrastructureNodeDefaultFields.Region
+}
+
+// GetLatitude returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Latitude, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetLatitude() *float64 {
+	return v.InfrastructureNodeDefaultFields.Latitude
+}
+
+// GetLongitude returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Longitude, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetLongitude() *float64 {
+	return v.InfrastructureNodeDefaultFields.Longitude
+}
+
+// GetAvailabilityZone returns SetNodeCapacitySetNodeCapacityInfrastructureNode.AvailabilityZone, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetAvailabilityZone() *string {
+	return v.InfrastructureNodeDefaultFields.AvailabilityZone
+}
+
+// GetCpuCores returns SetNodeCapacitySetNodeCapacityInfrastructureNode.CpuCores, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetCpuCores() *int {
+	return v.InfrastructureNodeDefaultFields.CpuCores
+}
+
+// GetMemoryGb returns SetNodeCapacitySetNodeCapacityInfrastructureNode.MemoryGb, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetMemoryGb() *int {
+	return v.InfrastructureNodeDefaultFields.MemoryGb
+}
+
+// GetDiskGb returns SetNodeCapacitySetNodeCapacityInfrastructureNode.DiskGb, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetDiskGb() *int {
+	return v.InfrastructureNodeDefaultFields.DiskGb
+}
+
+// GetLastHeartbeat returns SetNodeCapacitySetNodeCapacityInfrastructureNode.LastHeartbeat, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetLastHeartbeat() *time.Time {
+	return v.InfrastructureNodeDefaultFields.LastHeartbeat
+}
+
+// GetTags returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Tags, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetTags() *json.RawMessage {
+	return v.InfrastructureNodeDefaultFields.Tags
+}
+
+// GetMetadata returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Metadata, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetMetadata() *json.RawMessage {
+	return v.InfrastructureNodeDefaultFields.Metadata
+}
+
+// GetCreatedAt returns SetNodeCapacitySetNodeCapacityInfrastructureNode.CreatedAt, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetCreatedAt() *time.Time {
+	return v.InfrastructureNodeDefaultFields.CreatedAt
+}
+
+// GetUpdatedAt returns SetNodeCapacitySetNodeCapacityInfrastructureNode.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetUpdatedAt() *time.Time {
+	return v.InfrastructureNodeDefaultFields.UpdatedAt
+}
+
+// GetLiveState returns SetNodeCapacitySetNodeCapacityInfrastructureNode.LiveState, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetLiveState() *InfrastructureNodeDefaultFieldsLiveStateLiveNode {
+	return v.InfrastructureNodeDefaultFields.LiveState
+}
+
+// GetEffectiveMode returns SetNodeCapacitySetNodeCapacityInfrastructureNode.EffectiveMode, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetEffectiveMode() NodeOperationalMode {
+	return v.InfrastructureNodeDefaultFields.EffectiveMode
+}
+
+// GetRoutingImpactPreview returns SetNodeCapacitySetNodeCapacityInfrastructureNode.RoutingImpactPreview, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetRoutingImpactPreview() InfrastructureNodeDefaultFieldsRoutingImpactPreview {
+	return v.InfrastructureNodeDefaultFields.RoutingImpactPreview
+}
+
+// GetCapacity returns SetNodeCapacitySetNodeCapacityInfrastructureNode.Capacity, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) GetCapacity() *InfrastructureNodeDefaultFieldsCapacityNodeCapacity {
+	return v.InfrastructureNodeDefaultFields.Capacity
+}
+
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetNodeCapacitySetNodeCapacityInfrastructureNode
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetNodeCapacitySetNodeCapacityInfrastructureNode = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.InfrastructureNodeDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetNodeCapacitySetNodeCapacityInfrastructureNode struct {
+	Typename *string `json:"__typename"`
+
+	Id string `json:"id"`
+
+	NodeId string `json:"nodeId"`
+
+	ClusterId string `json:"clusterId"`
+
+	NodeName string `json:"nodeName"`
+
+	NodeType string `json:"nodeType"`
+
+	InternalIp *string `json:"internalIp"`
+
+	ExternalIp *string `json:"externalIp"`
+
+	WireguardIp *string `json:"wireguardIp"`
+
+	WireguardPublicKey *string `json:"wireguardPublicKey"`
+
+	Region *string `json:"region"`
+
+	Latitude *float64 `json:"latitude"`
+
+	Longitude *float64 `json:"longitude"`
+
+	AvailabilityZone *string `json:"availabilityZone"`
+
+	CpuCores *int `json:"cpuCores"`
+
+	MemoryGb *int `json:"memoryGb"`
+
+	DiskGb *int `json:"diskGb"`
+
+	LastHeartbeat *time.Time `json:"lastHeartbeat"`
+
+	Tags *json.RawMessage `json:"tags"`
+
+	Metadata *json.RawMessage `json:"metadata"`
+
+	CreatedAt *time.Time `json:"createdAt"`
+
+	UpdatedAt *time.Time `json:"updatedAt"`
+
+	LiveState *InfrastructureNodeDefaultFieldsLiveStateLiveNode `json:"liveState"`
+
+	EffectiveMode NodeOperationalMode `json:"effectiveMode"`
+
+	RoutingImpactPreview InfrastructureNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+
+	Capacity *InfrastructureNodeDefaultFieldsCapacityNodeCapacity `json:"capacity"`
+}
+
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) __premarshalJSON() (*__premarshalSetNodeCapacitySetNodeCapacityInfrastructureNode, error) {
+	var retval __premarshalSetNodeCapacitySetNodeCapacityInfrastructureNode
+
+	retval.Typename = v.Typename
+	retval.Id = v.InfrastructureNodeDefaultFields.Id
+	retval.NodeId = v.InfrastructureNodeDefaultFields.NodeId
+	retval.ClusterId = v.InfrastructureNodeDefaultFields.ClusterId
+	retval.NodeName = v.InfrastructureNodeDefaultFields.NodeName
+	retval.NodeType = v.InfrastructureNodeDefaultFields.NodeType
+	retval.InternalIp = v.InfrastructureNodeDefaultFields.InternalIp
+	retval.ExternalIp = v.InfrastructureNodeDefaultFields.ExternalIp
+	retval.WireguardIp = v.InfrastructureNodeDefaultFields.WireguardIp
+	retval.WireguardPublicKey = v.InfrastructureNodeDefaultFields.WireguardPublicKey
+	retval.Region = v.InfrastructureNodeDefaultFields.Region
+	retval.Latitude = v.InfrastructureNodeDefaultFields.Latitude
+	retval.Longitude = v.InfrastructureNodeDefaultFields.Longitude
+	retval.AvailabilityZone = v.InfrastructureNodeDefaultFields.AvailabilityZone
+	retval.CpuCores = v.InfrastructureNodeDefaultFields.CpuCores
+	retval.MemoryGb = v.InfrastructureNodeDefaultFields.MemoryGb
+	retval.DiskGb = v.InfrastructureNodeDefaultFields.DiskGb
+	retval.LastHeartbeat = v.InfrastructureNodeDefaultFields.LastHeartbeat
+	retval.Tags = v.InfrastructureNodeDefaultFields.Tags
+	retval.Metadata = v.InfrastructureNodeDefaultFields.Metadata
+	retval.CreatedAt = v.InfrastructureNodeDefaultFields.CreatedAt
+	retval.UpdatedAt = v.InfrastructureNodeDefaultFields.UpdatedAt
+	retval.LiveState = v.InfrastructureNodeDefaultFields.LiveState
+	retval.EffectiveMode = v.InfrastructureNodeDefaultFields.EffectiveMode
+	retval.RoutingImpactPreview = v.InfrastructureNodeDefaultFields.RoutingImpactPreview
+	retval.Capacity = v.InfrastructureNodeDefaultFields.Capacity
+	return &retval, nil
+}
+
+// SetNodeCapacitySetNodeCapacityNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type SetNodeCapacitySetNodeCapacityNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetNodeCapacitySetNodeCapacityNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns SetNodeCapacitySetNodeCapacityNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns SetNodeCapacitySetNodeCapacityNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns SetNodeCapacitySetNodeCapacityNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns SetNodeCapacitySetNodeCapacityNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetNodeCapacitySetNodeCapacityNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetNodeCapacitySetNodeCapacityNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetNodeCapacitySetNodeCapacityNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) __premarshalJSON() (*__premarshalSetNodeCapacitySetNodeCapacityNotFoundError, error) {
+	var retval __premarshalSetNodeCapacitySetNodeCapacityNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// SetNodeCapacitySetNodeCapacitySetNodeCapacityResult includes the requested fields of the GraphQL interface SetNodeCapacityResult.
+//
+// SetNodeCapacitySetNodeCapacitySetNodeCapacityResult is implemented by the following types:
+// SetNodeCapacitySetNodeCapacityAuthError
+// SetNodeCapacitySetNodeCapacityInfrastructureNode
+// SetNodeCapacitySetNodeCapacityNotFoundError
+// SetNodeCapacitySetNodeCapacityValidationError
+type SetNodeCapacitySetNodeCapacitySetNodeCapacityResult interface {
+	implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *SetNodeCapacitySetNodeCapacityAuthError) implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult() {
+}
+func (v *SetNodeCapacitySetNodeCapacityInfrastructureNode) implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult() {
+}
+func (v *SetNodeCapacitySetNodeCapacityNotFoundError) implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult() {
+}
+func (v *SetNodeCapacitySetNodeCapacityValidationError) implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult() {
+}
+
+func __unmarshalSetNodeCapacitySetNodeCapacitySetNodeCapacityResult(b []byte, v *SetNodeCapacitySetNodeCapacitySetNodeCapacityResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(SetNodeCapacitySetNodeCapacityAuthError)
+		return json.Unmarshal(b, *v)
+	case "InfrastructureNode":
+		*v = new(SetNodeCapacitySetNodeCapacityInfrastructureNode)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(SetNodeCapacitySetNodeCapacityNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(SetNodeCapacitySetNodeCapacityValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing SetNodeCapacityResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalSetNodeCapacitySetNodeCapacitySetNodeCapacityResult(v *SetNodeCapacitySetNodeCapacitySetNodeCapacityResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *SetNodeCapacitySetNodeCapacityAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetNodeCapacitySetNodeCapacityAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetNodeCapacitySetNodeCapacityInfrastructureNode:
+		typename = "InfrastructureNode"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetNodeCapacitySetNodeCapacityInfrastructureNode
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetNodeCapacitySetNodeCapacityNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetNodeCapacitySetNodeCapacityNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetNodeCapacitySetNodeCapacityValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetNodeCapacitySetNodeCapacityValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for SetNodeCapacitySetNodeCapacitySetNodeCapacityResult: "%T"`, v)
+	}
+}
+
+// SetNodeCapacitySetNodeCapacityValidationError includes the requested fields of the GraphQL type ValidationError.
+type SetNodeCapacitySetNodeCapacityValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetNodeCapacitySetNodeCapacityValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns SetNodeCapacitySetNodeCapacityValidationError.Message, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns SetNodeCapacitySetNodeCapacityValidationError.Code, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns SetNodeCapacitySetNodeCapacityValidationError.Field, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns SetNodeCapacitySetNodeCapacityValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *SetNodeCapacitySetNodeCapacityValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *SetNodeCapacitySetNodeCapacityValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetNodeCapacitySetNodeCapacityValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetNodeCapacitySetNodeCapacityValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetNodeCapacitySetNodeCapacityValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *SetNodeCapacitySetNodeCapacityValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetNodeCapacitySetNodeCapacityValidationError) __premarshalJSON() (*__premarshalSetNodeCapacitySetNodeCapacityValidationError, error) {
+	var retval __premarshalSetNodeCapacitySetNodeCapacityValidationError
 
 	retval.Typename = v.Typename
 	retval.Message = v.ValidationErrorDefaultFields.Message
@@ -95018,6 +98608,11 @@ func (v *SetNodeModeSetNodeModeInfrastructureNode) GetRoutingImpactPreview() Inf
 	return v.InfrastructureNodeDefaultFields.RoutingImpactPreview
 }
 
+// GetCapacity returns SetNodeModeSetNodeModeInfrastructureNode.Capacity, and is useful for accessing the field via an interface.
+func (v *SetNodeModeSetNodeModeInfrastructureNode) GetCapacity() *InfrastructureNodeDefaultFieldsCapacityNodeCapacity {
+	return v.InfrastructureNodeDefaultFields.Capacity
+}
+
 func (v *SetNodeModeSetNodeModeInfrastructureNode) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -95093,6 +98688,8 @@ type __premarshalSetNodeModeSetNodeModeInfrastructureNode struct {
 	EffectiveMode NodeOperationalMode `json:"effectiveMode"`
 
 	RoutingImpactPreview InfrastructureNodeDefaultFieldsRoutingImpactPreview `json:"routingImpactPreview"`
+
+	Capacity *InfrastructureNodeDefaultFieldsCapacityNodeCapacity `json:"capacity"`
 }
 
 func (v *SetNodeModeSetNodeModeInfrastructureNode) MarshalJSON() ([]byte, error) {
@@ -95131,6 +98728,7 @@ func (v *SetNodeModeSetNodeModeInfrastructureNode) __premarshalJSON() (*__premar
 	retval.LiveState = v.InfrastructureNodeDefaultFields.LiveState
 	retval.EffectiveMode = v.InfrastructureNodeDefaultFields.EffectiveMode
 	retval.RoutingImpactPreview = v.InfrastructureNodeDefaultFields.RoutingImpactPreview
+	retval.Capacity = v.InfrastructureNodeDefaultFields.Capacity
 	return &retval, nil
 }
 
@@ -96368,9 +99966,9 @@ func (v *SetPreferredClusterSetPreferredCluster) GetMaxConcurrentViewers() int {
 	return v.ClusterDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns SetPreferredClusterSetPreferredCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *SetPreferredClusterSetPreferredCluster) GetMaxBandwidthMbps() int {
-	return v.ClusterDefaultFields.MaxBandwidthMbps
+// GetCapacity returns SetPreferredClusterSetPreferredCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *SetPreferredClusterSetPreferredCluster) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterDefaultFields.Capacity
 }
 
 // GetHealthStatus returns SetPreferredClusterSetPreferredCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -96493,7 +100091,7 @@ type __premarshalSetPreferredClusterSetPreferredCluster struct {
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -96547,7 +100145,7 @@ func (v *SetPreferredClusterSetPreferredCluster) __premarshalJSON() (*__premarsh
 	retval.KafkaBrokers = v.ClusterDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterDefaultFields.IsDefaultCluster
@@ -97477,6 +101075,910 @@ func (v *SetStreamRetentionOverridesSetStreamRetentionOverridesValidationError) 
 
 func (v *SetStreamRetentionOverridesSetStreamRetentionOverridesValidationError) __premarshalJSON() (*__premarshalSetStreamRetentionOverridesSetStreamRetentionOverridesValidationError, error) {
 	var retval __premarshalSetStreamRetentionOverridesSetStreamRetentionOverridesValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+type SetTranscodeLadderPolicyInput struct {
+	Ladder *string `json:"ladder"`
+}
+
+// GetLadder returns SetTranscodeLadderPolicyInput.Ladder, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicyInput) GetLadder() *string { return v.Ladder }
+
+// SetTranscodeLadderPolicyResponse is returned by SetTranscodeLadderPolicy on success.
+type SetTranscodeLadderPolicyResponse struct {
+	// Set the account's video ladder. Empty or null inherits the plan default.
+	SetTranscodeLadderPolicy SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult `json:"-"`
+}
+
+// GetSetTranscodeLadderPolicy returns SetTranscodeLadderPolicyResponse.SetTranscodeLadderPolicy, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicyResponse) GetSetTranscodeLadderPolicy() SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult {
+	return v.SetTranscodeLadderPolicy
+}
+
+func (v *SetTranscodeLadderPolicyResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetTranscodeLadderPolicyResponse
+		SetTranscodeLadderPolicy json.RawMessage `json:"setTranscodeLadderPolicy"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetTranscodeLadderPolicyResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.SetTranscodeLadderPolicy
+		src := firstPass.SetTranscodeLadderPolicy
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal SetTranscodeLadderPolicyResponse.SetTranscodeLadderPolicy: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalSetTranscodeLadderPolicyResponse struct {
+	SetTranscodeLadderPolicy json.RawMessage `json:"setTranscodeLadderPolicy"`
+}
+
+func (v *SetTranscodeLadderPolicyResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetTranscodeLadderPolicyResponse) __premarshalJSON() (*__premarshalSetTranscodeLadderPolicyResponse, error) {
+	var retval __premarshalSetTranscodeLadderPolicyResponse
+
+	{
+
+		dst := &retval.SetTranscodeLadderPolicy
+		src := v.SetTranscodeLadderPolicy
+		var err error
+		*dst, err = __marshalSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal SetTranscodeLadderPolicyResponse.SetTranscodeLadderPolicy: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// SetTranscodeLadderPolicySetTranscodeLadderPolicy includes the requested fields of the GraphQL type TranscodeLadderPolicy.
+type SetTranscodeLadderPolicySetTranscodeLadderPolicy struct {
+	Typename                           *string `json:"__typename"`
+	TranscodeLadderPolicyDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetTranscodeLadderPolicySetTranscodeLadderPolicy.Typename, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) GetTypename() *string { return v.Typename }
+
+// GetLadders returns SetTranscodeLadderPolicySetTranscodeLadderPolicy.Ladders, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) GetLadders() []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder {
+	return v.TranscodeLadderPolicyDefaultFields.Ladders
+}
+
+// GetPlanDefault returns SetTranscodeLadderPolicySetTranscodeLadderPolicy.PlanDefault, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) GetPlanDefault() string {
+	return v.TranscodeLadderPolicyDefaultFields.PlanDefault
+}
+
+// GetTenantLadder returns SetTranscodeLadderPolicySetTranscodeLadderPolicy.TenantLadder, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) GetTenantLadder() *string {
+	return v.TranscodeLadderPolicyDefaultFields.TenantLadder
+}
+
+// GetEffectiveLadder returns SetTranscodeLadderPolicySetTranscodeLadderPolicy.EffectiveLadder, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) GetEffectiveLadder() string {
+	return v.TranscodeLadderPolicyDefaultFields.EffectiveLadder
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetTranscodeLadderPolicySetTranscodeLadderPolicy
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetTranscodeLadderPolicySetTranscodeLadderPolicy = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.TranscodeLadderPolicyDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicy struct {
+	Typename *string `json:"__typename"`
+
+	Ladders []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder `json:"ladders"`
+
+	PlanDefault string `json:"planDefault"`
+
+	TenantLadder *string `json:"tenantLadder"`
+
+	EffectiveLadder string `json:"effectiveLadder"`
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) __premarshalJSON() (*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicy, error) {
+	var retval __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicy
+
+	retval.Typename = v.Typename
+	retval.Ladders = v.TranscodeLadderPolicyDefaultFields.Ladders
+	retval.PlanDefault = v.TranscodeLadderPolicyDefaultFields.PlanDefault
+	retval.TenantLadder = v.TranscodeLadderPolicyDefaultFields.TenantLadder
+	retval.EffectiveLadder = v.TranscodeLadderPolicyDefaultFields.EffectiveLadder
+	return &retval, nil
+}
+
+// SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError includes the requested fields of the GraphQL type AuthError.
+type SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError.Message, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError.Code, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) __premarshalJSON() (*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError, error) {
+	var retval __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult includes the requested fields of the GraphQL interface SetTranscodeLadderPolicyResult.
+//
+// SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult is implemented by the following types:
+// SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError
+// SetTranscodeLadderPolicySetTranscodeLadderPolicy
+// SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError
+type SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult interface {
+	implementsGraphQLInterfaceSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError) implementsGraphQLInterfaceSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult() {
+}
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicy) implementsGraphQLInterfaceSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult() {
+}
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) implementsGraphQLInterfaceSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult() {
+}
+
+func __unmarshalSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult(b []byte, v *SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError)
+		return json.Unmarshal(b, *v)
+	case "TranscodeLadderPolicy":
+		*v = new(SetTranscodeLadderPolicySetTranscodeLadderPolicy)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing SetTranscodeLadderPolicyResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult(v *SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *SetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetTranscodeLadderPolicySetTranscodeLadderPolicy:
+		typename = "TranscodeLadderPolicy"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicy
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for SetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult: "%T"`, v)
+	}
+}
+
+// SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError includes the requested fields of the GraphQL type ValidationError.
+type SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError.Message, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError.Code, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError.Field, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError) __premarshalJSON() (*__premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError, error) {
+	var retval __premarshalSetTranscodeLadderPolicySetTranscodeLadderPolicyValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// SetVodOriginalPolicyResponse is returned by SetVodOriginalPolicy on success.
+type SetVodOriginalPolicyResponse struct {
+	// Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged.
+	SetVodOriginalPolicy SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult `json:"-"`
+}
+
+// GetSetVodOriginalPolicy returns SetVodOriginalPolicyResponse.SetVodOriginalPolicy, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicyResponse) GetSetVodOriginalPolicy() SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult {
+	return v.SetVodOriginalPolicy
+}
+
+func (v *SetVodOriginalPolicyResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetVodOriginalPolicyResponse
+		SetVodOriginalPolicy json.RawMessage `json:"setVodOriginalPolicy"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetVodOriginalPolicyResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.SetVodOriginalPolicy
+		src := firstPass.SetVodOriginalPolicy
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal SetVodOriginalPolicyResponse.SetVodOriginalPolicy: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalSetVodOriginalPolicyResponse struct {
+	SetVodOriginalPolicy json.RawMessage `json:"setVodOriginalPolicy"`
+}
+
+func (v *SetVodOriginalPolicyResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetVodOriginalPolicyResponse) __premarshalJSON() (*__premarshalSetVodOriginalPolicyResponse, error) {
+	var retval __premarshalSetVodOriginalPolicyResponse
+
+	{
+
+		dst := &retval.SetVodOriginalPolicy
+		src := v.SetVodOriginalPolicy
+		var err error
+		*dst, err = __marshalSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal SetVodOriginalPolicyResponse.SetVodOriginalPolicy: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// SetVodOriginalPolicySetVodOriginalPolicyAuthError includes the requested fields of the GraphQL type AuthError.
+type SetVodOriginalPolicySetVodOriginalPolicyAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetVodOriginalPolicySetVodOriginalPolicyAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns SetVodOriginalPolicySetVodOriginalPolicyAuthError.Message, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns SetVodOriginalPolicySetVodOriginalPolicyAuthError.Code, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetVodOriginalPolicySetVodOriginalPolicyAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetVodOriginalPolicySetVodOriginalPolicyAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetVodOriginalPolicySetVodOriginalPolicyAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) __premarshalJSON() (*__premarshalSetVodOriginalPolicySetVodOriginalPolicyAuthError, error) {
+	var retval __premarshalSetVodOriginalPolicySetVodOriginalPolicyAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy includes the requested fields of the GraphQL type MediaRetentionPolicy.
+// The GraphQL type's documentation follows.
+//
+// Tenant-default retention policy: per-class overrides + the values the
+// cascade would resolve to today for a hypothetical new artifact of each
+// class (no per-stream context).
+type SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy struct {
+	Typename                          *string `json:"__typename"`
+	MediaRetentionPolicyDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.Typename, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetTypename() *string {
+	return v.Typename
+}
+
+// GetBounds returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.Bounds, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetBounds() MediaRetentionPolicyDefaultFieldsBoundsMediaRetentionBounds {
+	return v.MediaRetentionPolicyDefaultFields.Bounds
+}
+
+// GetUpdatedBy returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.UpdatedBy, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetUpdatedBy() *string {
+	return v.MediaRetentionPolicyDefaultFields.UpdatedBy
+}
+
+// GetUpdatedAt returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetUpdatedAt() *time.Time {
+	return v.MediaRetentionPolicyDefaultFields.UpdatedAt
+}
+
+// GetDefaultVodRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.DefaultVodRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetDefaultVodRetentionDays() *int {
+	return v.MediaRetentionPolicyDefaultFields.DefaultVodRetentionDays
+}
+
+// GetDefaultDvrRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.DefaultDvrRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetDefaultDvrRetentionDays() *int {
+	return v.MediaRetentionPolicyDefaultFields.DefaultDvrRetentionDays
+}
+
+// GetDefaultClipRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.DefaultClipRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetDefaultClipRetentionDays() *int {
+	return v.MediaRetentionPolicyDefaultFields.DefaultClipRetentionDays
+}
+
+// GetEffectiveVodRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.EffectiveVodRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetEffectiveVodRetentionDays() int {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveVodRetentionDays
+}
+
+// GetEffectiveDvrRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.EffectiveDvrRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetEffectiveDvrRetentionDays() int {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveDvrRetentionDays
+}
+
+// GetEffectiveClipRetentionDays returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.EffectiveClipRetentionDays, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetEffectiveClipRetentionDays() int {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
+}
+
+// GetKeepVodOriginals returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.KeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetKeepVodOriginals() *bool {
+	return v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+}
+
+// GetEffectiveKeepVodOriginals returns SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy.EffectiveKeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) GetEffectiveKeepVodOriginals() bool {
+	return v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.MediaRetentionPolicyDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy struct {
+	Typename *string `json:"__typename"`
+
+	Bounds MediaRetentionPolicyDefaultFieldsBoundsMediaRetentionBounds `json:"bounds"`
+
+	UpdatedBy *string `json:"updatedBy"`
+
+	UpdatedAt *time.Time `json:"updatedAt"`
+
+	DefaultVodRetentionDays *int `json:"defaultVodRetentionDays"`
+
+	DefaultDvrRetentionDays *int `json:"defaultDvrRetentionDays"`
+
+	DefaultClipRetentionDays *int `json:"defaultClipRetentionDays"`
+
+	EffectiveVodRetentionDays int `json:"effectiveVodRetentionDays"`
+
+	EffectiveDvrRetentionDays int `json:"effectiveDvrRetentionDays"`
+
+	EffectiveClipRetentionDays int `json:"effectiveClipRetentionDays"`
+
+	KeepVodOriginals *bool `json:"keepVodOriginals"`
+
+	EffectiveKeepVodOriginals bool `json:"effectiveKeepVodOriginals"`
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) __premarshalJSON() (*__premarshalSetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy, error) {
+	var retval __premarshalSetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy
+
+	retval.Typename = v.Typename
+	retval.Bounds = v.MediaRetentionPolicyDefaultFields.Bounds
+	retval.UpdatedBy = v.MediaRetentionPolicyDefaultFields.UpdatedBy
+	retval.UpdatedAt = v.MediaRetentionPolicyDefaultFields.UpdatedAt
+	retval.DefaultVodRetentionDays = v.MediaRetentionPolicyDefaultFields.DefaultVodRetentionDays
+	retval.DefaultDvrRetentionDays = v.MediaRetentionPolicyDefaultFields.DefaultDvrRetentionDays
+	retval.DefaultClipRetentionDays = v.MediaRetentionPolicyDefaultFields.DefaultClipRetentionDays
+	retval.EffectiveVodRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveVodRetentionDays
+	retval.EffectiveDvrRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveDvrRetentionDays
+	retval.EffectiveClipRetentionDays = v.MediaRetentionPolicyDefaultFields.EffectiveClipRetentionDays
+	retval.KeepVodOriginals = v.MediaRetentionPolicyDefaultFields.KeepVodOriginals
+	retval.EffectiveKeepVodOriginals = v.MediaRetentionPolicyDefaultFields.EffectiveKeepVodOriginals
+	return &retval, nil
+}
+
+// SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult includes the requested fields of the GraphQL interface SetMediaRetentionPolicyResult.
+//
+// SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult is implemented by the following types:
+// SetVodOriginalPolicySetVodOriginalPolicyAuthError
+// SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy
+// SetVodOriginalPolicySetVodOriginalPolicyValidationError
+type SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult interface {
+	implementsGraphQLInterfaceSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyAuthError) implementsGraphQLInterfaceSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult() {
+}
+func (v *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy) implementsGraphQLInterfaceSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult() {
+}
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) implementsGraphQLInterfaceSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult() {
+}
+
+func __unmarshalSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult(b []byte, v *SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(SetVodOriginalPolicySetVodOriginalPolicyAuthError)
+		return json.Unmarshal(b, *v)
+	case "MediaRetentionPolicy":
+		*v = new(SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(SetVodOriginalPolicySetVodOriginalPolicyValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing SetMediaRetentionPolicyResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult(v *SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *SetVodOriginalPolicySetVodOriginalPolicyAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetVodOriginalPolicySetVodOriginalPolicyAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy:
+		typename = "MediaRetentionPolicy"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetVodOriginalPolicySetVodOriginalPolicyMediaRetentionPolicy
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *SetVodOriginalPolicySetVodOriginalPolicyValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalSetVodOriginalPolicySetVodOriginalPolicyValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for SetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult: "%T"`, v)
+	}
+}
+
+// SetVodOriginalPolicySetVodOriginalPolicyValidationError includes the requested fields of the GraphQL type ValidationError.
+type SetVodOriginalPolicySetVodOriginalPolicyValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns SetVodOriginalPolicySetVodOriginalPolicyValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns SetVodOriginalPolicySetVodOriginalPolicyValidationError.Message, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns SetVodOriginalPolicySetVodOriginalPolicyValidationError.Code, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns SetVodOriginalPolicySetVodOriginalPolicyValidationError.Field, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns SetVodOriginalPolicySetVodOriginalPolicyValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetVodOriginalPolicySetVodOriginalPolicyValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetVodOriginalPolicySetVodOriginalPolicyValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetVodOriginalPolicySetVodOriginalPolicyValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetVodOriginalPolicySetVodOriginalPolicyValidationError) __premarshalJSON() (*__premarshalSetVodOriginalPolicySetVodOriginalPolicyValidationError, error) {
+	var retval __premarshalSetVodOriginalPolicySetVodOriginalPolicyValidationError
 
 	retval.Typename = v.Typename
 	retval.Message = v.ValidationErrorDefaultFields.Message
@@ -99647,14 +104149,18 @@ func __marshalStopDVRStopDVRStopDVRResult(v *StopDVRStopDVRStopDVRResult) ([]byt
 
 // StorageArtifactFields includes the GraphQL fields of StorageArtifact requested by the fragment StorageArtifactFields.
 type StorageArtifactFields struct {
-	Key         string              `json:"key"`
-	Kind        StorageArtifactKind `json:"kind"`
-	Id          string              `json:"id"`
-	Hash        string              `json:"hash"`
-	PlaybackId  *string             `json:"playbackId"`
-	StreamId    *string             `json:"streamId"`
-	StreamTitle string              `json:"streamTitle"`
-	Title       string              `json:"title"`
+	// How the artifact was produced, such as dvr_chapter.
+	OriginType *string `json:"originType"`
+	// Catalog ID of the parent DVR recording, present on saved chapters.
+	ParentRecordingId *string             `json:"parentRecordingId"`
+	Key               string              `json:"key"`
+	Kind              StorageArtifactKind `json:"kind"`
+	Id                string              `json:"id"`
+	Hash              string              `json:"hash"`
+	PlaybackId        *string             `json:"playbackId"`
+	StreamId          *string             `json:"streamId"`
+	StreamTitle       string              `json:"streamTitle"`
+	Title             string              `json:"title"`
 	// User-provided description (VOD uploads and clips); null when unset.
 	Description *string `json:"description"`
 	// Processing failure detail for a failed artifact; null when not failed.
@@ -99670,6 +104176,12 @@ type StorageArtifactFields struct {
 	// Poster + hover-scrub sprite assets, when the artifact has thumbnails.
 	ThumbnailAssets *StorageArtifactFieldsThumbnailAssets `json:"thumbnailAssets"`
 }
+
+// GetOriginType returns StorageArtifactFields.OriginType, and is useful for accessing the field via an interface.
+func (v *StorageArtifactFields) GetOriginType() *string { return v.OriginType }
+
+// GetParentRecordingId returns StorageArtifactFields.ParentRecordingId, and is useful for accessing the field via an interface.
+func (v *StorageArtifactFields) GetParentRecordingId() *string { return v.ParentRecordingId }
 
 // GetKey returns StorageArtifactFields.Key, and is useful for accessing the field via an interface.
 func (v *StorageArtifactFields) GetKey() string { return v.Key }
@@ -99998,6 +104510,8 @@ type StorageEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StorageEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -100077,6 +104591,11 @@ func (v *StorageEventDefaultFieldsStream) GetCreatedAt() time.Time { return v.Cr
 // GetUpdatedAt returns StorageEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StorageEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStream) GetIngest() *StorageEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StorageEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStream) GetMetrics() *StorageEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -100113,6 +104632,43 @@ func (v *StorageEventDefaultFieldsStream) GetThumbnailAssets() *StorageEventDefa
 // GetRetentionOverrides returns StorageEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStream) GetRetentionOverrides() *StorageEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StorageEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StorageEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StorageEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StorageEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StorageEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StorageEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns StorageEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StorageEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StorageEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StorageEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -100582,6 +105138,8 @@ type StorageEventInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StorageEventInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -100661,6 +105219,11 @@ func (v *StorageEventInNodeDefaultFieldsStream) GetCreatedAt() time.Time { retur
 // GetUpdatedAt returns StorageEventInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StorageEventInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStream) GetIngest() *StorageEventInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StorageEventInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStream) GetMetrics() *StorageEventInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -100697,6 +105260,45 @@ func (v *StorageEventInNodeDefaultFieldsStream) GetThumbnailAssets() *StorageEve
 // GetRetentionOverrides returns StorageEventInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStream) GetRetentionOverrides() *StorageEventInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StorageEventInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StorageEventInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StorageEventInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StorageEventInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StorageEventInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StorageEventInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StorageEventInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StorageEventInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StorageEventInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StorageEventInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -101216,6 +105818,8 @@ type StreamAnalyticsDailyDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamAnalyticsDailyDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -101295,6 +105899,11 @@ func (v *StreamAnalyticsDailyDefaultFieldsStream) GetCreatedAt() time.Time { ret
 // GetUpdatedAt returns StreamAnalyticsDailyDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamAnalyticsDailyDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStream) GetIngest() *StreamAnalyticsDailyDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamAnalyticsDailyDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStream) GetMetrics() *StreamAnalyticsDailyDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -101333,6 +105942,45 @@ func (v *StreamAnalyticsDailyDefaultFieldsStream) GetThumbnailAssets() *StreamAn
 // GetRetentionOverrides returns StreamAnalyticsDailyDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStream) GetRetentionOverrides() *StreamAnalyticsDailyDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamAnalyticsDailyDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamAnalyticsDailyDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamAnalyticsDailyDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StreamAnalyticsDailyDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamAnalyticsDailyDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamAnalyticsDailyDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamAnalyticsDailyDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StreamAnalyticsDailyDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamAnalyticsDailyDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamAnalyticsDailyDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -101977,6 +106625,8 @@ type StreamAnalyticsSummaryDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamAnalyticsSummaryDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -102056,6 +106706,11 @@ func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetCreatedAt() time.Time { r
 // GetUpdatedAt returns StreamAnalyticsSummaryDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamAnalyticsSummaryDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetIngest() *StreamAnalyticsSummaryDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamAnalyticsSummaryDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetMetrics() *StreamAnalyticsSummaryDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -102094,6 +106749,49 @@ func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetThumbnailAssets() *Stream
 // GetRetentionOverrides returns StreamAnalyticsSummaryDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetRetentionOverrides() *StreamAnalyticsSummaryDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamAnalyticsSummaryDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamAnalyticsSummaryDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamAnalyticsSummaryDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamAnalyticsSummaryDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -102586,6 +107284,8 @@ type StreamConnectionHourlyDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamConnectionHourlyDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -102665,6 +107365,11 @@ func (v *StreamConnectionHourlyDefaultFieldsStream) GetCreatedAt() time.Time { r
 // GetUpdatedAt returns StreamConnectionHourlyDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamConnectionHourlyDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStream) GetIngest() *StreamConnectionHourlyDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamConnectionHourlyDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStream) GetMetrics() *StreamConnectionHourlyDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -102703,6 +107408,49 @@ func (v *StreamConnectionHourlyDefaultFieldsStream) GetThumbnailAssets() *Stream
 // GetRetentionOverrides returns StreamConnectionHourlyDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStream) GetRetentionOverrides() *StreamConnectionHourlyDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamConnectionHourlyDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamConnectionHourlyDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamConnectionHourlyDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns StreamConnectionHourlyDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamConnectionHourlyDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamConnectionHourlyDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamConnectionHourlyDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns StreamConnectionHourlyDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamConnectionHourlyDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamConnectionHourlyDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -103300,6 +108048,8 @@ type StreamEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -103379,6 +108129,11 @@ func (v *StreamEventDefaultFieldsStream) GetCreatedAt() time.Time { return v.Cre
 // GetUpdatedAt returns StreamEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStream) GetIngest() *StreamEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStream) GetMetrics() *StreamEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -103413,6 +108168,43 @@ func (v *StreamEventDefaultFieldsStream) GetThumbnailAssets() *StreamEventDefaul
 // GetRetentionOverrides returns StreamEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStream) GetRetentionOverrides() *StreamEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StreamEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns StreamEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StreamEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -103968,6 +108760,8 @@ type StreamEventInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamEventInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -104047,6 +108841,11 @@ func (v *StreamEventInNodeDefaultFieldsStream) GetCreatedAt() time.Time { return
 // GetUpdatedAt returns StreamEventInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamEventInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStream) GetIngest() *StreamEventInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamEventInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStream) GetMetrics() *StreamEventInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -104083,6 +108882,45 @@ func (v *StreamEventInNodeDefaultFieldsStream) GetThumbnailAssets() *StreamEvent
 // GetRetentionOverrides returns StreamEventInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStream) GetRetentionOverrides() *StreamEventInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamEventInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamEventInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamEventInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StreamEventInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamEventInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamEventInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamEventInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StreamEventInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamEventInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamEventInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -104964,6 +109802,8 @@ type StreamHealthMetricDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamHealthMetricDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -105043,6 +109883,11 @@ func (v *StreamHealthMetricDefaultFieldsStream) GetCreatedAt() time.Time { retur
 // GetUpdatedAt returns StreamHealthMetricDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamHealthMetricDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStream) GetIngest() *StreamHealthMetricDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamHealthMetricDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStream) GetMetrics() *StreamHealthMetricDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -105079,6 +109924,45 @@ func (v *StreamHealthMetricDefaultFieldsStream) GetThumbnailAssets() *StreamHeal
 // GetRetentionOverrides returns StreamHealthMetricDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStream) GetRetentionOverrides() *StreamHealthMetricDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamHealthMetricDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamHealthMetricDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamHealthMetricDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StreamHealthMetricDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamHealthMetricDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamHealthMetricDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamHealthMetricDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StreamHealthMetricDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamHealthMetricDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamHealthMetricDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -105636,6 +110520,8 @@ type StreamHealthMetricInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamHealthMetricInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -105715,6 +110601,11 @@ func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetCreatedAt() time.Time {
 // GetUpdatedAt returns StreamHealthMetricInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns StreamHealthMetricInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetIngest() *StreamHealthMetricInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamHealthMetricInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetMetrics() *StreamHealthMetricInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -105753,6 +110644,51 @@ func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetThumbnailAssets() *Stre
 // GetRetentionOverrides returns StreamHealthMetricInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetRetentionOverrides() *StreamHealthMetricInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamHealthMetricInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamHealthMetricInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetSessionId() *string {
+	return v.SessionId
+}
+
+// GetConnectedAt returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamHealthMetricInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamHealthMetricInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -106241,6 +111177,8 @@ type StreamInNodeDefaultFields struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	StreamUpdatedAt time.Time `json:"streamUpdatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *StreamInNodeDefaultFieldsIngestStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -106320,6 +111258,11 @@ func (v *StreamInNodeDefaultFields) GetCreatedAt() time.Time { return v.CreatedA
 // GetStreamUpdatedAt returns StreamInNodeDefaultFields.StreamUpdatedAt, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFields) GetStreamUpdatedAt() time.Time { return v.StreamUpdatedAt }
 
+// GetIngest returns StreamInNodeDefaultFields.Ingest, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFields) GetIngest() *StreamInNodeDefaultFieldsIngestStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns StreamInNodeDefaultFields.Metrics, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFields) GetMetrics() *StreamInNodeDefaultFieldsMetricsStreamMetrics {
 	return v.Metrics
@@ -106354,6 +111297,45 @@ func (v *StreamInNodeDefaultFields) GetThumbnailAssets() *StreamInNodeDefaultFie
 // GetRetentionOverrides returns StreamInNodeDefaultFields.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFields) GetRetentionOverrides() *StreamInNodeDefaultFieldsRetentionOverridesStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// StreamInNodeDefaultFieldsIngestStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type StreamInNodeDefaultFieldsIngestStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns StreamInNodeDefaultFieldsIngestStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns StreamInNodeDefaultFieldsIngestStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns StreamInNodeDefaultFieldsIngestStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns StreamInNodeDefaultFieldsIngestStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns StreamInNodeDefaultFieldsIngestStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns StreamInNodeDefaultFieldsIngestStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns StreamInNodeDefaultFieldsIngestStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsIngestStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // StreamInNodeDefaultFieldsManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -106809,42 +111791,19 @@ func (v *StreamInNodeDefaultFieldsThumbnailAssets) GetSpriteJpgUrl() string { re
 // GetAssetKey returns StreamInNodeDefaultFieldsThumbnailAssets.AssetKey, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFieldsThumbnailAssets) GetAssetKey() string { return v.AssetKey }
 
-// StreamKeyFields includes the GraphQL fields of StreamKey requested by the fragment StreamKeyFields.
-type StreamKeyFields struct {
-	Typename *string `json:"__typename"`
-	Id       string  `json:"id"`
-	StreamId string  `json:"streamId"`
-	// The publishing secret. Stream keys are read only through operations that need the streams:write scope.
-	KeyValue   string     `json:"keyValue"`
-	KeyName    *string    `json:"keyName"`
-	IsActive   bool       `json:"isActive"`
-	LastUsedAt *time.Time `json:"lastUsedAt"`
-	CreatedAt  time.Time  `json:"createdAt"`
+type StreamIngestState string
+
+const (
+	StreamIngestStateIdle      StreamIngestState = "IDLE"
+	StreamIngestStateConnected StreamIngestState = "CONNECTED"
+	StreamIngestStateLive      StreamIngestState = "LIVE"
+)
+
+var AllStreamIngestState = []StreamIngestState{
+	StreamIngestStateIdle,
+	StreamIngestStateConnected,
+	StreamIngestStateLive,
 }
-
-// GetTypename returns StreamKeyFields.Typename, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetTypename() *string { return v.Typename }
-
-// GetId returns StreamKeyFields.Id, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetId() string { return v.Id }
-
-// GetStreamId returns StreamKeyFields.StreamId, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetStreamId() string { return v.StreamId }
-
-// GetKeyValue returns StreamKeyFields.KeyValue, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetKeyValue() string { return v.KeyValue }
-
-// GetKeyName returns StreamKeyFields.KeyName, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetKeyName() *string { return v.KeyName }
-
-// GetIsActive returns StreamKeyFields.IsActive, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetIsActive() bool { return v.IsActive }
-
-// GetLastUsedAt returns StreamKeyFields.LastUsedAt, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetLastUsedAt() *time.Time { return v.LastUsedAt }
-
-// GetCreatedAt returns StreamKeyFields.CreatedAt, and is useful for accessing the field via an interface.
-func (v *StreamKeyFields) GetCreatedAt() time.Time { return v.CreatedAt }
 
 // StreamMetricsFields includes the GraphQL fields of StreamMetrics requested by the fragment StreamMetricsFields.
 // The GraphQL type's documentation follows.
@@ -109925,27 +114884,29 @@ func (v *TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack) GetSampleRate
 
 // TenantEventDefaultFieldsViewerMetrics includes the requested fields of the GraphQL type ViewerMetrics.
 type TenantEventDefaultFieldsViewerMetrics struct {
-	NodeId               string                                       `json:"nodeId"`
-	StreamId             string                                       `json:"streamId"`
-	Stream               *TenantEventDefaultFieldsViewerMetricsStream `json:"stream"`
-	Action               string                                       `json:"action"`
-	Protocol             string                                       `json:"protocol"`
-	Host                 *string                                      `json:"host"`
-	SessionId            *string                                      `json:"sessionId"`
-	ConnectionTime       *float64                                     `json:"connectionTime"`
-	Position             *float64                                     `json:"position"`
-	BandwidthInBps       *int                                         `json:"bandwidthInBps"`
-	BandwidthOutBps      *int                                         `json:"bandwidthOutBps"`
-	BytesDownloaded      *float64                                     `json:"bytesDownloaded"`
-	BytesUploaded        *float64                                     `json:"bytesUploaded"`
-	PacketsSent          *int                                         `json:"packetsSent"`
-	PacketsLost          *int                                         `json:"packetsLost"`
-	PacketsRetransmitted *int                                         `json:"packetsRetransmitted"`
-	Timestamp            int                                          `json:"timestamp"`
-	ClientCountry        *string                                      `json:"clientCountry"`
-	ClientCity           *string                                      `json:"clientCity"`
-	ClientLatitude       *float64                                     `json:"clientLatitude"`
-	ClientLongitude      *float64                                     `json:"clientLongitude"`
+	NodeId         string                                       `json:"nodeId"`
+	StreamId       string                                       `json:"streamId"`
+	Stream         *TenantEventDefaultFieldsViewerMetricsStream `json:"stream"`
+	Action         string                                       `json:"action"`
+	Protocol       string                                       `json:"protocol"`
+	Host           *string                                      `json:"host"`
+	SessionId      *string                                      `json:"sessionId"`
+	ConnectionTime *float64                                     `json:"connectionTime"`
+	Position       *float64                                     `json:"position"`
+	// Bandwidth in bytes per second sent to the viewer; legacy field name.
+	BandwidthInBps *int `json:"bandwidthInBps"`
+	// Bandwidth in bytes per second received from the viewer; legacy field name.
+	BandwidthOutBps      *int     `json:"bandwidthOutBps"`
+	BytesDownloaded      *float64 `json:"bytesDownloaded"`
+	BytesUploaded        *float64 `json:"bytesUploaded"`
+	PacketsSent          *int     `json:"packetsSent"`
+	PacketsLost          *int     `json:"packetsLost"`
+	PacketsRetransmitted *int     `json:"packetsRetransmitted"`
+	Timestamp            int      `json:"timestamp"`
+	ClientCountry        *string  `json:"clientCountry"`
+	ClientCity           *string  `json:"clientCity"`
+	ClientLatitude       *float64 `json:"clientLatitude"`
+	ClientLongitude      *float64 `json:"clientLongitude"`
 }
 
 // GetNodeId returns TenantEventDefaultFieldsViewerMetrics.NodeId, and is useful for accessing the field via an interface.
@@ -110251,6 +115212,7 @@ func (v *TenantEventsTenantEventsPublicEvent) __premarshalJSON() (*__premarshalT
 // TenantEventsTenantEventsPublicEventDataMultistreamStatusChanged
 // TenantEventsTenantEventsPublicEventDataPaymentFailed
 // TenantEventsTenantEventsPublicEventDataRecordingChapterFailed
+// TenantEventsTenantEventsPublicEventDataRecordingChapterReady
 // TenantEventsTenantEventsPublicEventDataRecordingFailed
 // TenantEventsTenantEventsPublicEventDataRecordingReady
 // TenantEventsTenantEventsPublicEventDataRecordingStarted
@@ -110258,7 +115220,9 @@ func (v *TenantEventsTenantEventsPublicEvent) __premarshalJSON() (*__premarshalT
 // TenantEventsTenantEventsPublicEventDataStreamConnected
 // TenantEventsTenantEventsPublicEventDataStreamCreated
 // TenantEventsTenantEventsPublicEventDataStreamDeleted
+// TenantEventsTenantEventsPublicEventDataStreamEnded
 // TenantEventsTenantEventsPublicEventDataStreamIdle
+// TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected
 // TenantEventsTenantEventsPublicEventDataStreamKeyRotated
 // TenantEventsTenantEventsPublicEventDataStreamLive
 // TenantEventsTenantEventsPublicEventDataStreamUpdated
@@ -110307,6 +115271,8 @@ func (v *TenantEventsTenantEventsPublicEventDataPaymentFailed) implementsGraphQL
 }
 func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
 func (v *TenantEventsTenantEventsPublicEventDataRecordingFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataRecordingReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
@@ -110321,7 +115287,11 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamCreated) implementsGraphQL
 }
 func (v *TenantEventsTenantEventsPublicEventDataStreamDeleted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
+func (v *TenantEventsTenantEventsPublicEventDataStreamEnded) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
 func (v *TenantEventsTenantEventsPublicEventDataStreamIdle) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
+func (v *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataStreamKeyRotated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
@@ -110398,6 +115368,9 @@ func __unmarshalTenantEventsTenantEventsPublicEventData(b []byte, v *TenantEvent
 	case "RecordingChapterFailed":
 		*v = new(TenantEventsTenantEventsPublicEventDataRecordingChapterFailed)
 		return json.Unmarshal(b, *v)
+	case "RecordingChapterReady":
+		*v = new(TenantEventsTenantEventsPublicEventDataRecordingChapterReady)
+		return json.Unmarshal(b, *v)
 	case "RecordingFailed":
 		*v = new(TenantEventsTenantEventsPublicEventDataRecordingFailed)
 		return json.Unmarshal(b, *v)
@@ -110419,8 +115392,14 @@ func __unmarshalTenantEventsTenantEventsPublicEventData(b []byte, v *TenantEvent
 	case "StreamDeleted":
 		*v = new(TenantEventsTenantEventsPublicEventDataStreamDeleted)
 		return json.Unmarshal(b, *v)
+	case "StreamEnded":
+		*v = new(TenantEventsTenantEventsPublicEventDataStreamEnded)
+		return json.Unmarshal(b, *v)
 	case "StreamIdle":
 		*v = new(TenantEventsTenantEventsPublicEventDataStreamIdle)
+		return json.Unmarshal(b, *v)
+	case "StreamIngestDisconnected":
+		*v = new(TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected)
 		return json.Unmarshal(b, *v)
 	case "StreamKeyRotated":
 		*v = new(TenantEventsTenantEventsPublicEventDataStreamKeyRotated)
@@ -110574,6 +115553,14 @@ func __marshalTenantEventsTenantEventsPublicEventData(v *TenantEventsTenantEvent
 			*TenantEventsTenantEventsPublicEventDataRecordingChapterFailed
 		}{typename, v}
 		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataRecordingChapterReady:
+		typename = "RecordingChapterReady"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataRecordingChapterReady
+		}{typename, v}
+		return json.Marshal(result)
 	case *TenantEventsTenantEventsPublicEventDataRecordingFailed:
 		typename = "RecordingFailed"
 
@@ -110630,12 +115617,28 @@ func __marshalTenantEventsTenantEventsPublicEventData(v *TenantEventsTenantEvent
 			*TenantEventsTenantEventsPublicEventDataStreamDeleted
 		}{typename, v}
 		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataStreamEnded:
+		typename = "StreamEnded"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataStreamEnded
+		}{typename, v}
+		return json.Marshal(result)
 	case *TenantEventsTenantEventsPublicEventDataStreamIdle:
 		typename = "StreamIdle"
 
 		result := struct {
 			TypeName string `json:"__typename"`
 			*TenantEventsTenantEventsPublicEventDataStreamIdle
+		}{typename, v}
+		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected:
+		typename = "StreamIngestDisconnected"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected
 		}{typename, v}
 		return json.Marshal(result)
 	case *TenantEventsTenantEventsPublicEventDataStreamKeyRotated:
@@ -111536,6 +116539,128 @@ func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed) GetTypen
 	return v.Typename
 }
 
+// TenantEventsTenantEventsPublicEventDataRecordingChapterReady includes the requested fields of the GraphQL type RecordingChapterReady.
+// The GraphQL type's documentation follows.
+//
+// `recording.chapter_ready` event. Aggregate: `artifacts`.
+type TenantEventsTenantEventsPublicEventDataRecordingChapterReady struct {
+	Typename  *string                                                                            `json:"__typename"`
+	Artifact  *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact `json:"artifact"`
+	ChapterId string                                                                             `json:"chapterId"`
+	StartMs   int                                                                                `json:"startMs"`
+	EndMs     int                                                                                `json:"endMs"`
+	SizeBytes int                                                                                `json:"sizeBytes"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetTypename() *string {
+	return v.Typename
+}
+
+// GetArtifact returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.Artifact, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetArtifact() *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact {
+	return v.Artifact
+}
+
+// GetChapterId returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.ChapterId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetChapterId() string {
+	return v.ChapterId
+}
+
+// GetStartMs returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.StartMs, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetStartMs() int {
+	return v.StartMs
+}
+
+// GetEndMs returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.EndMs, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetEndMs() int { return v.EndMs }
+
+// GetSizeBytes returns TenantEventsTenantEventsPublicEventDataRecordingChapterReady.SizeBytes, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReady) GetSizeBytes() int {
+	return v.SizeBytes
+}
+
+// TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact includes the requested fields of the GraphQL type EventArtifact.
+// The GraphQL type's documentation follows.
+//
+// Part of a public event payload (frameworks.events.public.v1.Artifact).
+type TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact struct {
+	EventArtifactFields `json:"-"`
+}
+
+// GetArtifactId returns TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact.ArtifactId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) GetArtifactId() string {
+	return v.EventArtifactFields.ArtifactId
+}
+
+// GetKind returns TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact.Kind, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) GetKind() EventArtifactKind {
+	return v.EventArtifactFields.Kind
+}
+
+// GetStreamId returns TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact.StreamId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) GetStreamId() string {
+	return v.EventArtifactFields.StreamId
+}
+
+// GetPlaybackId returns TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact.PlaybackId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) GetPlaybackId() string {
+	return v.EventArtifactFields.PlaybackId
+}
+
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.EventArtifactFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalTenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact struct {
+	ArtifactId string `json:"artifactId"`
+
+	Kind EventArtifactKind `json:"kind"`
+
+	StreamId string `json:"streamId"`
+
+	PlaybackId string `json:"playbackId"`
+}
+
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact) __premarshalJSON() (*__premarshalTenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact, error) {
+	var retval __premarshalTenantEventsTenantEventsPublicEventDataRecordingChapterReadyArtifactEventArtifact
+
+	retval.ArtifactId = v.EventArtifactFields.ArtifactId
+	retval.Kind = v.EventArtifactFields.Kind
+	retval.StreamId = v.EventArtifactFields.StreamId
+	retval.PlaybackId = v.EventArtifactFields.PlaybackId
+	return &retval, nil
+}
+
 // TenantEventsTenantEventsPublicEventDataRecordingFailed includes the requested fields of the GraphQL type RecordingFailed.
 // The GraphQL type's documentation follows.
 //
@@ -111785,9 +116910,10 @@ func (v *TenantEventsTenantEventsPublicEventDataRecordingStopped) GetTypename() 
 //
 // `stream.connected` event. Aggregate: `streams`.
 type TenantEventsTenantEventsPublicEventDataStreamConnected struct {
-	Typename *string             `json:"__typename"`
-	StreamId string              `json:"streamId"`
-	Protocol EventIngestProtocol `json:"protocol"`
+	Typename  *string             `json:"__typename"`
+	StreamId  string              `json:"streamId"`
+	Protocol  EventIngestProtocol `json:"protocol"`
+	SessionId string              `json:"sessionId"`
 }
 
 // GetTypename returns TenantEventsTenantEventsPublicEventDataStreamConnected.Typename, and is useful for accessing the field via an interface.
@@ -111803,6 +116929,11 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamConnected) GetStreamId() s
 // GetProtocol returns TenantEventsTenantEventsPublicEventDataStreamConnected.Protocol, and is useful for accessing the field via an interface.
 func (v *TenantEventsTenantEventsPublicEventDataStreamConnected) GetProtocol() EventIngestProtocol {
 	return v.Protocol
+}
+
+// GetSessionId returns TenantEventsTenantEventsPublicEventDataStreamConnected.SessionId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamConnected) GetSessionId() string {
+	return v.SessionId
 }
 
 // TenantEventsTenantEventsPublicEventDataStreamCreated includes the requested fields of the GraphQL type StreamCreated.
@@ -111853,13 +116984,41 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamDeleted) GetStreamId() str
 	return v.StreamId
 }
 
+// TenantEventsTenantEventsPublicEventDataStreamEnded includes the requested fields of the GraphQL type StreamEnded.
+// The GraphQL type's documentation follows.
+//
+// `stream.ended` event. Aggregate: `streams`.
+type TenantEventsTenantEventsPublicEventDataStreamEnded struct {
+	Typename   *string `json:"__typename"`
+	StreamId   string  `json:"streamId"`
+	PlaybackId string  `json:"playbackId"`
+	SessionId  string  `json:"sessionId"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataStreamEnded.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamEnded) GetTypename() *string { return v.Typename }
+
+// GetStreamId returns TenantEventsTenantEventsPublicEventDataStreamEnded.StreamId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamEnded) GetStreamId() string { return v.StreamId }
+
+// GetPlaybackId returns TenantEventsTenantEventsPublicEventDataStreamEnded.PlaybackId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamEnded) GetPlaybackId() string {
+	return v.PlaybackId
+}
+
+// GetSessionId returns TenantEventsTenantEventsPublicEventDataStreamEnded.SessionId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamEnded) GetSessionId() string {
+	return v.SessionId
+}
+
 // TenantEventsTenantEventsPublicEventDataStreamIdle includes the requested fields of the GraphQL type StreamIdle.
 // The GraphQL type's documentation follows.
 //
 // `stream.idle` event. Aggregate: `streams`.
 type TenantEventsTenantEventsPublicEventDataStreamIdle struct {
-	Typename *string `json:"__typename"`
-	StreamId string  `json:"streamId"`
+	Typename  *string `json:"__typename"`
+	StreamId  string  `json:"streamId"`
+	SessionId string  `json:"sessionId"`
 }
 
 // GetTypename returns TenantEventsTenantEventsPublicEventDataStreamIdle.Typename, and is useful for accessing the field via an interface.
@@ -111867,6 +117026,40 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamIdle) GetTypename() *strin
 
 // GetStreamId returns TenantEventsTenantEventsPublicEventDataStreamIdle.StreamId, and is useful for accessing the field via an interface.
 func (v *TenantEventsTenantEventsPublicEventDataStreamIdle) GetStreamId() string { return v.StreamId }
+
+// GetSessionId returns TenantEventsTenantEventsPublicEventDataStreamIdle.SessionId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamIdle) GetSessionId() string { return v.SessionId }
+
+// TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected includes the requested fields of the GraphQL type StreamIngestDisconnected.
+// The GraphQL type's documentation follows.
+//
+// `stream.ingest_disconnected` event. Aggregate: `streams`.
+type TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected struct {
+	Typename         *string `json:"__typename"`
+	StreamId         string  `json:"streamId"`
+	SessionId        string  `json:"sessionId"`
+	DisconnectReason string  `json:"disconnectReason"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected) GetTypename() *string {
+	return v.Typename
+}
+
+// GetStreamId returns TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected.StreamId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected) GetStreamId() string {
+	return v.StreamId
+}
+
+// GetSessionId returns TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected.SessionId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected) GetSessionId() string {
+	return v.SessionId
+}
+
+// GetDisconnectReason returns TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected.DisconnectReason, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamIngestDisconnected) GetDisconnectReason() string {
+	return v.DisconnectReason
+}
 
 // TenantEventsTenantEventsPublicEventDataStreamKeyRotated includes the requested fields of the GraphQL type StreamKeyRotated.
 // The GraphQL type's documentation follows.
@@ -111892,8 +117085,9 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamKeyRotated) GetStreamId() 
 //
 // `stream.live` event. Aggregate: `streams`.
 type TenantEventsTenantEventsPublicEventDataStreamLive struct {
-	Typename *string `json:"__typename"`
-	StreamId string  `json:"streamId"`
+	Typename  *string `json:"__typename"`
+	StreamId  string  `json:"streamId"`
+	SessionId string  `json:"sessionId"`
 }
 
 // GetTypename returns TenantEventsTenantEventsPublicEventDataStreamLive.Typename, and is useful for accessing the field via an interface.
@@ -111901,6 +117095,9 @@ func (v *TenantEventsTenantEventsPublicEventDataStreamLive) GetTypename() *strin
 
 // GetStreamId returns TenantEventsTenantEventsPublicEventDataStreamLive.StreamId, and is useful for accessing the field via an interface.
 func (v *TenantEventsTenantEventsPublicEventDataStreamLive) GetStreamId() string { return v.StreamId }
+
+// GetSessionId returns TenantEventsTenantEventsPublicEventDataStreamLive.SessionId, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataStreamLive) GetSessionId() string { return v.SessionId }
 
 // TenantEventsTenantEventsPublicEventDataStreamUpdated includes the requested fields of the GraphQL type StreamUpdated.
 // The GraphQL type's documentation follows.
@@ -113772,6 +118969,8 @@ type TrackListEventDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *TrackListEventDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -113851,6 +119050,11 @@ func (v *TrackListEventDefaultFieldsStream) GetCreatedAt() time.Time { return v.
 // GetUpdatedAt returns TrackListEventDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns TrackListEventDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStream) GetIngest() *TrackListEventDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns TrackListEventDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStream) GetMetrics() *TrackListEventDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -113887,6 +119091,43 @@ func (v *TrackListEventDefaultFieldsStream) GetThumbnailAssets() *TrackListEvent
 // GetRetentionOverrides returns TrackListEventDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStream) GetRetentionOverrides() *TrackListEventDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// TrackListEventDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type TrackListEventDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns TrackListEventDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns TrackListEventDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns TrackListEventDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns TrackListEventDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns TrackListEventDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns TrackListEventDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns TrackListEventDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // TrackListEventDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -114386,6 +119627,8 @@ type TrackListEventInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *TrackListEventInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -114465,6 +119708,11 @@ func (v *TrackListEventInNodeDefaultFieldsStream) GetCreatedAt() time.Time { ret
 // GetUpdatedAt returns TrackListEventInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns TrackListEventInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStream) GetIngest() *TrackListEventInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns TrackListEventInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStream) GetMetrics() *TrackListEventInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -114503,6 +119751,45 @@ func (v *TrackListEventInNodeDefaultFieldsStream) GetThumbnailAssets() *TrackLis
 // GetRetentionOverrides returns TrackListEventInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStream) GetRetentionOverrides() *TrackListEventInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// TrackListEventInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type TrackListEventInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns TrackListEventInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns TrackListEventInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns TrackListEventInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns TrackListEventInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns TrackListEventInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns TrackListEventInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns TrackListEventInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // TrackListEventInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -115088,6 +120375,8 @@ type TrackListUpdateDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *TrackListUpdateDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -115167,6 +120456,11 @@ func (v *TrackListUpdateDefaultFieldsStream) GetCreatedAt() time.Time { return v
 // GetUpdatedAt returns TrackListUpdateDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns TrackListUpdateDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStream) GetIngest() *TrackListUpdateDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns TrackListUpdateDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStream) GetMetrics() *TrackListUpdateDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -115203,6 +120497,43 @@ func (v *TrackListUpdateDefaultFieldsStream) GetThumbnailAssets() *TrackListUpda
 // GetRetentionOverrides returns TrackListUpdateDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStream) GetRetentionOverrides() *TrackListUpdateDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// TrackListUpdateDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type TrackListUpdateDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns TrackListUpdateDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns TrackListUpdateDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns TrackListUpdateDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns TrackListUpdateDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns TrackListUpdateDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns TrackListUpdateDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns TrackListUpdateDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // TrackListUpdateDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -115632,6 +120963,57 @@ func (v *TrackListUpdateDefaultFieldsTracksStreamTrack) GetChannels() *int { ret
 
 // GetSampleRate returns TrackListUpdateDefaultFieldsTracksStreamTrack.SampleRate, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsTracksStreamTrack) GetSampleRate() *int { return v.SampleRate }
+
+// TranscodeLadderPolicyDefaultFields includes the GraphQL fields of TranscodeLadderPolicy requested by the fragment TranscodeLadderPolicyDefaultFields.
+type TranscodeLadderPolicyDefaultFields struct {
+	Ladders         []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder `json:"ladders"`
+	PlanDefault     string                                                     `json:"planDefault"`
+	TenantLadder    *string                                                    `json:"tenantLadder"`
+	EffectiveLadder string                                                     `json:"effectiveLadder"`
+}
+
+// GetLadders returns TranscodeLadderPolicyDefaultFields.Ladders, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFields) GetLadders() []TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder {
+	return v.Ladders
+}
+
+// GetPlanDefault returns TranscodeLadderPolicyDefaultFields.PlanDefault, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFields) GetPlanDefault() string { return v.PlanDefault }
+
+// GetTenantLadder returns TranscodeLadderPolicyDefaultFields.TenantLadder, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFields) GetTenantLadder() *string { return v.TenantLadder }
+
+// GetEffectiveLadder returns TranscodeLadderPolicyDefaultFields.EffectiveLadder, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFields) GetEffectiveLadder() string { return v.EffectiveLadder }
+
+// TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder includes the requested fields of the GraphQL type TranscodeLadder.
+// The GraphQL type's documentation follows.
+//
+// A named video rendition ladder, with rungs skipped for smaller sources.
+type TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder struct {
+	Name           string   `json:"name"`
+	DisplayName    string   `json:"displayName"`
+	Description    string   `json:"description"`
+	RenditionNames []string `json:"renditionNames"`
+}
+
+// GetName returns TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder.Name, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder) GetName() string { return v.Name }
+
+// GetDisplayName returns TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder.DisplayName, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder) GetDisplayName() string {
+	return v.DisplayName
+}
+
+// GetDescription returns TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder.Description, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder) GetDescription() string {
+	return v.Description
+}
+
+// GetRenditionNames returns TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder.RenditionNames, and is useful for accessing the field via an interface.
+func (v *TranscodeLadderPolicyDefaultFieldsLaddersTranscodeLadder) GetRenditionNames() []string {
+	return v.RenditionNames
+}
 
 // UnlinkWalletResponse is returned by UnlinkWallet on success.
 type UnlinkWalletResponse struct {
@@ -116469,9 +121851,9 @@ func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceCluster) GetMaxConcurre
 	return v.ClusterDefaultFields.MaxConcurrentViewers
 }
 
-// GetMaxBandwidthMbps returns UpdateClusterMarketplaceUpdateClusterMarketplaceCluster.MaxBandwidthMbps, and is useful for accessing the field via an interface.
-func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceCluster) GetMaxBandwidthMbps() int {
-	return v.ClusterDefaultFields.MaxBandwidthMbps
+// GetCapacity returns UpdateClusterMarketplaceUpdateClusterMarketplaceCluster.Capacity, and is useful for accessing the field via an interface.
+func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceCluster) GetCapacity() *ClusterDefaultFieldsCapacityClusterCapacity {
+	return v.ClusterDefaultFields.Capacity
 }
 
 // GetHealthStatus returns UpdateClusterMarketplaceUpdateClusterMarketplaceCluster.HealthStatus, and is useful for accessing the field via an interface.
@@ -116594,7 +121976,7 @@ type __premarshalUpdateClusterMarketplaceUpdateClusterMarketplaceCluster struct 
 
 	MaxConcurrentViewers int `json:"maxConcurrentViewers"`
 
-	MaxBandwidthMbps int `json:"maxBandwidthMbps"`
+	Capacity *ClusterDefaultFieldsCapacityClusterCapacity `json:"capacity"`
 
 	HealthStatus string `json:"healthStatus"`
 
@@ -116648,7 +122030,7 @@ func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceCluster) __premarshalJS
 	retval.KafkaBrokers = v.ClusterDefaultFields.KafkaBrokers
 	retval.MaxConcurrentStreams = v.ClusterDefaultFields.MaxConcurrentStreams
 	retval.MaxConcurrentViewers = v.ClusterDefaultFields.MaxConcurrentViewers
-	retval.MaxBandwidthMbps = v.ClusterDefaultFields.MaxBandwidthMbps
+	retval.Capacity = v.ClusterDefaultFields.Capacity
 	retval.HealthStatus = v.ClusterDefaultFields.HealthStatus
 	retval.IsActive = v.ClusterDefaultFields.IsActive
 	retval.IsDefaultCluster = v.ClusterDefaultFields.IsDefaultCluster
@@ -117773,6 +123155,8 @@ type UpdateStreamInput struct {
 	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds"`
 	// Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 	Monitoring *MonitoringToggle `json:"monitoring"`
+	// Ladder name; empty inherits the account, then plan. Applies from the next broadcast.
+	TranscodeLadder *string `json:"transcodeLadder"`
 }
 
 // GetName returns UpdateStreamInput.Name, and is useful for accessing the field via an interface.
@@ -117804,6 +123188,9 @@ func (v *UpdateStreamInput) GetDvrChapterIntervalSeconds() *int { return v.DvrCh
 
 // GetMonitoring returns UpdateStreamInput.Monitoring, and is useful for accessing the field via an interface.
 func (v *UpdateStreamInput) GetMonitoring() *MonitoringToggle { return v.Monitoring }
+
+// GetTranscodeLadder returns UpdateStreamInput.TranscodeLadder, and is useful for accessing the field via an interface.
+func (v *UpdateStreamInput) GetTranscodeLadder() *string { return v.TranscodeLadder }
 
 // UpdateStreamResponse is returned by UpdateStream on success.
 type UpdateStreamResponse struct {
@@ -119591,6 +124978,8 @@ type ViewerCountBucketDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerCountBucketDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -119670,6 +125059,11 @@ func (v *ViewerCountBucketDefaultFieldsStream) GetCreatedAt() time.Time { return
 // GetUpdatedAt returns ViewerCountBucketDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerCountBucketDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStream) GetIngest() *ViewerCountBucketDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerCountBucketDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStream) GetMetrics() *ViewerCountBucketDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -119706,6 +125100,45 @@ func (v *ViewerCountBucketDefaultFieldsStream) GetThumbnailAssets() *ViewerCount
 // GetRetentionOverrides returns ViewerCountBucketDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStream) GetRetentionOverrides() *ViewerCountBucketDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerCountBucketDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerCountBucketDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerCountBucketDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerCountBucketDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerCountBucketDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerCountBucketDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ViewerCountBucketDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerCountBucketDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerCountBucketDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerCountBucketDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -120281,6 +125714,8 @@ type ViewerGeographicDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerGeographicDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -120360,6 +125795,11 @@ func (v *ViewerGeographicDefaultFieldsStream) GetCreatedAt() time.Time { return 
 // GetUpdatedAt returns ViewerGeographicDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerGeographicDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStream) GetIngest() *ViewerGeographicDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerGeographicDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStream) GetMetrics() *ViewerGeographicDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -120396,6 +125836,43 @@ func (v *ViewerGeographicDefaultFieldsStream) GetThumbnailAssets() *ViewerGeogra
 // GetRetentionOverrides returns ViewerGeographicDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStream) GetRetentionOverrides() *ViewerGeographicDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerGeographicDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerGeographicDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerGeographicDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerGeographicDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerGeographicDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerGeographicDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ViewerGeographicDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerGeographicDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerGeographicDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerGeographicDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -120855,6 +126332,8 @@ type ViewerHoursHourlyDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerHoursHourlyDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -120934,6 +126413,11 @@ func (v *ViewerHoursHourlyDefaultFieldsStream) GetCreatedAt() time.Time { return
 // GetUpdatedAt returns ViewerHoursHourlyDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerHoursHourlyDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStream) GetIngest() *ViewerHoursHourlyDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerHoursHourlyDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStream) GetMetrics() *ViewerHoursHourlyDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -120970,6 +126454,45 @@ func (v *ViewerHoursHourlyDefaultFieldsStream) GetThumbnailAssets() *ViewerHours
 // GetRetentionOverrides returns ViewerHoursHourlyDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStream) GetRetentionOverrides() *ViewerHoursHourlyDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerHoursHourlyDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerHoursHourlyDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerHoursHourlyDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerHoursHourlyDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerHoursHourlyDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerHoursHourlyDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ViewerHoursHourlyDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerHoursHourlyDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerHoursHourlyDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerHoursHourlyDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -121437,6 +126960,8 @@ type ViewerHoursHourlyInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -121516,6 +127041,11 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetCreatedAt() time.Time { 
 // GetUpdatedAt returns ViewerHoursHourlyInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerHoursHourlyInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetIngest() *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerHoursHourlyInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetMetrics() *ViewerHoursHourlyInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -121554,6 +127084,49 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetThumbnailAssets() *Viewe
 // GetRetentionOverrides returns ViewerHoursHourlyInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetRetentionOverrides() *ViewerHoursHourlyInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerHoursHourlyInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerHoursHourlyInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState {
+	return v.State
+}
+
+// GetIsLive returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time {
+	return v.LiveSince
+}
+
+// GetEndedAt returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerHoursHourlyInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerHoursHourlyInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -121960,27 +127533,29 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamThumbnailAssets) GetAssetKey(
 
 // ViewerMetricsDefaultFields includes the GraphQL fields of ViewerMetrics requested by the fragment ViewerMetricsDefaultFields.
 type ViewerMetricsDefaultFields struct {
-	NodeId               string                            `json:"nodeId"`
-	StreamId             string                            `json:"streamId"`
-	Stream               *ViewerMetricsDefaultFieldsStream `json:"stream"`
-	Action               string                            `json:"action"`
-	Protocol             string                            `json:"protocol"`
-	Host                 *string                           `json:"host"`
-	SessionId            *string                           `json:"sessionId"`
-	ConnectionTime       *float64                          `json:"connectionTime"`
-	Position             *float64                          `json:"position"`
-	BandwidthInBps       *int                              `json:"bandwidthInBps"`
-	BandwidthOutBps      *int                              `json:"bandwidthOutBps"`
-	BytesDownloaded      *float64                          `json:"bytesDownloaded"`
-	BytesUploaded        *float64                          `json:"bytesUploaded"`
-	PacketsSent          *int                              `json:"packetsSent"`
-	PacketsLost          *int                              `json:"packetsLost"`
-	PacketsRetransmitted *int                              `json:"packetsRetransmitted"`
-	Timestamp            int                               `json:"timestamp"`
-	ClientCountry        *string                           `json:"clientCountry"`
-	ClientCity           *string                           `json:"clientCity"`
-	ClientLatitude       *float64                          `json:"clientLatitude"`
-	ClientLongitude      *float64                          `json:"clientLongitude"`
+	NodeId         string                            `json:"nodeId"`
+	StreamId       string                            `json:"streamId"`
+	Stream         *ViewerMetricsDefaultFieldsStream `json:"stream"`
+	Action         string                            `json:"action"`
+	Protocol       string                            `json:"protocol"`
+	Host           *string                           `json:"host"`
+	SessionId      *string                           `json:"sessionId"`
+	ConnectionTime *float64                          `json:"connectionTime"`
+	Position       *float64                          `json:"position"`
+	// Bandwidth in bytes per second sent to the viewer; legacy field name.
+	BandwidthInBps *int `json:"bandwidthInBps"`
+	// Bandwidth in bytes per second received from the viewer; legacy field name.
+	BandwidthOutBps      *int     `json:"bandwidthOutBps"`
+	BytesDownloaded      *float64 `json:"bytesDownloaded"`
+	BytesUploaded        *float64 `json:"bytesUploaded"`
+	PacketsSent          *int     `json:"packetsSent"`
+	PacketsLost          *int     `json:"packetsLost"`
+	PacketsRetransmitted *int     `json:"packetsRetransmitted"`
+	Timestamp            int      `json:"timestamp"`
+	ClientCountry        *string  `json:"clientCountry"`
+	ClientCity           *string  `json:"clientCity"`
+	ClientLatitude       *float64 `json:"clientLatitude"`
+	ClientLongitude      *float64 `json:"clientLongitude"`
 }
 
 // GetNodeId returns ViewerMetricsDefaultFields.NodeId, and is useful for accessing the field via an interface.
@@ -122083,6 +127658,8 @@ type ViewerMetricsDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerMetricsDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -122162,6 +127739,11 @@ func (v *ViewerMetricsDefaultFieldsStream) GetCreatedAt() time.Time { return v.C
 // GetUpdatedAt returns ViewerMetricsDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerMetricsDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStream) GetIngest() *ViewerMetricsDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerMetricsDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStream) GetMetrics() *ViewerMetricsDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -122198,6 +127780,43 @@ func (v *ViewerMetricsDefaultFieldsStream) GetThumbnailAssets() *ViewerMetricsDe
 // GetRetentionOverrides returns ViewerMetricsDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStream) GetRetentionOverrides() *ViewerMetricsDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerMetricsDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerMetricsDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerMetricsDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerMetricsDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerMetricsDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerMetricsDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ViewerMetricsDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerMetricsDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerMetricsDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerMetricsDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -122687,6 +128306,8 @@ type ViewerSessionDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerSessionDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -122766,6 +128387,11 @@ func (v *ViewerSessionDefaultFieldsStream) GetCreatedAt() time.Time { return v.C
 // GetUpdatedAt returns ViewerSessionDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerSessionDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStream) GetIngest() *ViewerSessionDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerSessionDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStream) GetMetrics() *ViewerSessionDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -122802,6 +128428,43 @@ func (v *ViewerSessionDefaultFieldsStream) GetThumbnailAssets() *ViewerSessionDe
 // GetRetentionOverrides returns ViewerSessionDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStream) GetRetentionOverrides() *ViewerSessionDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerSessionDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerSessionDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerSessionDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerSessionDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerSessionDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerSessionDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetConnectedAt() *time.Time { return v.ConnectedAt }
+
+// GetLiveSince returns ViewerSessionDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerSessionDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerSessionDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerSessionDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -123301,6 +128964,8 @@ type ViewerSessionInNodeDefaultFieldsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+	Ingest *ViewerSessionInNodeDefaultFieldsStreamIngest `json:"ingest"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
 	// Lazily loaded from ClickHouse analytics, so an API token needs the
@@ -123380,6 +129045,11 @@ func (v *ViewerSessionInNodeDefaultFieldsStream) GetCreatedAt() time.Time { retu
 // GetUpdatedAt returns ViewerSessionInNodeDefaultFieldsStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStream) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
+// GetIngest returns ViewerSessionInNodeDefaultFieldsStream.Ingest, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStream) GetIngest() *ViewerSessionInNodeDefaultFieldsStreamIngest {
+	return v.Ingest
+}
+
 // GetMetrics returns ViewerSessionInNodeDefaultFieldsStream.Metrics, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStream) GetMetrics() *ViewerSessionInNodeDefaultFieldsStreamMetrics {
 	return v.Metrics
@@ -123418,6 +129088,45 @@ func (v *ViewerSessionInNodeDefaultFieldsStream) GetThumbnailAssets() *ViewerSes
 // GetRetentionOverrides returns ViewerSessionInNodeDefaultFieldsStream.RetentionOverrides, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStream) GetRetentionOverrides() *ViewerSessionInNodeDefaultFieldsStreamRetentionOverrides {
 	return v.RetentionOverrides
+}
+
+// ViewerSessionInNodeDefaultFieldsStreamIngest includes the requested fields of the GraphQL type StreamIngest.
+// The GraphQL type's documentation follows.
+//
+// Current ingest-session state, readable with streams:read.
+type ViewerSessionInNodeDefaultFieldsStreamIngest struct {
+	State          StreamIngestState `json:"state"`
+	IsLive         bool              `json:"isLive"`
+	SessionId      *string           `json:"sessionId"`
+	ConnectedAt    *time.Time        `json:"connectedAt"`
+	LiveSince      *time.Time        `json:"liveSince"`
+	EndedAt        *time.Time        `json:"endedAt"`
+	ResumableUntil *time.Time        `json:"resumableUntil"`
+}
+
+// GetState returns ViewerSessionInNodeDefaultFieldsStreamIngest.State, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetState() StreamIngestState { return v.State }
+
+// GetIsLive returns ViewerSessionInNodeDefaultFieldsStreamIngest.IsLive, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetIsLive() bool { return v.IsLive }
+
+// GetSessionId returns ViewerSessionInNodeDefaultFieldsStreamIngest.SessionId, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetSessionId() *string { return v.SessionId }
+
+// GetConnectedAt returns ViewerSessionInNodeDefaultFieldsStreamIngest.ConnectedAt, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetConnectedAt() *time.Time {
+	return v.ConnectedAt
+}
+
+// GetLiveSince returns ViewerSessionInNodeDefaultFieldsStreamIngest.LiveSince, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetLiveSince() *time.Time { return v.LiveSince }
+
+// GetEndedAt returns ViewerSessionInNodeDefaultFieldsStreamIngest.EndedAt, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetEndedAt() *time.Time { return v.EndedAt }
+
+// GetResumableUntil returns ViewerSessionInNodeDefaultFieldsStreamIngest.ResumableUntil, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamIngest) GetResumableUntil() *time.Time {
+	return v.ResumableUntil
 }
 
 // ViewerSessionInNodeDefaultFieldsStreamManagedSourceManagedSourceView includes the requested fields of the GraphQL type ManagedSourceView.
@@ -124243,6 +129952,8 @@ type VodAssetInNodeDefaultFields struct {
 	// the tenant has no storage meter (self-hosted, fully tenant-private
 	// cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
 	StorageCost *VodAssetInNodeDefaultFieldsStorageCostStorageCostProjection `json:"storageCost"`
+	// Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original.
+	OriginalFile *VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile `json:"originalFile"`
 }
 
 // GetId returns VodAssetInNodeDefaultFields.Id, and is useful for accessing the field via an interface.
@@ -124342,6 +130053,11 @@ func (v *VodAssetInNodeDefaultFields) GetStorageCost() *VodAssetInNodeDefaultFie
 	return v.StorageCost
 }
 
+// GetOriginalFile returns VodAssetInNodeDefaultFields.OriginalFile, and is useful for accessing the field via an interface.
+func (v *VodAssetInNodeDefaultFields) GetOriginalFile() *VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile {
+	return v.OriginalFile
+}
+
 // VodAssetInNodeDefaultFieldsEffectiveRetention includes the requested fields of the GraphQL type EffectiveRetention.
 // The GraphQL type's documentation follows.
 //
@@ -124368,6 +130084,19 @@ func (v *VodAssetInNodeDefaultFieldsEffectiveRetention) GetRetentionUntil() *tim
 
 // GetSource returns VodAssetInNodeDefaultFieldsEffectiveRetention.Source, and is useful for accessing the field via an interface.
 func (v *VodAssetInNodeDefaultFieldsEffectiveRetention) GetSource() RetentionSource { return v.Source }
+
+// VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile includes the requested fields of the GraphQL type VodOriginalFile.
+// The GraphQL type's documentation follows.
+//
+// Metadata of the byte-identical retained upload.
+type VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile struct {
+	SizeBytes float64 `json:"sizeBytes"`
+}
+
+// GetSizeBytes returns VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile.SizeBytes, and is useful for accessing the field via an interface.
+func (v *VodAssetInNodeDefaultFieldsOriginalFileVodOriginalFile) GetSizeBytes() float64 {
+	return v.SizeBytes
+}
 
 // VodAssetInNodeDefaultFieldsPlaybackPolicy includes the requested fields of the GraphQL type PlaybackPolicy.
 // The GraphQL type's documentation follows.
@@ -124545,6 +130274,29 @@ var AllVodAssetStatus = []VodAssetStatus{
 	VodAssetStatusDeleted,
 	VodAssetStatusExpired,
 }
+
+// VodOriginalDownloadDefaultFields includes the GraphQL fields of VodOriginalDownload requested by the fragment VodOriginalDownloadDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// Short-lived download of the byte-identical original upload, without playback metering.
+type VodOriginalDownloadDefaultFields struct {
+	Url       string    `json:"url"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	SizeBytes float64   `json:"sizeBytes"`
+	Filename  string    `json:"filename"`
+}
+
+// GetUrl returns VodOriginalDownloadDefaultFields.Url, and is useful for accessing the field via an interface.
+func (v *VodOriginalDownloadDefaultFields) GetUrl() string { return v.Url }
+
+// GetExpiresAt returns VodOriginalDownloadDefaultFields.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *VodOriginalDownloadDefaultFields) GetExpiresAt() time.Time { return v.ExpiresAt }
+
+// GetSizeBytes returns VodOriginalDownloadDefaultFields.SizeBytes, and is useful for accessing the field via an interface.
+func (v *VodOriginalDownloadDefaultFields) GetSizeBytes() float64 { return v.SizeBytes }
+
+// GetFilename returns VodOriginalDownloadDefaultFields.Filename, and is useful for accessing the field via an interface.
+func (v *VodOriginalDownloadDefaultFields) GetFilename() string { return v.Filename }
 
 // VodRetentionAssetDefaultFields includes the GraphQL fields of VodRetentionAsset requested by the fragment VodRetentionAssetDefaultFields.
 // The GraphQL type's documentation follows.
@@ -126053,18 +131805,6 @@ type __CreateStreamInput struct {
 // GetInput returns __CreateStreamInput.Input, and is useful for accessing the field via an interface.
 func (v *__CreateStreamInput) GetInput() CreateStreamInput { return v.Input }
 
-// __CreateStreamKeyInput is used internally by genqlient
-type __CreateStreamKeyInput struct {
-	StreamId string               `json:"streamId"`
-	Input    CreateStreamKeyInput `json:"input"`
-}
-
-// GetStreamId returns __CreateStreamKeyInput.StreamId, and is useful for accessing the field via an interface.
-func (v *__CreateStreamKeyInput) GetStreamId() string { return v.StreamId }
-
-// GetInput returns __CreateStreamKeyInput.Input, and is useful for accessing the field via an interface.
-func (v *__CreateStreamKeyInput) GetInput() CreateStreamKeyInput { return v.Input }
-
 // __CreateStripeBillingPortalInput is used internally by genqlient
 type __CreateStripeBillingPortalInput struct {
 	ReturnUrl string `json:"returnUrl"`
@@ -126092,6 +131832,14 @@ func (v *__CreateStripeCheckoutInput) GetSuccessUrl() string { return v.SuccessU
 
 // GetCancelUrl returns __CreateStripeCheckoutInput.CancelUrl, and is useful for accessing the field via an interface.
 func (v *__CreateStripeCheckoutInput) GetCancelUrl() string { return v.CancelUrl }
+
+// __CreateVodOriginalDownloadInput is used internally by genqlient
+type __CreateVodOriginalDownloadInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __CreateVodOriginalDownloadInput.Id, and is useful for accessing the field via an interface.
+func (v *__CreateVodOriginalDownloadInput) GetId() string { return v.Id }
 
 // __CreateVodUploadInput is used internally by genqlient
 type __CreateVodUploadInput struct {
@@ -126157,18 +131905,6 @@ type __DeleteStreamInput struct {
 // GetId returns __DeleteStreamInput.Id, and is useful for accessing the field via an interface.
 func (v *__DeleteStreamInput) GetId() string { return v.Id }
 
-// __DeleteStreamKeyInput is used internally by genqlient
-type __DeleteStreamKeyInput struct {
-	StreamId string `json:"streamId"`
-	KeyId    string `json:"keyId"`
-}
-
-// GetStreamId returns __DeleteStreamKeyInput.StreamId, and is useful for accessing the field via an interface.
-func (v *__DeleteStreamKeyInput) GetStreamId() string { return v.StreamId }
-
-// GetKeyId returns __DeleteStreamKeyInput.KeyId, and is useful for accessing the field via an interface.
-func (v *__DeleteStreamKeyInput) GetKeyId() string { return v.KeyId }
-
 // __DeleteVodAssetInput is used internally by genqlient
 type __DeleteVodAssetInput struct {
 	Id string `json:"id"`
@@ -126176,6 +131912,14 @@ type __DeleteVodAssetInput struct {
 
 // GetId returns __DeleteVodAssetInput.Id, and is useful for accessing the field via an interface.
 func (v *__DeleteVodAssetInput) GetId() string { return v.Id }
+
+// __DeleteVodOriginalInput is used internally by genqlient
+type __DeleteVodOriginalInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __DeleteVodOriginalInput.Id, and is useful for accessing the field via an interface.
+func (v *__DeleteVodOriginalInput) GetId() string { return v.Id }
 
 // __DeleteWebhookEndpointInput is used internally by genqlient
 type __DeleteWebhookEndpointInput struct {
@@ -126192,6 +131936,14 @@ type __DisableWebhookEndpointInput struct {
 
 // GetId returns __DisableWebhookEndpointInput.Id, and is useful for accessing the field via an interface.
 func (v *__DisableWebhookEndpointInput) GetId() string { return v.Id }
+
+// __DisconnectIngestInput is used internally by genqlient
+type __DisconnectIngestInput struct {
+	StreamId string `json:"streamId"`
+}
+
+// GetStreamId returns __DisconnectIngestInput.StreamId, and is useful for accessing the field via an interface.
+func (v *__DisconnectIngestInput) GetStreamId() string { return v.StreamId }
 
 // __EnableWebhookEndpointInput is used internally by genqlient
 type __EnableWebhookEndpointInput struct {
@@ -126612,6 +132364,14 @@ func (v *__GetDiscoverServicesConnectionInput) GetDiscoverServicesConnectionType
 
 // GetClusterId returns __GetDiscoverServicesConnectionInput.ClusterId, and is useful for accessing the field via an interface.
 func (v *__GetDiscoverServicesConnectionInput) GetClusterId() *string { return v.ClusterId }
+
+// __GetDvrRecordingInput is used internally by genqlient
+type __GetDvrRecordingInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __GetDvrRecordingInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetDvrRecordingInput) GetId() string { return v.Id }
 
 // __GetFederationEventsConnectionInput is used internally by genqlient
 type __GetFederationEventsConnectionInput struct {
@@ -127559,6 +133319,14 @@ func (v *__GetStreamHealthSummaryInput) GetTimeRange() *TimeRangeInput { return 
 // GetNoCache returns __GetStreamHealthSummaryInput.NoCache, and is useful for accessing the field via an interface.
 func (v *__GetStreamHealthSummaryInput) GetNoCache() *bool { return v.NoCache }
 
+// __GetStreamIngestInput is used internally by genqlient
+type __GetStreamIngestInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __GetStreamIngestInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetStreamIngestInput) GetId() string { return v.Id }
+
 // __GetStreamInput is used internally by genqlient
 type __GetStreamInput struct {
 	Id string `json:"id"`
@@ -127941,6 +133709,26 @@ type __ListPushTargetsInput struct {
 // GetStreamId returns __ListPushTargetsInput.StreamId, and is useful for accessing the field via an interface.
 func (v *__ListPushTargetsInput) GetStreamId() string { return v.StreamId }
 
+// __ListRecordingChaptersInput is used internally by genqlient
+type __ListRecordingChaptersInput struct {
+	Id           string           `json:"id"`
+	Page         *ConnectionInput `json:"page"`
+	RangeStartMs *float64         `json:"rangeStartMs"`
+	RangeEndMs   *float64         `json:"rangeEndMs"`
+}
+
+// GetId returns __ListRecordingChaptersInput.Id, and is useful for accessing the field via an interface.
+func (v *__ListRecordingChaptersInput) GetId() string { return v.Id }
+
+// GetPage returns __ListRecordingChaptersInput.Page, and is useful for accessing the field via an interface.
+func (v *__ListRecordingChaptersInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetRangeStartMs returns __ListRecordingChaptersInput.RangeStartMs, and is useful for accessing the field via an interface.
+func (v *__ListRecordingChaptersInput) GetRangeStartMs() *float64 { return v.RangeStartMs }
+
+// GetRangeEndMs returns __ListRecordingChaptersInput.RangeEndMs, and is useful for accessing the field via an interface.
+func (v *__ListRecordingChaptersInput) GetRangeEndMs() *float64 { return v.RangeEndMs }
+
 // __ListSigningKeysInput is used internally by genqlient
 type __ListSigningKeysInput struct {
 	Status *string          `json:"status"`
@@ -127953,17 +133741,29 @@ func (v *__ListSigningKeysInput) GetStatus() *string { return v.Status }
 // GetPage returns __ListSigningKeysInput.Page, and is useful for accessing the field via an interface.
 func (v *__ListSigningKeysInput) GetPage() *ConnectionInput { return v.Page }
 
-// __ListStreamKeysInput is used internally by genqlient
-type __ListStreamKeysInput struct {
-	StreamId string           `json:"streamId"`
-	Page     *ConnectionInput `json:"page"`
+// __ListStreamClipsInput is used internally by genqlient
+type __ListStreamClipsInput struct {
+	Id   string           `json:"id"`
+	Page *ConnectionInput `json:"page"`
 }
 
-// GetStreamId returns __ListStreamKeysInput.StreamId, and is useful for accessing the field via an interface.
-func (v *__ListStreamKeysInput) GetStreamId() string { return v.StreamId }
+// GetId returns __ListStreamClipsInput.Id, and is useful for accessing the field via an interface.
+func (v *__ListStreamClipsInput) GetId() string { return v.Id }
 
-// GetPage returns __ListStreamKeysInput.Page, and is useful for accessing the field via an interface.
-func (v *__ListStreamKeysInput) GetPage() *ConnectionInput { return v.Page }
+// GetPage returns __ListStreamClipsInput.Page, and is useful for accessing the field via an interface.
+func (v *__ListStreamClipsInput) GetPage() *ConnectionInput { return v.Page }
+
+// __ListStreamIngestInput is used internally by genqlient
+type __ListStreamIngestInput struct {
+	Page   *ConnectionInput `json:"page"`
+	Search *string          `json:"search"`
+}
+
+// GetPage returns __ListStreamIngestInput.Page, and is useful for accessing the field via an interface.
+func (v *__ListStreamIngestInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetSearch returns __ListStreamIngestInput.Search, and is useful for accessing the field via an interface.
+func (v *__ListStreamIngestInput) GetSearch() *string { return v.Search }
 
 // __ListStreamMetricsInput is used internally by genqlient
 type __ListStreamMetricsInput struct {
@@ -127976,6 +133776,18 @@ func (v *__ListStreamMetricsInput) GetPage() *ConnectionInput { return v.Page }
 
 // GetSearch returns __ListStreamMetricsInput.Search, and is useful for accessing the field via an interface.
 func (v *__ListStreamMetricsInput) GetSearch() *string { return v.Search }
+
+// __ListStreamRecordingsInput is used internally by genqlient
+type __ListStreamRecordingsInput struct {
+	Id   string           `json:"id"`
+	Page *ConnectionInput `json:"page"`
+}
+
+// GetId returns __ListStreamRecordingsInput.Id, and is useful for accessing the field via an interface.
+func (v *__ListStreamRecordingsInput) GetId() string { return v.Id }
+
+// GetPage returns __ListStreamRecordingsInput.Page, and is useful for accessing the field via an interface.
+func (v *__ListStreamRecordingsInput) GetPage() *ConnectionInput { return v.Page }
 
 // __ListStreamsInput is used internally by genqlient
 type __ListStreamsInput struct {
@@ -128091,11 +133903,15 @@ func (v *__PromoteToPaidInput) GetTierId() string { return v.TierId }
 
 // __RefreshStreamKeyInput is used internally by genqlient
 type __RefreshStreamKeyInput struct {
-	Id string `json:"id"`
+	Id               string `json:"id"`
+	EndActiveSession *bool  `json:"endActiveSession"`
 }
 
 // GetId returns __RefreshStreamKeyInput.Id, and is useful for accessing the field via an interface.
 func (v *__RefreshStreamKeyInput) GetId() string { return v.Id }
+
+// GetEndActiveSession returns __RefreshStreamKeyInput.EndActiveSession, and is useful for accessing the field via an interface.
+func (v *__RefreshStreamKeyInput) GetEndActiveSession() *bool { return v.EndActiveSession }
 
 // __RejectClusterSubscriptionInput is used internally by genqlient
 type __RejectClusterSubscriptionInput struct {
@@ -128259,6 +134075,14 @@ type __SetMediaRetentionPolicyInput struct {
 // GetInput returns __SetMediaRetentionPolicyInput.Input, and is useful for accessing the field via an interface.
 func (v *__SetMediaRetentionPolicyInput) GetInput() SetMediaRetentionPolicyInput { return v.Input }
 
+// __SetNodeCapacityInput is used internally by genqlient
+type __SetNodeCapacityInput struct {
+	Input SetNodeCapacityInput `json:"input"`
+}
+
+// GetInput returns __SetNodeCapacityInput.Input, and is useful for accessing the field via an interface.
+func (v *__SetNodeCapacityInput) GetInput() SetNodeCapacityInput { return v.Input }
+
 // __SetNodeModeInput is used internally by genqlient
 type __SetNodeModeInput struct {
 	Input SetNodeModeInput `json:"input"`
@@ -128292,6 +134116,22 @@ type __SetStreamRetentionOverridesInput struct {
 func (v *__SetStreamRetentionOverridesInput) GetInput() SetStreamRetentionOverridesInput {
 	return v.Input
 }
+
+// __SetTranscodeLadderPolicyInput is used internally by genqlient
+type __SetTranscodeLadderPolicyInput struct {
+	Input SetTranscodeLadderPolicyInput `json:"input"`
+}
+
+// GetInput returns __SetTranscodeLadderPolicyInput.Input, and is useful for accessing the field via an interface.
+func (v *__SetTranscodeLadderPolicyInput) GetInput() SetTranscodeLadderPolicyInput { return v.Input }
+
+// __SetVodOriginalPolicyInput is used internally by genqlient
+type __SetVodOriginalPolicyInput struct {
+	KeepVodOriginals *bool `json:"keepVodOriginals"`
+}
+
+// GetKeepVodOriginals returns __SetVodOriginalPolicyInput.KeepVodOriginals, and is useful for accessing the field via an interface.
+func (v *__SetVodOriginalPolicyInput) GetKeepVodOriginals() *bool { return v.KeepVodOriginals }
 
 // __SkipperChatInput is used internally by genqlient
 type __SkipperChatInput struct {
@@ -129937,7 +135777,13 @@ fragment CreateEdgeClusterResponseDefaultFields on CreateEdgeClusterResponse {
 		kafkaBrokers
 		maxConcurrentStreams
 		maxConcurrentViewers
-		maxBandwidthMbps
+		capacity {
+			egressBudgetBytesPerSec
+			ingressBudgetBytesPerSec
+			egressUsableBytesPerSec
+			ingressUsableBytesPerSec
+			defaultBudgetNodes
+		}
 		healthStatus
 		isActive
 		isDefaultCluster
@@ -130529,78 +136375,6 @@ func CreateStream(
 	return data_, err_
 }
 
-// The mutation executed by CreateStreamKey.
-const CreateStreamKey_Operation = `
-mutation CreateStreamKey ($streamId: ID!, $input: CreateStreamKeyInput!) {
-	createStreamKey(streamId: $streamId, input: $input) {
-		__typename
-		... StreamKeyFields
-		... ValidationErrorFields
-		... NotFoundErrorFields
-		... AuthErrorFields
-	}
-}
-fragment StreamKeyFields on StreamKey {
-	__typename
-	id
-	streamId
-	keyValue
-	keyName
-	isActive
-	lastUsedAt
-	createdAt
-}
-fragment ValidationErrorFields on ValidationError {
-	__typename
-	message
-	code
-	field
-	constraint
-}
-fragment NotFoundErrorFields on NotFoundError {
-	__typename
-	message
-	code
-	resourceType
-	resourceId
-}
-fragment AuthErrorFields on AuthError {
-	__typename
-	message
-	code
-}
-`
-
-// CreateStreamKey executes the corresponding GraphQL operation.
-//
-// Create an additional stream key for a stream.
-func CreateStreamKey(
-	ctx_ context.Context,
-	client_ graphql.Client,
-	streamId string,
-	input CreateStreamKeyInput,
-) (data_ *CreateStreamKeyResponse, err_ error) {
-	req_ := &graphql.Request{
-		OpName: "CreateStreamKey",
-		Query:  CreateStreamKey_Operation,
-		Variables: &__CreateStreamKeyInput{
-			StreamId: streamId,
-			Input:    input,
-		},
-	}
-
-	data_ = &CreateStreamKeyResponse{}
-	resp_ := &graphql.Response{Data: data_}
-
-	err_ = client_.MakeRequest(
-		ctx_,
-		req_,
-		resp_,
-	)
-
-	return data_, err_
-}
-
 // The mutation executed by CreateStripeBillingPortal.
 const CreateStripeBillingPortal_Operation = `
 mutation CreateStripeBillingPortal ($returnUrl: String!) {
@@ -130720,6 +136494,69 @@ func CreateStripeCheckout(
 	}
 
 	data_ = &CreateStripeCheckoutResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by CreateVodOriginalDownload.
+const CreateVodOriginalDownload_Operation = `
+mutation CreateVodOriginalDownload ($id: ID!) {
+	createVodOriginalDownload(id: $id) {
+		__typename
+		... VodOriginalDownloadDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment VodOriginalDownloadDefaultFields on VodOriginalDownload {
+	url
+	expiresAt
+	sizeBytes
+	filename
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// CreateVodOriginalDownload executes the corresponding GraphQL operation.
+//
+// Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5.
+func CreateVodOriginalDownload(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *CreateVodOriginalDownloadResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "CreateVodOriginalDownload",
+		Query:  CreateVodOriginalDownload_Operation,
+		Variables: &__CreateVodOriginalDownloadInput{
+			Id: id,
+		},
+	}
+
+	data_ = &CreateVodOriginalDownloadResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -131181,66 +137018,6 @@ func DeleteStream(
 	return data_, err_
 }
 
-// The mutation executed by DeleteStreamKey.
-const DeleteStreamKey_Operation = `
-mutation DeleteStreamKey ($streamId: ID!, $keyId: ID!) {
-	deleteStreamKey(streamId: $streamId, keyId: $keyId) {
-		__typename
-		... DeleteSuccessFields
-		... NotFoundErrorFields
-		... AuthErrorFields
-	}
-}
-fragment DeleteSuccessFields on DeleteSuccess {
-	__typename
-	success
-	deletedId
-	pending
-}
-fragment NotFoundErrorFields on NotFoundError {
-	__typename
-	message
-	code
-	resourceType
-	resourceId
-}
-fragment AuthErrorFields on AuthError {
-	__typename
-	message
-	code
-}
-`
-
-// DeleteStreamKey executes the corresponding GraphQL operation.
-//
-// Delete a stream key.
-func DeleteStreamKey(
-	ctx_ context.Context,
-	client_ graphql.Client,
-	streamId string,
-	keyId string,
-) (data_ *DeleteStreamKeyResponse, err_ error) {
-	req_ := &graphql.Request{
-		OpName: "DeleteStreamKey",
-		Query:  DeleteStreamKey_Operation,
-		Variables: &__DeleteStreamKeyInput{
-			StreamId: streamId,
-			KeyId:    keyId,
-		},
-	}
-
-	data_ = &DeleteStreamKeyResponse{}
-	resp_ := &graphql.Response{Data: data_}
-
-	err_ = client_.MakeRequest(
-		ctx_,
-		req_,
-		resp_,
-	)
-
-	return data_, err_
-}
-
 // The mutation executed by DeleteVodAsset.
 const DeleteVodAsset_Operation = `
 mutation DeleteVodAsset ($id: ID!) {
@@ -131288,6 +137065,68 @@ func DeleteVodAsset(
 	}
 
 	data_ = &DeleteVodAssetResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by DeleteVodOriginal.
+const DeleteVodOriginal_Operation = `
+mutation DeleteVodOriginal ($id: ID!) {
+	deleteVodOriginal(id: $id) {
+		__typename
+		... DeleteSuccessDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment DeleteSuccessDefaultFields on DeleteSuccess {
+	success
+	deletedId
+	pending
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// DeleteVodOriginal executes the corresponding GraphQL operation.
+//
+// Permanently delete only the retained upload; processed playback remains available.
+func DeleteVodOriginal(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *DeleteVodOriginalResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "DeleteVodOriginal",
+		Query:  DeleteVodOriginal_Operation,
+		Variables: &__DeleteVodOriginalInput{
+			Id: id,
+		},
+	}
+
+	data_ = &DeleteVodOriginalResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -131410,6 +137249,67 @@ func DisableWebhookEndpoint(
 	}
 
 	data_ = &DisableWebhookEndpointResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by DisconnectIngest.
+const DisconnectIngest_Operation = `
+mutation DisconnectIngest ($streamId: ID!) {
+	disconnectIngest(streamId: $streamId) {
+		__typename
+		... IngestDisconnectSuccessDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment IngestDisconnectSuccessDefaultFields on IngestDisconnectSuccess {
+	streamId
+	stopRequested
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// DisconnectIngest executes the corresponding GraphQL operation.
+//
+// Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false.
+func DisconnectIngest(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	streamId string,
+) (data_ *DisconnectIngestResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "DisconnectIngest",
+		Query:  DisconnectIngest_Operation,
+		Variables: &__DisconnectIngestInput{
+			StreamId: streamId,
+		},
+	}
+
+	data_ = &DisconnectIngestResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -131682,6 +137582,15 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -131905,6 +137814,15 @@ fragment ArtifactStateDefaultFields on ArtifactState {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -132772,6 +138690,15 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -133044,7 +138971,13 @@ fragment ClusterDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -133442,6 +139375,15 @@ fragment InfrastructureNodeDefaultFields on InfrastructureNode {
 		activeStreams
 		activeViewers
 	}
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressSource
+		ingressSource
+		revision
+		updatedAt
+		appliedRevision
+	}
 }
 fragment PageInfoDefaultFields on PageInfo {
 	startCursor
@@ -133797,7 +139739,13 @@ fragment ClusterDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -133900,6 +139848,15 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -134327,6 +140284,61 @@ func GetDiscoverServicesConnection(
 	return data_, err_
 }
 
+// The query executed by GetDvrRecording.
+const GetDvrRecording_Operation = `
+query GetDvrRecording ($id: ID!) {
+	dvrRecording(id: $id) {
+		... DVRRequestFields
+	}
+}
+fragment DVRRequestFields on DVRRequest {
+	__typename
+	id
+	dvrHash
+	playbackId
+	streamId
+	title
+	status
+	createdAt
+	updatedAt
+	startedAt
+	endedAt
+	expiresAt
+	isExpired
+	durationSeconds
+	sizeBytes
+	errorMessage
+}
+`
+
+// GetDvrRecording executes the corresponding GraphQL operation.
+//
+// A recording from the tenant catalog, readable with streams:read.
+func GetDvrRecording(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *GetDvrRecordingResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetDvrRecording",
+		Query:  GetDvrRecording_Operation,
+		Variables: &__GetDvrRecordingInput{
+			Id: id,
+		},
+	}
+
+	data_ = &GetDvrRecordingResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The query executed by GetFederationEventsConnection.
 const GetFederationEventsConnection_Operation = `
 query GetFederationEventsConnection ($timeRange: TimeRangeInput!, $first: Int, $eventType: String, $noCache: Boolean = false) {
@@ -134512,6 +140524,15 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -135544,6 +141565,8 @@ fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
 	effectiveVodRetentionDays
 	effectiveDvrRetentionDays
 	effectiveClipRetentionDays
+	keepVodOriginals
+	effectiveKeepVodOriginals
 }
 `
 
@@ -135772,7 +141795,13 @@ fragment ClusterDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -135848,6 +141877,8 @@ fragment NetworkStatusDefaultFields on NetworkStatus {
 		currentViewers
 		egressMbps
 		egressCapacityMbps
+		egressUsableMbps
+		defaultBudgetNodes
 		ingressMbps
 		services
 	}
@@ -135985,6 +142016,15 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136095,6 +142135,15 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136192,6 +142241,15 @@ fragment ClipInNodeDefaultFields on Clip {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136258,6 +142316,7 @@ fragment ClipInNodeDefaultFields on Clip {
 	storagePath
 	sizeBytes
 	status
+	errorMessage
 	clipCreatedAt: createdAt
 	updatedAt
 	clipMode
@@ -136312,7 +142371,13 @@ fragment ClusterInNodeDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -136359,6 +142424,15 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136501,6 +142575,15 @@ fragment InfrastructureNodeInNodeDefaultFields on InfrastructureNode {
 		activeStreams
 		activeViewers
 	}
+	infrastructureNodeCapacity: capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressSource
+		ingressSource
+		revision
+		updatedAt
+		appliedRevision
+	}
 }
 fragment MessageDefaultFields on Message {
 	id
@@ -136593,6 +142676,15 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136730,6 +142822,15 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136843,6 +142944,15 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -136959,6 +143069,15 @@ fragment StreamInNodeDefaultFields on Stream {
 	}
 	createdAt
 	streamUpdatedAt: updatedAt
+	ingest {
+		state
+		isLive
+		sessionId
+		connectedAt
+		liveSince
+		endedAt
+		resumableUntil
+	}
 	metrics {
 		status
 		isLive
@@ -137057,6 +143176,15 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137151,6 +143279,15 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137243,6 +143380,15 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137381,6 +143527,15 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137504,6 +143659,15 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137621,6 +143785,15 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137716,6 +143889,15 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -137848,6 +144030,9 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
 		perDay
 		perMonth
 		currency
+	}
+	originalFile {
+		sizeBytes
 	}
 }
 `
@@ -138223,6 +144408,15 @@ fragment InfrastructureNodeDefaultFields on InfrastructureNode {
 	routingImpactPreview {
 		activeStreams
 		activeViewers
+	}
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressSource
+		ingressSource
+		revision
+		updatedAt
+		appliedRevision
 	}
 }
 fragment PageInfoDefaultFields on PageInfo {
@@ -139209,6 +145403,15 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -139409,6 +145612,15 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -139569,6 +145781,15 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -139997,6 +146218,15 @@ fragment RoutingEventDefaultFields on RoutingEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -140773,6 +147003,15 @@ fragment StorageEventDefaultFields on StorageEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -141095,6 +147334,15 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -141248,6 +147496,15 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -141428,6 +147685,15 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -141605,6 +147871,15 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -141756,6 +148031,15 @@ fragment StreamEventDefaultFields on StreamEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -142012,6 +148296,15 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -142192,6 +148485,53 @@ func GetStreamHealthSummary(
 	return data_, err_
 }
 
+// The query executed by GetStreamIngest.
+const GetStreamIngest_Operation = `
+query GetStreamIngest ($id: ID!) {
+	stream(id: $id) {
+		id
+		streamId
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
+	}
+}
+`
+
+// GetStreamIngest executes the corresponding GraphQL operation.
+//
+// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+func GetStreamIngest(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *GetStreamIngestResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetStreamIngest",
+		Query:  GetStreamIngest_Operation,
+		Variables: &__GetStreamIngestInput{
+			Id: id,
+		},
+	}
+
+	data_ = &GetStreamIngestResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The query executed by GetStreamKey.
 const GetStreamKey_Operation = `
 query GetStreamKey ($id: ID!) {
@@ -142265,7 +148605,7 @@ fragment StreamMetricsFields on StreamMetrics {
 // Lazily loaded from ClickHouse analytics, so an API token needs the
 // analytics:read scope: without it this field is null and the response
 // carries a FORBIDDEN error at its path.
-// Live state comes from analytics: an API token needs analytics:read.
+// Viewer and quality metrics require analytics:read. Ingest state uses streams:read.
 func GetStreamMetrics(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -142633,6 +148973,15 @@ fragment TrackListEventDefaultFields on TrackListEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -142740,6 +149089,50 @@ func GetTrackListConnection(
 	}
 
 	data_ = &GetTrackListConnectionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetTranscodeLadderPolicy.
+const GetTranscodeLadderPolicy_Operation = `
+query GetTranscodeLadderPolicy {
+	transcodeLadderPolicy {
+		... TranscodeLadderPolicyDefaultFields
+	}
+}
+fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+	ladders {
+		name
+		displayName
+		description
+		renditionNames
+	}
+	planDefault
+	tenantLadder
+	effectiveLadder
+}
+`
+
+// GetTranscodeLadderPolicy executes the corresponding GraphQL operation.
+//
+// Allowed video ladders, account choice, and effective default.
+func GetTranscodeLadderPolicy(
+	ctx_ context.Context,
+	client_ graphql.Client,
+) (data_ *GetTranscodeLadderPolicyResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetTranscodeLadderPolicy",
+		Query:  GetTranscodeLadderPolicy_Operation,
+	}
+
+	data_ = &GetTranscodeLadderPolicyResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -142956,6 +149349,15 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -143116,6 +149518,15 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -143270,6 +149681,15 @@ fragment ViewerSessionDefaultFields on ViewerSession {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -143438,6 +149858,15 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -144387,6 +150816,8 @@ query ListArtifacts ($input: StorageArtifactsInput) {
 	}
 }
 fragment StorageArtifactFields on StorageArtifact {
+	originType
+	parentRecordingId
 	key
 	kind
 	id
@@ -144626,6 +151057,81 @@ func ListPushTargets(
 	return data_, err_
 }
 
+// The query executed by ListRecordingChapters.
+const ListRecordingChapters_Operation = `
+query ListRecordingChapters ($id: ID!, $page: ConnectionInput, $rangeStartMs: Float, $rangeEndMs: Float) {
+	dvrRecording(id: $id) {
+		id
+		dvrHash
+		chapters(page: $page, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+			edges {
+				cursor
+				node {
+					... DVRChapterRefFields
+				}
+			}
+			pageInfo {
+				... PageInfoFields
+			}
+			totalCount
+		}
+	}
+}
+fragment DVRChapterRefFields on DVRChapterRef {
+	chapterId
+	mode
+	intervalSeconds
+	startMs
+	endMs
+	isCurrent
+	state
+	playbackId
+	hasGaps
+	segmentCount
+	lastFailureReason
+}
+fragment PageInfoFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// ListRecordingChapters executes the corresponding GraphQL operation.
+//
+// Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds.
+func ListRecordingChapters(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	page *ConnectionInput,
+	rangeStartMs *float64,
+	rangeEndMs *float64,
+) (data_ *ListRecordingChaptersResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ListRecordingChapters",
+		Query:  ListRecordingChapters_Operation,
+		Variables: &__ListRecordingChaptersInput{
+			Id:           id,
+			Page:         page,
+			RangeStartMs: rangeStartMs,
+			RangeEndMs:   rangeEndMs,
+		},
+	}
+
+	data_ = &ListRecordingChaptersResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The query executed by ListSigningKeys.
 const ListSigningKeys_Operation = `
 query ListSigningKeys ($status: String, $page: ConnectionInput) {
@@ -144689,28 +151195,114 @@ func ListSigningKeys(
 	return data_, err_
 }
 
-// The query executed by ListStreamKeys.
-const ListStreamKeys_Operation = `
-query ListStreamKeys ($streamId: ID!, $page: ConnectionInput) {
-	streamKeysConnection(streamId: $streamId, page: $page) {
+// The query executed by ListStreamClips.
+const ListStreamClips_Operation = `
+query ListStreamClips ($id: ID!, $page: ConnectionInput) {
+	stream(id: $id) {
+		clips(page: $page) {
+			edges {
+				cursor
+				node {
+					... StorageArtifactFields
+				}
+			}
+			pageInfo {
+				... PageInfoFields
+			}
+			totalCount
+		}
+	}
+}
+fragment StorageArtifactFields on StorageArtifact {
+	originType
+	parentRecordingId
+	key
+	kind
+	id
+	hash
+	playbackId
+	streamId
+	streamTitle
+	title
+	description
+	errorMessage
+	sizeBytes
+	status
+	createdAt
+	updatedAt
+	expiresAt
+	deleteId
+	durationSeconds
+	thumbnailAssets {
+		... ThumbnailAssetsFields
+	}
+}
+fragment PageInfoFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+	posterUrl
+	spriteVttUrl
+	spriteJpgUrl
+	assetKey
+}
+`
+
+// ListStreamClips executes the corresponding GraphQL operation.
+//
+// Clips from this stream's tenant catalog, newest first.
+func ListStreamClips(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	page *ConnectionInput,
+) (data_ *ListStreamClipsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ListStreamClips",
+		Query:  ListStreamClips_Operation,
+		Variables: &__ListStreamClipsInput{
+			Id:   id,
+			Page: page,
+		},
+	}
+
+	data_ = &ListStreamClipsResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by ListStreamIngest.
+const ListStreamIngest_Operation = `
+query ListStreamIngest ($page: ConnectionInput, $search: String) {
+	streamsConnection(page: $page, search: $search) {
 		nodes {
-			... StreamKeyFields
+			id
+			streamId
+			ingest {
+				state
+				isLive
+				sessionId
+				connectedAt
+				liveSince
+				endedAt
+				resumableUntil
+			}
 		}
 		pageInfo {
 			... PageInfoFields
 		}
 		totalCount
 	}
-}
-fragment StreamKeyFields on StreamKey {
-	__typename
-	id
-	streamId
-	keyValue
-	keyName
-	isActive
-	lastUsedAt
-	createdAt
 }
 fragment PageInfoFields on PageInfo {
 	startCursor
@@ -144720,27 +151312,25 @@ fragment PageInfoFields on PageInfo {
 }
 `
 
-// ListStreamKeys executes the corresponding GraphQL operation.
+// ListStreamIngest executes the corresponding GraphQL operation.
 //
-// List all stream keys for a specific stream.
-// Stream keys are publishing credentials, so an API token needs the
-// streams:write scope.
-func ListStreamKeys(
+// Ingest state under streams:read; null with a field error when the owning cell is unavailable.
+func ListStreamIngest(
 	ctx_ context.Context,
 	client_ graphql.Client,
-	streamId string,
 	page *ConnectionInput,
-) (data_ *ListStreamKeysResponse, err_ error) {
+	search *string,
+) (data_ *ListStreamIngestResponse, err_ error) {
 	req_ := &graphql.Request{
-		OpName: "ListStreamKeys",
-		Query:  ListStreamKeys_Operation,
-		Variables: &__ListStreamKeysInput{
-			StreamId: streamId,
-			Page:     page,
+		OpName: "ListStreamIngest",
+		Query:  ListStreamIngest_Operation,
+		Variables: &__ListStreamIngestInput{
+			Page:   page,
+			Search: search,
 		},
 	}
 
-	data_ = &ListStreamKeysResponse{}
+	data_ = &ListStreamIngestResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -144795,8 +151385,8 @@ fragment PageInfoFields on PageInfo {
 // Lazily loaded from ClickHouse analytics, so an API token needs the
 // analytics:read scope: without it this field is null and the response
 // carries a FORBIDDEN error at its path.
-// Live state of a page of streams, for the same page and search as ListStreams.
-// Live state comes from analytics: an API token needs analytics:read.
+// Viewer and quality metrics for the same page and search as ListStreams.
+// Viewer and quality metrics require analytics:read. Ingest state uses streams:read.
 func ListStreamMetrics(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -144813,6 +151403,92 @@ func ListStreamMetrics(
 	}
 
 	data_ = &ListStreamMetricsResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by ListStreamRecordings.
+const ListStreamRecordings_Operation = `
+query ListStreamRecordings ($id: ID!, $page: ConnectionInput) {
+	stream(id: $id) {
+		recordings(page: $page) {
+			edges {
+				cursor
+				node {
+					... StorageArtifactFields
+				}
+			}
+			pageInfo {
+				... PageInfoFields
+			}
+			totalCount
+		}
+	}
+}
+fragment StorageArtifactFields on StorageArtifact {
+	originType
+	parentRecordingId
+	key
+	kind
+	id
+	hash
+	playbackId
+	streamId
+	streamTitle
+	title
+	description
+	errorMessage
+	sizeBytes
+	status
+	createdAt
+	updatedAt
+	expiresAt
+	deleteId
+	durationSeconds
+	thumbnailAssets {
+		... ThumbnailAssetsFields
+	}
+}
+fragment PageInfoFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+	posterUrl
+	spriteVttUrl
+	spriteJpgUrl
+	assetKey
+}
+`
+
+// ListStreamRecordings executes the corresponding GraphQL operation.
+//
+// Recordings from this stream's tenant catalog, newest first.
+func ListStreamRecordings(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	page *ConnectionInput,
+) (data_ *ListStreamRecordingsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ListStreamRecordings",
+		Query:  ListStreamRecordings_Operation,
+		Variables: &__ListStreamRecordingsInput{
+			Id:   id,
+			Page: page,
+		},
+	}
+
+	data_ = &ListStreamRecordingsResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -145017,6 +151693,15 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -145649,6 +152334,15 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -145806,6 +152500,15 @@ fragment StorageEventDefaultFields on StorageEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -145928,6 +152631,15 @@ fragment StreamEventDefaultFields on StreamEvent {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -146102,6 +152814,15 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -146239,6 +152960,15 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
 		}
 		createdAt
 		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
 		metrics {
 			status
 			isLive
@@ -146500,8 +153230,8 @@ func PromoteToPaid(
 
 // The mutation executed by RefreshStreamKey.
 const RefreshStreamKey_Operation = `
-mutation RefreshStreamKey ($id: ID!) {
-	refreshStreamKey(id: $id) {
+mutation RefreshStreamKey ($id: ID!, $endActiveSession: Boolean = false) {
+	refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
 		__typename
 		... StreamWithKeyFields
 		... ValidationErrorFields
@@ -146582,12 +153312,14 @@ func RefreshStreamKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
 	id string,
+	endActiveSession *bool,
 ) (data_ *RefreshStreamKeyResponse, err_ error) {
 	req_ := &graphql.Request{
 		OpName: "RefreshStreamKey",
 		Query:  RefreshStreamKey_Operation,
 		Variables: &__RefreshStreamKeyInput{
-			Id: id,
+			Id:               id,
+			EndActiveSession: endActiveSession,
 		},
 	}
 
@@ -147751,6 +154483,8 @@ fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
 	effectiveVodRetentionDays
 	effectiveDvrRetentionDays
 	effectiveClipRetentionDays
+	keepVodOriginals
+	effectiveKeepVodOriginals
 }
 fragment ValidationErrorDefaultFields on ValidationError {
 	message
@@ -147786,6 +154520,118 @@ func SetMediaRetentionPolicy(
 	}
 
 	data_ = &SetMediaRetentionPolicyResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by SetNodeCapacity.
+const SetNodeCapacity_Operation = `
+mutation SetNodeCapacity ($input: SetNodeCapacityInput!) {
+	setNodeCapacity(input: $input) {
+		__typename
+		... InfrastructureNodeDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment InfrastructureNodeDefaultFields on InfrastructureNode {
+	id
+	nodeId
+	clusterId
+	nodeName
+	nodeType
+	internalIp
+	externalIp
+	wireguardIp
+	wireguardPublicKey
+	region
+	latitude
+	longitude
+	availabilityZone
+	cpuCores
+	memoryGb
+	diskGb
+	lastHeartbeat
+	tags
+	metadata
+	createdAt
+	updatedAt
+	liveState {
+		nodeId
+		tenantId
+		cpuPercent
+		ramUsedBytes
+		ramTotalBytes
+		diskUsedBytes
+		diskTotalBytes
+		upSpeed
+		downSpeed
+		activeStreams
+		isHealthy
+		latitude
+		longitude
+		location
+		metadata
+		updatedAt
+	}
+	effectiveMode
+	routingImpactPreview {
+		activeStreams
+		activeViewers
+	}
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressSource
+		ingressSource
+		revision
+		updatedAt
+		appliedRevision
+	}
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// SetNodeCapacity executes the corresponding GraphQL operation.
+//
+// Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access.
+func SetNodeCapacity(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input SetNodeCapacityInput,
+) (data_ *SetNodeCapacityResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "SetNodeCapacity",
+		Query:  SetNodeCapacity_Operation,
+		Variables: &__SetNodeCapacityInput{
+			Input: input,
+		},
+	}
+
+	data_ = &SetNodeCapacityResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -147852,6 +154698,15 @@ fragment InfrastructureNodeDefaultFields on InfrastructureNode {
 	routingImpactPreview {
 		activeStreams
 		activeViewers
+	}
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressSource
+		ingressSource
+		revision
+		updatedAt
+		appliedRevision
 	}
 }
 fragment ValidationErrorDefaultFields on ValidationError {
@@ -148024,7 +154879,13 @@ fragment ClusterDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -148141,6 +155002,132 @@ func SetStreamRetentionOverrides(
 	}
 
 	data_ = &SetStreamRetentionOverridesResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by SetTranscodeLadderPolicy.
+const SetTranscodeLadderPolicy_Operation = `
+mutation SetTranscodeLadderPolicy ($input: SetTranscodeLadderPolicyInput!) {
+	setTranscodeLadderPolicy(input: $input) {
+		__typename
+		... TranscodeLadderPolicyDefaultFields
+		... ValidationErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+	ladders {
+		name
+		displayName
+		description
+		renditionNames
+	}
+	planDefault
+	tenantLadder
+	effectiveLadder
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// SetTranscodeLadderPolicy executes the corresponding GraphQL operation.
+//
+// Set the account's video ladder. Empty or null inherits the plan default.
+func SetTranscodeLadderPolicy(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input SetTranscodeLadderPolicyInput,
+) (data_ *SetTranscodeLadderPolicyResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "SetTranscodeLadderPolicy",
+		Query:  SetTranscodeLadderPolicy_Operation,
+		Variables: &__SetTranscodeLadderPolicyInput{
+			Input: input,
+		},
+	}
+
+	data_ = &SetTranscodeLadderPolicyResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by SetVodOriginalPolicy.
+const SetVodOriginalPolicy_Operation = `
+mutation SetVodOriginalPolicy ($keepVodOriginals: Boolean) {
+	setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+		__typename
+		... MediaRetentionPolicyDefaultFields
+		... ValidationErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
+	bounds {
+		maxRecordingRetentionDays
+	}
+	updatedBy
+	updatedAt
+	defaultVodRetentionDays
+	defaultDvrRetentionDays
+	defaultClipRetentionDays
+	effectiveVodRetentionDays
+	effectiveDvrRetentionDays
+	effectiveClipRetentionDays
+	keepVodOriginals
+	effectiveKeepVodOriginals
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// SetVodOriginalPolicy executes the corresponding GraphQL operation.
+//
+// Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged.
+func SetVodOriginalPolicy(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	keepVodOriginals *bool,
+) (data_ *SetVodOriginalPolicyResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "SetVodOriginalPolicy",
+		Query:  SetVodOriginalPolicy_Operation,
+		Variables: &__SetVodOriginalPolicyInput{
+			KeepVodOriginals: keepVodOriginals,
+		},
+	}
+
+	data_ = &SetVodOriginalPolicyResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -148562,9 +155549,29 @@ subscription TenantEvents ($types: [String!], $streamId: ID) {
 				}
 				mediaFailureReason: reason
 			}
+			... on StreamEnded {
+				streamId
+				playbackId
+				sessionId
+			}
+			... on StreamIngestDisconnected {
+				streamId
+				sessionId
+				disconnectReason: reason
+			}
+			... on RecordingChapterReady {
+				artifact {
+					... EventArtifactFields
+				}
+				chapterId
+				startMs
+				endMs
+				sizeBytes
+			}
 			... on StreamConnected {
 				streamId
 				protocol
+				sessionId
 			}
 			... on StreamCreated {
 				streamId
@@ -148576,12 +155583,14 @@ subscription TenantEvents ($types: [String!], $streamId: ID) {
 			}
 			... on StreamIdle {
 				streamId
+				sessionId
 			}
 			... on StreamKeyRotated {
 				streamId
 			}
 			... on StreamLive {
 				streamId
+				sessionId
 			}
 			... on StreamUpdated {
 				streamId
@@ -148987,7 +155996,13 @@ fragment ClusterDefaultFields on Cluster {
 	kafkaBrokers
 	maxConcurrentStreams
 	maxConcurrentViewers
-	maxBandwidthMbps
+	capacity {
+		egressBudgetBytesPerSec
+		ingressBudgetBytesPerSec
+		egressUsableBytesPerSec
+		ingressUsableBytesPerSec
+		defaultBudgetNodes
+	}
 	healthStatus
 	isActive
 	isDefaultCluster
@@ -149572,11 +156587,11 @@ func (v *UnknownMember) implementsGraphQLInterfaceCreateSigningKeyCreateSigningK
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStreamCreateStreamCreateStreamResult() {
 }
-func (v *UnknownMember) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
-}
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceCreateVodOriginalDownloadCreateVodOriginalDownloadCreateVodOriginalDownloadResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCreateVodUploadCreateVodUploadCreateVodUploadResult() {
 }
@@ -149588,13 +156603,15 @@ func (v *UnknownMember) implementsGraphQLInterfaceDeleteDVRDeleteDVRDeleteDVRRes
 }
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteStreamDeleteStreamDeleteStreamResult() {
 }
-func (v *UnknownMember) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
-}
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteVodAssetDeleteVodAssetDeleteVodAssetResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceDeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceDisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceDisconnectIngestDisconnectIngestDisconnectIngestResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceEnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult() {
 }
@@ -149664,6 +156681,8 @@ func (v *UnknownMember) implementsGraphQLInterfaceSendMessageSendMessageSendMess
 }
 func (v *UnknownMember) implementsGraphQLInterfaceSetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult() {
 }
+func (v *UnknownMember) implementsGraphQLInterfaceSetNodeCapacitySetNodeCapacitySetNodeCapacityResult() {
+}
 func (v *UnknownMember) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
@@ -149671,6 +156690,10 @@ func (v *UnknownMember) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPo
 func (v *UnknownMember) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceSetTranscodeLadderPolicySetTranscodeLadderPolicySetTranscodeLadderPolicyResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceSetVodOriginalPolicySetVodOriginalPolicySetMediaRetentionPolicyResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }

@@ -3,6 +3,7 @@ package triggers
 import (
 	"context"
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 	"strings"
 
 	"frameworks/api_balancing/internal/artifacts"
@@ -104,12 +105,7 @@ func normalizeExt(format string) string {
 // staging because Mist's FLV uses fopen and AV input only auto-matches local
 // paths.
 func isRelaySafeFormat(ext string) bool {
-	switch strings.ToLower(normalizeExt(ext)) {
-	case ".mp4", ".mov", ".mkv", ".webm", ".ts", ".m2ts", ".m3u8", ".m3u":
-		return true
-	default:
-		return false
-	}
+	return vodupload.RelaySafe(normalizeExt(ext))
 }
 
 // lookupArtifactDescriptor returns the format, artifact_type, and

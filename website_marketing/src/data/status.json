@@ -526,6 +526,22 @@
       },
       "showcase": null
     },
+    "frame-accurate-clips": {
+      "id": "frame-accurate-clips",
+      "title": "Frame-accurate clip trimming",
+      "status": "roadmap",
+      "availability": "Planned",
+      "maturity": null,
+      "horizon": "later",
+      "tier": "Further out",
+      "tag": "Further out",
+      "note": null,
+      "roadmap": {
+        "anchor": "frame-accurate-clip-trimming",
+        "path": "/roadmap#frame-accurate-clip-trimming"
+      },
+      "showcase": null
+    },
     "gateway-backed-transcoding": {
       "id": "gateway-backed-transcoding",
       "title": "Gateway-backed transcoding",
@@ -535,7 +551,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Renditions follow your plan's processing policy, and a stream can turn its live ladder off. Choosing the ladder per stream is not there yet.",
+      "note": "Choose a named ladder within your plan, or turn live video ABR off for a stream.",
       "roadmap": {
         "anchor": "gateway-backed-transcoding",
         "path": "/roadmap#gateway-backed-transcoding"
@@ -1387,6 +1403,19 @@
       "roadmap": null,
       "showcase": null
     },
+    "transcode-ladders": {
+      "id": "transcode-ladders",
+      "title": "Named transcode ladders",
+      "status": "shipped",
+      "availability": "Available",
+      "maturity": null,
+      "horizon": "now",
+      "tier": "Shipping today",
+      "tag": "Shipping",
+      "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.",
+      "roadmap": null,
+      "showcase": null
+    },
     "usage-caps": {
       "id": "usage-caps",
       "title": "Usage caps, alerts, retention cost preview",
@@ -1462,6 +1491,19 @@
       "tier": "Shipping today",
       "tag": "Shipping",
       "note": null,
+      "roadmap": null,
+      "showcase": null
+    },
+    "vod-original-retention": {
+      "id": "vod-original-retention",
+      "title": "Original upload retention",
+      "status": "shipped",
+      "availability": "Available",
+      "maturity": null,
+      "horizon": "now",
+      "tier": "Shipping today",
+      "tag": "Shipping",
+      "note": "Originals count toward normal storage usage and the plan cap. URL imports and failed uploads retain no original.",
       "roadmap": null,
       "showcase": null
     },

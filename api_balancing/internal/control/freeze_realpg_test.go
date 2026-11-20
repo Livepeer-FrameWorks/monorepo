@@ -33,6 +33,13 @@ func startRealPG(t *testing.T) *sql.DB {
 // own connections to it.
 func startRealPGWithDSN(t *testing.T) (*sql.DB, string) {
 	t.Helper()
+	baseline, baselineErr := dbsql.Content.ReadFile("schema/foghorn.sql")
+	if baselineErr != nil {
+		t.Fatal(baselineErr)
+	}
+	if conn, dsn, ok := dockerpg.OpenNativePostgresBaseline(t, "control", baseline); ok {
+		return conn, dsn
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}

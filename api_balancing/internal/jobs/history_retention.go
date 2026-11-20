@@ -78,15 +78,16 @@ func (j *HistoryRetentionJob) sweep() {
 	}
 	if purged != (retentionPurge{}) {
 		j.logger.WithFields(logging.Fields{
-			"ingest_sessions": purged.sessions,
-			"processing_jobs": purged.jobs,
-			"artifact_events": purged.events,
+			"ingest_sessions":      purged.sessions,
+			"pull_ingest_sessions": purged.pulls,
+			"processing_jobs":      purged.jobs,
+			"artifact_events":      purged.events,
 		}).Info("Deleted retained history past its horizon")
 	}
 }
 
 type retentionPurge struct {
-	sessions, jobs, events int64
+	sessions, pulls, jobs, events int64
 }
 
 // purgeRetainedHistory runs one retention pass over every table, each capped at historyPurgeMaxBatches batches so a
@@ -105,6 +106,10 @@ func purgeRetainedHistory(ctx context.Context, q *foghorndb.Queries) (retentionP
 		return q.PurgeEndedIngestSessions(ctx, foghorndb.PurgeEndedIngestSessionsParams{
 			RetentionSeconds: history, BatchLimit: historyPurgeBatch,
 		})
+	})
+	keep(err)
+	purged.pulls, err = drainBatches(func() (int64, error) {
+		return q.PurgeEndedPullIngestSessions(ctx, foghorndb.PurgeEndedPullIngestSessionsParams{RetentionSeconds: history, BatchLimit: historyPurgeBatch})
 	})
 	keep(err)
 	purged.jobs, err = drainBatches(func() (int64, error) {

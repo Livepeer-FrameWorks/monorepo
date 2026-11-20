@@ -17,7 +17,17 @@ type EdgeCheck struct {
 // ServiceProbeErr is non-empty when the probe itself failed (distinct from
 // a service being down): the operator needs to fix the probe, not the
 // services.
+type EdgeCapacity struct {
+	NodeID          string
+	EgressSource    string
+	IngressSource   string
+	Revision        uint64
+	AppliedRevision *uint64
+}
+
 type EdgeInputs struct {
+	Capacity        *EdgeCapacity
+	CapacityError   string
 	HasEnv          bool
 	Domain          string
 	Mode            string
@@ -119,6 +129,24 @@ func EdgeReadiness(in EdgeInputs) Report {
 				Why: why,
 			},
 		})
+	}
+
+	if in.CapacityError != "" {
+		r.Warnings = append(r.Warnings, Warning{Subject: "edge.capacity.unknown", Detail: in.CapacityError, Remediation: Remediation{Cmd: "frameworks edge capacity show <node-id>", Why: "Read the operator-owned budget and reported application revision through the control API."}})
+	}
+	if c := in.Capacity; c != nil {
+		nodeID := c.NodeID
+		if nodeID == "" {
+			nodeID = "<node-id>"
+		}
+		if c.EgressSource == "DEFAULT" || c.IngressSource == "DEFAULT" {
+			r.Warnings = append(r.Warnings, Warning{Subject: "edge.capacity.default", Detail: "Node uses the default 1 Gbit/s budget for at least one direction.", Remediation: Remediation{Cmd: fmt.Sprintf("frameworks edge capacity set %s --egress-mbps <Mbit/s> --ingress-mbps <Mbit/s>", nodeID), Why: "Set the real link budgets as this node's operator."}})
+		}
+		if c.AppliedRevision == nil {
+			r.Warnings = append(r.Warnings, Warning{Subject: "edge.capacity.unknown", Detail: "Applied capacity unknown: Helmsman has not reported applying the budget.", Remediation: Remediation{Cmd: "frameworks edge capacity show " + nodeID, Why: "Check node connectivity and use a Helmsman version that applies capacity seeds."}})
+		} else if *c.AppliedRevision != c.Revision {
+			r.Warnings = append(r.Warnings, Warning{Subject: "edge.capacity.pending", Detail: "Capacity not applied yet.", Remediation: Remediation{Cmd: "frameworks edge capacity show " + nodeID, Why: "Wait for the saved revision to reach Helmsman."}})
+		}
 	}
 
 	return r

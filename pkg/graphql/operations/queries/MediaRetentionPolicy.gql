@@ -3,6 +3,8 @@
 # defaults" panel.
 query MediaRetentionPolicy {
   mediaRetentionPolicy {
+    keepVodOriginals
+    effectiveKeepVodOriginals
     defaultVodRetentionDays
     defaultDvrRetentionDays
     defaultClipRetentionDays

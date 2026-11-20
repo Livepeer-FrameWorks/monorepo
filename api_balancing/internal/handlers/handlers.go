@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"math"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ import (
 	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -32,6 +34,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -447,12 +450,15 @@ func HandleNodesOverview(c *gin.Context) {
 					}
 					return 0
 				}(),
-				"up_speed":        n.UpSpeed,
-				"down_speed":      n.DownSpeed,
-				"bw_limit":        n.BWLimit,
-				"avail_bandwidth": n.AvailBandwidth,
-				"add_bandwidth":   n.AddBandwidth,
-				"tags":            n.Tags,
+				"up_speed":                  n.UpSpeed,
+				"down_speed":                n.DownSpeed,
+				"bw_limit":                  n.BWLimit,
+				"capacity":                  n.Capacity,
+				"capacity_revision_applied": n.CapacityRevisionApplied,
+				"observed_source":           n.ObservedSource.String(),
+				"avail_bandwidth":           n.AvailBandwidth,
+				"add_bandwidth":             n.AddBandwidth,
+				"tags":                      n.Tags,
 				// networking
 				"port":           n.Port,
 				"dtsc_port":      n.DTSCPort,
@@ -1049,10 +1055,12 @@ func selectRemoteSourceCandidate(candidates []*foghornfederationpb.EdgeCandidate
 }
 
 type pullSourceLookup struct {
-	response  *commodorepb.ResolvePullSourceByInternalNameResponse
-	snapshot  localauthority.SourceSnapshot
-	usedLocal bool
-	offline   string
+	limitsKnown bool
+	maxStreams  int32
+	response    *commodorepb.ResolvePullSourceByInternalNameResponse
+	snapshot    localauthority.SourceSnapshot
+	usedLocal   bool
+	offline     string
 }
 
 // resolvePullSourceForSource uses a marked signed local projection as the
@@ -1063,7 +1071,17 @@ func resolvePullSourceForSource(ctx context.Context, streamName string) pullSour
 	if internalName == "" {
 		return pullSourceLookup{offline: control.OfflineInvalidToken}
 	}
-	local, localErr := control.ResolveLocalPullSource(ctx, control.LocalMediaAuthorityStore(), internalName)
+	store := control.LocalMediaAuthorityStore()
+	local, localErr := control.ResolveLocalPullSource(ctx, store, internalName)
+	if store != nil && ((!local.Found && localErr == nil) || local.Snapshot.Object.Freshness == localauthority.FreshnessHardExpired || local.Snapshot.Tenant.Freshness == localauthority.FreshnessHardExpired) {
+		applied, fetchErr := store.Fetch(ctx, localauthority.AuthorityLookup{InternalName: internalName})
+		if applied {
+			local, localErr = control.ResolveLocalPullSource(ctx, store, internalName)
+		}
+		if fetchErr != nil && localauthority.PlacementEnforced() {
+			return pullSourceLookup{offline: control.OfflineUnavailable}
+		}
+	}
 	if local.Marked {
 		if localErr != nil || local.Response == nil {
 			return pullSourceLookup{snapshot: local.Snapshot, usedLocal: true, offline: control.OfflineUnavailable}
@@ -1072,6 +1090,9 @@ func resolvePullSourceForSource(ctx context.Context, streamName string) pullSour
 			return pullSourceLookup{response: local.Response, snapshot: local.Snapshot, usedLocal: true, offline: control.OfflineDisabled}
 		}
 		return pullSourceLookup{response: local.Response, snapshot: local.Snapshot, usedLocal: true}
+	}
+	if localauthority.PlacementEnforced() {
+		return pullSourceLookup{snapshot: local.Snapshot, offline: control.OfflineUnavailable}
 	}
 	if control.CommodoreClient == nil {
 		return pullSourceLookup{snapshot: local.Snapshot, offline: control.OfflineUnavailable}
@@ -1088,20 +1109,14 @@ func resolvePullSourceForSource(ctx context.Context, streamName string) pullSour
 	if !resp.GetEnabled() {
 		return pullSourceLookup{response: resp, snapshot: local.Snapshot, offline: control.OfflineDisabled}
 	}
-	var streamCtx *commodorepb.ResolveStreamContextResponse
-	if commodoreClient != nil {
-		var contextErr error
-		streamCtx, contextErr = commodoreClient.ResolveStreamContext(ctx, resp.GetStreamId(), "", "", "")
-		if contextErr != nil {
-			logger.WithError(contextErr).WithField("stream", streamName).Debug("Source lookup: connected stream context unavailable for local-authority promotion")
-		}
-	}
+	streamCtx, contextErr := control.CommodoreClient.ResolveStreamContext(ctx, resp.GetStreamId(), "", "", "")
+	limitsKnown := contextErr == nil && streamCtx != nil && streamCtx.GetAdmitted()
 	if promotion, promoteErr := control.PromoteLocalPullSourceIfMatching(ctx, control.LocalMediaAuthorityStore(), resp, streamCtx, local.Snapshot); promoteErr != nil {
 		logger.WithError(promoteErr).WithField("stream", streamName).Warn("Source lookup: failed to promote matching local source authority")
 	} else if promotion == control.PullSourcePromotionMismatch {
 		logger.WithField("stream", streamName).Warn("Source lookup: signed source shadow mismatched connected authority")
 	}
-	return pullSourceLookup{response: resp, snapshot: local.Snapshot}
+	return pullSourceLookup{response: resp, snapshot: local.Snapshot, maxStreams: streamCtx.GetTenantResourceLimits().GetMaxStreams(), limitsKnown: limitsKnown}
 }
 
 // summarizePullPlacementRejects flattens FilterPlacementClusters rejections
@@ -1229,11 +1244,57 @@ func servePullSourceLookup(c *gin.Context, streamName string, lookup pullSourceL
 		return
 	}
 
+	if !lookup.usedLocal && !lookup.limitsKnown {
+		c.String(http.StatusOK, control.OfflineUnavailable)
+		return
+	}
+	if callerNodeID == "" || localClusterID == "" {
+		c.String(http.StatusOK, control.OfflineUnavailable)
+		return
+	}
+	maxStreams := lookup.maxStreams
+	if lookup.usedLocal {
+		maxStreams = sharedauthority.EffectiveResourceLimits(lookup.snapshot.Tenant.Authority, localClusterID).GetMaxStreams()
+	}
+	// Each lookup owns its reservation; a denied tenant admission must not
+	// remove a concurrent successful lookup's ingress accounting.
+	bandwidthID := "upstream:" + strings.TrimPrefix(streamName, "pull+") + ":" + uuid.NewString()
+	keepBandwidth := false
+	defer func() {
+		if !keepBandwidth {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := state.DefaultManager().ReleaseNodeBandwidth(cleanupCtx, bandwidthID, callerNodeID); err != nil {
+				logger.WithError(err).Warn("Could not release refused pull bandwidth")
+			}
+		}
+	}()
+	allowed, bandwidthErr := state.DefaultManager().HoldNodeBandwidth(ctx, bandwidthID, callerNodeID, strings.TrimPrefix(streamName, "pull+"), state.BandwidthIngress, capacity.DefaultIngestEstimate)
+	if bandwidthErr != nil || !allowed {
+		recordPullLookupEvent(src, streamName, "bandwidth_capacity", localClusterID)
+		c.String(http.StatusOK, control.OfflineBandwidthCapacity)
+		return
+	}
+	admitted, admissionErr := admitPullUpstreamFn(ctx, src.GetTenantId(), src.GetStreamId(), strings.TrimPrefix(streamName, "pull+"), callerNodeID, localClusterID, maxStreams)
+	if admissionErr != nil {
+		logger.WithError(admissionErr).WithField("stream", streamName).Warn("Pull stream admission unavailable")
+		c.String(http.StatusOK, control.OfflineUnavailable)
+		return
+	}
+	if !admitted {
+		recordPullLookupEvent(src, streamName, "stream_cap", localClusterID)
+		c.String(http.StatusOK, control.OfflineStreamCap)
+		return
+	}
+
+	keepBandwidth = true
+
 	// Handing this node the raw upstream URI makes it the stream's source
 	// owner — the OG pull, the exact counterpart of ProjectSource's
 	// owner stamp for push ingest. First dialer wins; a relay or double-dial
 	// asking later cannot flip ownership. The federated branch above never
 	// stamps: returning a peer's DTSC means this cluster is a carrier.
+
 	// callerNodeID == "" (IP-mapping miss) stays unstamped by design —
 	// unknown provenance rides the ingest backstop, not the fast path.
 	if callerNodeID != "" && control.StreamRegistryInstance != nil {
@@ -1275,7 +1336,23 @@ func servePullSourceLookup(c *gin.Context, streamName string, lookup pullSourceL
 	postBalancingEventWithIdentity(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs, &routingEventIdentity{
 		TenantID: src.GetTenantId(), StreamID: src.GetStreamId(), InternalName: strings.TrimPrefix(streamName, "pull+"),
 	})
+	recordPullLookupEvent(src, streamName, "resolved", localClusterID)
 	c.String(http.StatusOK, upstream)
+}
+
+func recordPullLookupEvent(source *commodorepb.ResolvePullSourceByInternalNameResponse, runtime, kind, detail string) {
+	client := control.CommodoreClient
+	if client == nil {
+		return
+	}
+	request := &commodorepb.RecordPullSourceEventRequest{TenantId: source.GetTenantId(), StreamId: source.GetStreamId(), InternalName: strings.TrimPrefix(runtime, "pull+"), EventKind: kind, Detail: detail}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := client.RecordPullSourceEvent(ctx, request); err != nil {
+			logger.WithError(err).WithField("event_kind", kind).Debug("Failed to record pull-source admission event")
+		}
+	}()
 }
 
 const sourceByNodePathPrefix = "/source/by-node/"
@@ -1314,6 +1391,7 @@ func sourceCallerClusterID(ctx context.Context, nodeID string) string {
 const sourceAuthorityLookupBudget = 500 * time.Millisecond
 
 var (
+	admitPullUpstreamFn             = control.AdmitPullUpstream
 	resolveSourceAuthorityFn        = resolveSourceAuthority
 	sourceClusterAccessibleForScope = control.ClusterServeAccessibleForScope
 	resolveLocalSourceContent       = func(ctx context.Context, internalName string) (*control.ContentResolution, bool, error) {
@@ -1660,14 +1738,14 @@ func handleHostStatus(c *gin.Context, hostname string) {
 	for _, node := range nodes {
 		if hostname == "" || node.Host == hostname {
 			status := map[string]interface{}{
-				"cpu":     node.CPU / 10,                         // Convert 0-1000 to 0-100 like C++
+				"cpu":     node.CPU,
 				"ram":     (node.RAMCurrent * 100) / node.RAMMax, // Percentage like C++
 				"up":      node.UpSpeed,
 				"up_add":  node.AddBandwidth,
 				"down":    node.DownSpeed,
 				"streams": len(node.Streams),
 				"viewers": getTotalViewers(node),
-				"bwlimit": node.AvailBandwidth,
+				"bwlimit": node.BWLimit,
 			}
 
 			if node.GeoLatitude != 0 || node.GeoLongitude != 0 {
@@ -1682,12 +1760,12 @@ func handleHostStatus(c *gin.Context, hostname string) {
 			}
 
 			// Add scoring info like C++
-			if node.RAMMax > 0 && node.AvailBandwidth > 0 {
+			if node.RAMMax > 0 && node.BWLimit > 0 {
 				weights := lb.GetWeights()
 				status["score"] = map[string]uint64{
 					"cpu": weights["cpu"] - (uint64(node.CPU*10)*weights["cpu"])/1000,
 					"ram": weights["ram"] - ((uint64(node.RAMCurrent) * weights["ram"]) / uint64(node.RAMMax)),
-					"bw":  weights["bw"] - (((uint64(node.UpSpeed) + uint64(node.AddBandwidth)) * weights["bw"]) / node.AvailBandwidth),
+					"bw":  uint64(float64(weights["bw"]) * (1 - math.Min(1, node.EgressLink().LoadFraction()))),
 				}
 			}
 

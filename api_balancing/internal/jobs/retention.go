@@ -29,7 +29,7 @@ type RetentionJob struct {
 	db            *sql.DB
 	logger        logging.Logger
 	interval      time.Duration
-	retentionDays int // Default retention in days
+	retentionDays int // Age horizon for failed artifacts with no retention deadline
 	decklogClient *decklog.BatchedClient
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
@@ -40,7 +40,7 @@ type RetentionConfig struct {
 	DB            *sql.DB
 	Logger        logging.Logger
 	Interval      time.Duration // How often to run (default: 1 hour)
-	RetentionDays int           // Default retention (default: 30 days)
+	RetentionDays int           // Failed-artifact age horizon (default: 30 days)
 	DecklogClient *decklog.BatchedClient
 }
 

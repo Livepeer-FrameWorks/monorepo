@@ -1,0 +1,7 @@
+fragment ClusterCapacityFields on ClusterCapacity {
+  egressBudgetBytesPerSec
+  ingressBudgetBytesPerSec
+  egressUsableBytesPerSec
+  ingressUsableBytesPerSec
+  defaultBudgetNodes
+}

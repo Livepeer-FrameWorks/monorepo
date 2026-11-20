@@ -190,7 +190,7 @@ FROM commodore.streams s
 JOIN commodore.users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
 LEFT JOIN commodore.tenant_account_states account ON account.tenant_id = s.tenant_id
 WHERE s.tenant_id = $1::uuid AND s.id = $2::uuid
-    AND (NOT COALESCE(u.is_active, false) OR account.closed_at IS NOT NULL)
+    AND (s.deleted_at IS NOT NULL OR NOT COALESCE(u.is_active, false) OR account.closed_at IS NOT NULL)
 `
 
 type GetRevokedStreamIngestParams struct {
@@ -204,6 +204,27 @@ func (q *Queries) GetRevokedStreamIngest(ctx context.Context, arg GetRevokedStre
 	var internal_name string
 	err := row.Scan(&internal_name)
 	return internal_name, err
+}
+
+const hasUnsettledStreamIngestRevocation = `-- name: HasUnsettledStreamIngestRevocation :one
+SELECT EXISTS (
+    SELECT 1 FROM commodore.media_authority_refresh_obligations
+    WHERE tenant_id = $1::uuid
+      AND target_key = $2
+      AND lane = 'ingest_revocation' AND status <> 'completed'
+)
+`
+
+type HasUnsettledStreamIngestRevocationParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	TargetKey string `db:"target_key" json:"target_key"`
+}
+
+func (q *Queries) HasUnsettledStreamIngestRevocation(ctx context.Context, arg HasUnsettledStreamIngestRevocationParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasUnsettledStreamIngestRevocation, arg.TenantID, arg.TargetKey)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const isTenantAccountClosed = `-- name: IsTenantAccountClosed :one

@@ -15,7 +15,9 @@ SELECT id, tier_name, display_name, COALESCE(description, '') AS description,
        COALESCE(processes_dvr, '[]'::jsonb) AS processes_dvr,
        COALESCE(processes_clip, '[]'::jsonb) AS processes_clip,
        COALESCE(processes_dvr_finalize, '[]'::jsonb) AS processes_dvr_finalize,
-       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod
+       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod,
+       transcode_ladders,
+       default_transcode_ladder
 FROM purser.billing_tiers
 WHERE (sqlc.arg(include_inactive)::boolean OR COALESCE(is_active, true))
   AND (
@@ -47,7 +49,9 @@ SELECT id, tier_name, display_name, COALESCE(description, '') AS description,
        COALESCE(processes_dvr, '[]'::jsonb) AS processes_dvr,
        COALESCE(processes_clip, '[]'::jsonb) AS processes_clip,
        COALESCE(processes_dvr_finalize, '[]'::jsonb) AS processes_dvr_finalize,
-       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod
+       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod,
+       transcode_ladders,
+       default_transcode_ladder
 FROM purser.billing_tiers
 WHERE id = sqlc.arg(id)::text::uuid;
 

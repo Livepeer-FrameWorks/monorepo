@@ -81,10 +81,10 @@ enum ServerCompatibility: Equatable {
 }
 
 /// Asks the connected Bridge for its release when the app connects and decides
-/// whether it is new enough. The minimum is the first release that serves
-/// serverInfo, so a Bridge that rejects the query as an unknown field is too old.
+/// whether it is new enough. The minimum includes the ingest-session and node-capacity APIs.
+/// A Bridge that rejects serverInfo as an unknown field is also too old.
 final class ServerInfoService {
-  static let minimumVersion = ReleaseVersion(major: 0, minor: 3, patch: 11)
+  static let minimumVersion = ReleaseVersion(major: 0, minor: 3, patch: 16)
   static let shared = ServerInfoService()
 
   typealias Transport = (_ query: String) async throws -> ServerInfoQueryResponse

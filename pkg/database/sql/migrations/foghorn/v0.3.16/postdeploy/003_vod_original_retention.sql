@@ -1,0 +1,1 @@
+ALTER TABLE foghorn.vod_metadata VALIDATE CONSTRAINT chk_vod_original_retention;

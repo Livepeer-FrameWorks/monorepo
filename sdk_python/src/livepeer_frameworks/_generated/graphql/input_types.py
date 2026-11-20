@@ -415,13 +415,12 @@ class CreateStreamInput(BaseModel):
         description="Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.",
     )
     "Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources."
-
-
-class CreateStreamKeyInput(BaseModel):
-    """Input for creating an additional stream key."""
-
-    name: str = Field(description="Human-readable name for the key.")
-    "Human-readable name for the key."
+    transcode_ladder: Optional[str] = Field(
+        alias="transcodeLadder",
+        default=None,
+        description="Ladder name allowed by the plan. Empty inherits the account, then plan default.",
+    )
+    "Ladder name allowed by the plan. Empty inherits the account, then plan default."
 
 
 class CreateVodUploadInput(BaseModel):
@@ -429,9 +428,9 @@ class CreateVodUploadInput(BaseModel):
     Returns presigned S3 URLs for uploading file parts."""
 
     filename: str = Field(
-        description="Original filename (for metadata and content-type detection)."
+        description="Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused."
     )
-    "Original filename (for metadata and content-type detection)."
+    "Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused."
     size_bytes: float = Field(
         alias="sizeBytes",
         description="Total file size in bytes (required for part calculation).",
@@ -451,6 +450,18 @@ class CreateVodUploadInput(BaseModel):
         default=None, description="Optional description for the asset."
     )
     "Optional description for the asset."
+    transcode_ladder: Optional[str] = Field(
+        alias="transcodeLadder",
+        default=None,
+        description="Video ladder for this upload; empty inherits the account, then plan default.",
+    )
+    "Video ladder for this upload; empty inherits the account, then plan default."
+    keep_original: Optional[bool] = Field(
+        alias="keepOriginal",
+        default=None,
+        description="Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default.",
+    )
+    "Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default."
 
 
 class CreateWebhookEndpointInput(BaseModel):
@@ -481,9 +492,9 @@ class ImportVodAssetInput(BaseModel):
     "Source URL, https or http. It must be publicly reachable and support HTTP\nrange requests; private and internal addresses are refused."
     filename: Optional[str] = Field(
         default=None,
-        description="Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts).",
+        description="Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).",
     )
-    "Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts)."
+    "Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts)."
     title: Optional[str] = Field(
         default=None, description="Optional display title for the asset."
     )
@@ -492,6 +503,12 @@ class ImportVodAssetInput(BaseModel):
         default=None, description="Optional description for the asset."
     )
     "Optional description for the asset."
+    transcode_ladder: Optional[str] = Field(
+        alias="transcodeLadder",
+        default=None,
+        description="Video ladder for this import; empty inherits the account, then plan default.",
+    )
+    "Video ladder for this import; empty inherits the account, then plan default."
 
 
 class IncidentFilterInput(BaseModel):
@@ -761,6 +778,27 @@ class SetMediaRetentionPolicyInput(BaseModel):
     "When true, NULLs out the per-class column so the tenant inherits the\nsystem default (VOD: keep forever, DVR/clip: 30d). days is ignored."
 
 
+class SetNodeCapacityInput(BaseModel):
+    node_id: str = Field(alias="nodeId")
+    egress_budget_bytes_per_sec: Optional[float] = Field(
+        alias="egressBudgetBytesPerSec",
+        default=None,
+        description="Positive whole bytes per second, or null to restore the default.",
+    )
+    "Positive whole bytes per second, or null to restore the default."
+    ingress_budget_bytes_per_sec: Optional[float] = Field(
+        alias="ingressBudgetBytesPerSec",
+        default=None,
+        description="Positive whole bytes per second, or null to restore the default.",
+    )
+    "Positive whole bytes per second, or null to restore the default."
+    expected_revision: int = Field(
+        alias="expectedRevision",
+        description="Revision from the current capacity; a stale revision rejects the write.",
+    )
+    "Revision from the current capacity; a stale revision rejects the write."
+
+
 class SetNodeModeInput(BaseModel):
     node_id: str = Field(
         alias="nodeId",
@@ -804,6 +842,10 @@ class SetStreamRetentionOverridesInput(BaseModel):
     clear_clip_retention_override: Optional[bool] = Field(
         alias="clearClipRetentionOverride", default=None
     )
+
+
+class SetTranscodeLadderPolicyInput(BaseModel):
+    ladder: Optional[str] = None
 
 
 class SkipperChatInput(BaseModel):
@@ -1069,6 +1111,12 @@ class UpdateStreamInput(BaseModel):
         description="Per-stream Skipper monitoring override. INHERIT follows the tenant tier.",
     )
     "Per-stream Skipper monitoring override. INHERIT follows the tenant tier."
+    transcode_ladder: Optional[str] = Field(
+        alias="transcodeLadder",
+        default=None,
+        description="Ladder name; empty inherits the account, then plan. Applies from the next broadcast.",
+    )
+    "Ladder name; empty inherits the account, then plan. Applies from the next broadcast."
 
 
 class UpdateTenantInput(BaseModel):

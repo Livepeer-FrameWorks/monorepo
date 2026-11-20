@@ -102,9 +102,29 @@ subscription TenantEvents($types: [String!], $streamId: ID) {
         }
         mediaFailureReason: reason
       }
+      ... on StreamEnded {
+        streamId
+        playbackId
+        sessionId
+      }
+      ... on StreamIngestDisconnected {
+        streamId
+        sessionId
+        disconnectReason: reason
+      }
+      ... on RecordingChapterReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        chapterId
+        startMs
+        endMs
+        sizeBytes
+      }
       ... on StreamConnected {
         streamId
         protocol
+        sessionId
       }
       ... on StreamCreated {
         streamId
@@ -116,12 +136,14 @@ subscription TenantEvents($types: [String!], $streamId: ID) {
       }
       ... on StreamIdle {
         streamId
+        sessionId
       }
       ... on StreamKeyRotated {
         streamId
       }
       ... on StreamLive {
         streamId
+        sessionId
       }
       ... on StreamUpdated {
         streamId

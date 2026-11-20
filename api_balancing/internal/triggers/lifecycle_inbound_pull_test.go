@@ -97,7 +97,7 @@ func TestLifecycleSnapshotKeepsPullArrangedForRedirectedViewer(t *testing.T) {
 	f := newLifecyclePullFixture(t)
 	pull := f.arrange(t)
 	// PLAY_REWRITE viewer bookkeeping creates the node's stream instance.
-	f.state.UpdateUserConnection("stream", "edge", "tenant", 1)
+	f.state.EnsureViewerStreamIdentity("stream", "edge", "tenant")
 
 	f.snapshot(t, nil)
 

@@ -3,7 +3,10 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import ClusterDefault
+from .fragments import (
+    ClusterDefault,
+    ClusterDefaultCapacity,  # noqa: F401
+)
 
 
 class GetCluster(BaseModel):

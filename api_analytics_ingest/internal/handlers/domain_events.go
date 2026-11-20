@@ -70,6 +70,12 @@ const (
 // wrapper sends to the DLQ; a ClickHouse error returns as-is, so a transient one
 // is retried in place.
 func (h *AnalyticsHandler) HandleDomainEventMessage(ctx context.Context, msg kafka.Message) error {
+	// Internal chapter-ready records are the legacy producer contract. They stay
+	// outside tenant audit during consumer-first upgrades, before registry decoding.
+	if msg.Headers[events.HeaderType] == "recording.chapter_ready" && msg.Headers[events.HeaderVisibility] == events.VisibilityInternal {
+		h.countDomainEvent("recording.chapter_ready", domainEventProcessed)
+		return nil
+	}
 	headers := make([]events.Header, 0, len(msg.Headers))
 	for key, value := range msg.Headers {
 		headers = append(headers, events.Header{Key: key, Value: []byte(value)})
@@ -119,8 +125,7 @@ var domainDetailsJSON = protojson.MarshalOptions{UseProtoNames: true}
 // auditedInternalTypes are the internal event types that record a change to
 // the tenant's own account, its members' sessions, billing, cluster access,
 // or webhook endpoints, so they belong in the tenant's audit log. Every other internal type stays out
-// of api_events: artifact.node_copy_changed names a storage node, and
-// recording.chapter_ready is a processing step, not a tenant action. A new
+// of api_events: artifact.node_copy_changed names a storage node. A new
 // internal type is not audited until it is listed here.
 var auditedInternalTypes = map[string]bool{
 	"tenant.created":                   true,

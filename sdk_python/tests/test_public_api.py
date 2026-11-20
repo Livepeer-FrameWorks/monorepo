@@ -54,12 +54,12 @@ def test_schema_descriptions_are_available_to_python_tools() -> None:
     assert inspect.getdoc(FrameWorksClient.create_stream) == "Create a new stream for live broadcasting."
 
 
-# The hand-maintained export list before it was generated; each name stays public.
+# Public names retained by SDK line 0.6.
 _PREVIOUS_PUBLIC_NAMES = frozenset(
     """
     Clip ClipCreationMode ClipEffectiveRetention ClipPlaybackPolicy ClipThumbnailAssets
     CompleteVodUploadInput ConnectionInput CreateClipInput CreateDeveloperTokenInput
-    CreatePushTargetInput CreateSigningKeyInput CreateStreamInput CreateStreamKeyInput
+    CreatePushTargetInput CreateSigningKeyInput CreateStreamInput
     CreateVodUploadInput DVRChapterMode DVRChapterRef DVRChapterState DVRRequest DeleteSuccess
     DeveloperToken EffectiveRetention EventArtifact EventArtifactKind EventCustomDomainFailureReason
     EventIngestProtocol EventMediaFailureReason EventMoney EventMultistreamStatus
@@ -70,7 +70,7 @@ _PREVIOUS_PUBLIC_NAMES = frozenset(
     PlaybackWebhookPolicyInput PullSourceInput PushTarget RetentionSource SetPlaybackPolicyInput
     SigningKey SigningKeyAlgorithm SigningKeyStatus SortDirection SourceLocationMode
     SourceLocationClusterInput SourceLocationInput StorageArtifact StorageArtifactKind
-    StorageArtifactSortField StorageArtifactThumbnailAssets StorageArtifactsInput Stream StreamKey
+    StorageArtifactSortField StorageArtifactThumbnailAssets StorageArtifactsInput Stream
     StreamMetrics StreamPlaybackPolicy StreamPullSource StreamStatus TestPlaybackAccessInput
     ThumbnailAssets TimeRangeInput UpdatePushTargetInput UpdateStreamInput ViewerEndpoint VodAsset
     VodAssetEffectiveRetention VodAssetPlaybackPolicy VodAssetStatus VodAssetThumbnailAssets

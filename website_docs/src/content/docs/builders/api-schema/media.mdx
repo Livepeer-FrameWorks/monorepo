@@ -7,7 +7,7 @@ sidebar:
 
 [GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
 
-Clips, DVR recordings, VOD uploads and assets, storage artifacts, retention, and media placement.
+Clips, DVR recordings, VOD uploads and originals, named transcode ladders, storage artifacts, retention, and media placement.
 
 Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
 
@@ -140,6 +140,29 @@ dvrChapters(
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
 | ListDVRChapters | `ListDVRChaptersDocument` | `ListDVRChapters` | `list_dvr_chapters` |
+
+### Query.dvrRecording
+
+A recording from the tenant catalog, readable with streams:read.
+
+```graphql
+dvrRecording(
+  id: ID!
+): DVRRequest
+```
+
+**Returns:** `DVRRequest` ([DVRRequest](/builders/api-schema/media-types/#dvrrequest))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | Selects | TypeScript | Go | Python |
+| --- | --- | --- | --- | --- |
+| GetDvrRecording | `dvrRecording` | `GetDvrRecordingDocument` | `GetDvrRecording` | `get_dvr_recording` |
+| ListRecordingChapters | `dvrRecording.chapters` | `ListRecordingChaptersDocument` | `ListRecordingChapters` | `list_recording_chapters` |
 
 ### Query.mediaPlacementChange
 
@@ -311,6 +334,22 @@ storageArtifactsConnection(
 | --- | --- | --- | --- |
 | ListArtifacts | `ListArtifactsDocument` | `ListArtifacts` | `list_artifacts` |
 
+### Query.transcodeLadderPolicy
+
+Allowed video ladders, account choice, and effective default.
+
+```graphql
+transcodeLadderPolicy: TranscodeLadderPolicy!
+```
+
+**Returns:** `TranscodeLadderPolicy!` ([TranscodeLadderPolicy](/builders/api-schema/media-types/#transcodeladderpolicy))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetTranscodeLadderPolicy | `GetTranscodeLadderPolicyDocument` | `GetTranscodeLadderPolicy` | `get_transcode_ladder_policy` |
+
 ### Query.vodAsset
 
 Fetch a single VOD asset by ID.
@@ -465,6 +504,28 @@ createClip(
 | --- | --- | --- | --- |
 | CreateClip | `CreateClipDocument` | `CreateClip` | `create_clip` |
 
+### Mutation.createVodOriginalDownload
+
+Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5.
+
+```graphql
+createVodOriginalDownload(
+  id: ID!
+): CreateVodOriginalDownloadResult!
+```
+
+**Returns:** `CreateVodOriginalDownloadResult!` ([CreateVodOriginalDownloadResult](/builders/api-schema/media-types/#createvodoriginaldownloadresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateVodOriginalDownload | `CreateVodOriginalDownloadDocument` | `CreateVodOriginalDownload` | `create_vod_original_download` |
+
 ### Mutation.createVodUpload
 
 Create a new VOD upload session. Returns presigned URLs for multipart upload.
@@ -552,6 +613,28 @@ deleteVodAsset(
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
 | DeleteVodAsset | `DeleteVodAssetDocument` | `DeleteVodAsset` | `delete_vod_asset` |
+
+### Mutation.deleteVodOriginal
+
+Permanently delete only the retained upload; processed playback remains available.
+
+```graphql
+deleteVodOriginal(
+  id: ID!
+): DeleteVodOriginalResult!
+```
+
+**Returns:** `DeleteVodOriginalResult!` ([DeleteVodOriginalResult](/builders/api-schema/media-types/#deletevodoriginalresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteVodOriginal | `DeleteVodOriginalDocument` | `DeleteVodOriginal` | `delete_vod_original` |
 
 ### Mutation.importVodAsset
 
@@ -641,6 +724,50 @@ setStreamRetentionOverrides(
 | --- | --- | --- | --- |
 | SetStreamRetentionOverrides | `SetStreamRetentionOverridesDocument` | `SetStreamRetentionOverrides` | `set_stream_retention_overrides` |
 
+### Mutation.setTranscodeLadderPolicy
+
+Set the account&#39;s video ladder. Empty or null inherits the plan default.
+
+```graphql
+setTranscodeLadderPolicy(
+  input: SetTranscodeLadderPolicyInput!
+): SetTranscodeLadderPolicyResult!
+```
+
+**Returns:** `SetTranscodeLadderPolicyResult!` ([SetTranscodeLadderPolicyResult](/builders/api-schema/media-types/#settranscodeladderpolicyresult))
+
+**Arguments**
+
+- `input`: `SetTranscodeLadderPolicyInput!` ([SetTranscodeLadderPolicyInput](/builders/api-schema/media-types/#settranscodeladderpolicyinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetTranscodeLadderPolicy | `SetTranscodeLadderPolicyDocument` | `SetTranscodeLadderPolicy` | `set_transcode_ladder_policy` |
+
+### Mutation.setVodOriginalPolicy
+
+Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged.
+
+```graphql
+setVodOriginalPolicy(
+  keepVodOriginals: Boolean
+): SetMediaRetentionPolicyResult!
+```
+
+**Returns:** `SetMediaRetentionPolicyResult!` ([SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult))
+
+**Arguments**
+
+- `keepVodOriginals`: `Boolean`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetVodOriginalPolicy | `SetVodOriginalPolicyDocument` | `SetVodOriginalPolicy` | `set_vod_original_policy` |
+
 ### Mutation.startDVR
 
 Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters.
@@ -709,4 +836,4 @@ updateMediaRetention(
 
 ## Types
 
-- [Media and storage types](/builders/api-schema/media-types/): [AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult), [ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput), [ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput), [ArtifactTrack](/builders/api-schema/media-types/#artifacttrack), [ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode), [CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput), [CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult), [CreateClipInput](/builders/api-schema/media-types/#createclipinput), [CreateClipResult](/builders/api-schema/media-types/#createclipresult), [CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput), [CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult), [DVRChapter](/builders/api-schema/media-types/#dvrchapter), [DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref), [DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate), [DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage), [DVRRequest](/builders/api-schema/media-types/#dvrrequest), [DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult), [DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult), [DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult), [ImportVodAssetInput](/builders/api-schema/media-types/#importvodassetinput), [ImportVodAssetResult](/builders/api-schema/media-types/#importvodassetresult), [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent), [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange), [MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult), [MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult), [MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions), [MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow), [MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput), [MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation), [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange), [MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult), [MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging), [MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass), [MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints), [MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput), [MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput), [MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference), [MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy), [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror), [MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode), [MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures), [MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror), [MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup), [MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput), [MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact), [MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption), [MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind), [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection), [MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter), [MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult), [MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder), [MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult), [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate), [MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences), [MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput), [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview), [MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult), [MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice), [MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient), [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview), [MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult), [MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout), [MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus), [MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules), [MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput), [MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope), [MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput), [MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind), [MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector), [MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput), [MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover), [MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition), [MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind), [MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb), [MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy), [MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput), [MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning), [MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity), [MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds), [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy), [MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget), [PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput), [ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput), [ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput), [ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput), [SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput), [SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult), [SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput), [SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult), [SortDirection](/builders/api-schema/media-types/#sortdirection), [StartDVRResult](/builders/api-schema/media-types/#startdvrresult), [StopDVRResult](/builders/api-schema/media-types/#stopdvrresult), [StorageArtifact](/builders/api-schema/media-types/#storageartifact), [StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts), [StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield), [StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection), [StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput), [UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput), [UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult), [VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart), [VodUploadPart](/builders/api-schema/media-types/#voduploadpart), [VodUploadSession](/builders/api-schema/media-types/#voduploadsession), [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus), [VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult), [VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)
+- [Media and storage types](/builders/api-schema/media-types/): [AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult), [ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput), [ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput), [ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode), [CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput), [CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult), [CreateClipInput](/builders/api-schema/media-types/#createclipinput), [CreateClipResult](/builders/api-schema/media-types/#createclipresult), [CreateVodOriginalDownloadResult](/builders/api-schema/media-types/#createvodoriginaldownloadresult), [CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput), [CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult), [DVRChapter](/builders/api-schema/media-types/#dvrchapter), [DVRChapterConnection](/builders/api-schema/media-types/#dvrchapterconnection), [DVRChapterEdge](/builders/api-schema/media-types/#dvrchapteredge), [DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref), [DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate), [DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage), [DVRRequest](/builders/api-schema/media-types/#dvrrequest), [DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult), [DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult), [DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult), [DeleteVodOriginalResult](/builders/api-schema/media-types/#deletevodoriginalresult), [ImportVodAssetInput](/builders/api-schema/media-types/#importvodassetinput), [ImportVodAssetResult](/builders/api-schema/media-types/#importvodassetresult), [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent), [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange), [MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult), [MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult), [MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions), [MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow), [MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput), [MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation), [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange), [MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult), [MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging), [MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass), [MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints), [MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput), [MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput), [MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference), [MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy), [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror), [MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode), [MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures), [MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror), [MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup), [MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput), [MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact), [MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption), [MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind), [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection), [MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter), [MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult), [MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder), [MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult), [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate), [MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences), [MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput), [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview), [MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult), [MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice), [MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient), [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview), [MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult), [MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout), [MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus), [MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules), [MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput), [MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope), [MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput), [MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind), [MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector), [MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput), [MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover), [MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition), [MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind), [MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb), [MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy), [MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput), [MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning), [MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity), [MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds), [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy), [MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget), [PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput), [ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput), [ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput), [ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput), [SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput), [SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult), [SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput), [SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult), [SetTranscodeLadderPolicyInput](/builders/api-schema/media-types/#settranscodeladderpolicyinput), [SetTranscodeLadderPolicyResult](/builders/api-schema/media-types/#settranscodeladderpolicyresult), [SortDirection](/builders/api-schema/media-types/#sortdirection), [StartDVRResult](/builders/api-schema/media-types/#startdvrresult), [StopDVRResult](/builders/api-schema/media-types/#stopdvrresult), [StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts), [StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield), [StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection), [StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput), [TranscodeLadder](/builders/api-schema/media-types/#transcodeladder), [TranscodeLadderPolicy](/builders/api-schema/media-types/#transcodeladderpolicy), [UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput), [UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult), [VodOriginalDownload](/builders/api-schema/media-types/#vodoriginaldownload), [VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart), [VodUploadPart](/builders/api-schema/media-types/#voduploadpart), [VodUploadSession](/builders/api-schema/media-types/#voduploadsession), [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus), [VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult), [VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)

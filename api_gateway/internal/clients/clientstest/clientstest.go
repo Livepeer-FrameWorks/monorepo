@@ -106,6 +106,11 @@ func SolventPurser() *FakePurser {
 // func fields. Calls counts every backed method invocation (for "cache avoided
 // the backend" assertions).
 type FakeCommodore struct {
+	GetTranscodeLadderPolicyFn  func(context.Context, *commodorepb.GetTranscodeLadderPolicyRequest) (*commodorepb.TranscodeLadderPolicy, error)
+	SetTenantTranscodeLadderFn  func(context.Context, *commodorepb.SetTenantTranscodeLadderRequest) (*commodorepb.TranscodeLadderPolicy, error)
+	SetVodOriginalPolicyFn      func(context.Context, *commodorepb.SetVodOriginalPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
+	CreateVodOriginalDownloadFn func(context.Context, *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginalFn         func(context.Context, *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error)
 	commodore.Interface
 	mu                           sync.Mutex
 	Calls                        int
@@ -116,24 +121,29 @@ type FakeCommodore struct {
 	ApplyMediaPlacementChangeFn  func(context.Context, *placementpb.ApplyChangeRequest) (*placementpb.Change, error)
 	GetMediaPlacementChangeFn    func(context.Context, *placementpb.GetChangeRequest) (*placementpb.Change, error)
 
-	GetStreamFn       func(ctx context.Context, streamID string) (*commodorepb.Stream, error)
-	GetStreamsBatchFn func(ctx context.Context, streamIDs []string) (*commodorepb.GetStreamsBatchResponse, error)
-	ListStreamsFn     func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error)
-	CreateStreamFn    func(ctx context.Context, req *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error)
-	UpdateStreamFn    func(ctx context.Context, req *commodorepb.UpdateStreamRequest) (*commodorepb.Stream, error)
-	DeleteStreamFn    func(ctx context.Context, streamID string) (*commodorepb.DeleteStreamResponse, error)
-	RefreshKeyFn      func(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error)
-	CreateStreamKeyFn func(ctx context.Context, streamID, keyName string) (*commodorepb.StreamKeyResponse, error)
-	ListStreamKeysFn  func(ctx context.Context, streamID string, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamKeysResponse, error)
-	DeactivateKeyFn   func(ctx context.Context, streamID, keyID string) error
+	GetStreamFn             func(ctx context.Context, streamID string) (*commodorepb.Stream, error)
+	GetStreamsBatchFn       func(ctx context.Context, streamIDs []string) (*commodorepb.GetStreamsBatchResponse, error)
+	GetStreamIngestStatesFn func(context.Context, []string) (*foghorncontrolpb.GetStreamIngestStatesResponse, error)
+	ListStreamsFn           func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error)
+	CreateStreamFn          func(ctx context.Context, req *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error)
+	UpdateStreamFn          func(ctx context.Context, req *commodorepb.UpdateStreamRequest) (*commodorepb.Stream, error)
+	DeleteStreamFn          func(ctx context.Context, streamID string) (*commodorepb.DeleteStreamResponse, error)
+	RefreshKeyAndEndFn      func(context.Context, string) (*commodorepb.RefreshStreamKeyResponse, error)
+	DisconnectIngestFn      func(context.Context, string) (*commodorepb.DisconnectIngestResponse, error)
+	RefreshKeyFn            func(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error)
+	CreateStreamKeyFn       func(ctx context.Context, streamID, keyName string) (*commodorepb.StreamKeyResponse, error)
+	ListStreamKeysFn        func(ctx context.Context, streamID string, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamKeysResponse, error)
+	DeactivateKeyFn         func(ctx context.Context, streamID, keyID string) error
 
 	ListSigningKeysFn   func(ctx context.Context, statusFilter string, limit int32, afterID string) (*commodorepb.ListSigningKeysResponse, error)
 	CreateSigningKeyFn  func(ctx context.Context, name string) (*commodorepb.CreateSigningKeyResponse, error)
 	RevokeSigningKeyFn  func(ctx context.Context, id string) (*commodorepb.SigningKey, error)
 	SetPlaybackPolicyFn func(ctx context.Context, req *commodorepb.SetPlaybackPolicyRequest) (*commodorepb.SetPlaybackPolicyResponse, error)
 
-	SetNodeModeFn   func(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error)
-	GetNodeHealthFn func(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error)
+	SetNodeCapacityFn func(ctx context.Context, req *quartermasterpb.SetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error)
+	GetNodeCapacityFn func(ctx context.Context, req *quartermasterpb.GetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error)
+	SetNodeModeFn     func(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error)
+	GetNodeHealthFn   func(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error)
 
 	CreateClipFn func(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error)
 	DeleteClipFn func(ctx context.Context, clipHash string) error
@@ -157,6 +167,8 @@ type FakeCommodore struct {
 	LinkWalletFn                        func(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
 	ListWalletsFn                       func(ctx context.Context) (*commodorepb.ListWalletsResponse, error)
 	ListPullSourceEventsFn              func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
+	ListStreamArtifactsFn               func(context.Context, *commodorepb.ListStreamArtifactsRequest) (*commodorepb.ListStreamArtifactsResponse, error)
+	GetDVRRecordingFn                   func(context.Context, string) (*sharedpb.DVRInfo, error)
 	ListStorageArtifactsFn              func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	GetTenantUserCountFn                func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
 	LoginFn                             func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
@@ -220,7 +232,9 @@ func (f *FakeCommodore) ForgotPassword(ctx context.Context, email, turnstileToke
 }
 
 func (f *FakeCommodore) GetStream(ctx context.Context, streamID string) (*commodorepb.Stream, error) {
+	f.mu.Lock()
 	f.Calls++
+	f.mu.Unlock()
 	if f.GetStreamFn == nil {
 		panic("FakeCommodore.GetStream not stubbed")
 	}
@@ -761,6 +775,7 @@ type FakeQuartermaster struct {
 	mu    sync.Mutex
 	Calls int
 
+	ListNodeCapacitiesFn        func(ctx context.Context, req *quartermasterpb.ListNodeCapacitiesRequest) (*quartermasterpb.ListNodeCapacitiesResponse, error)
 	GetNodeFn                   func(ctx context.Context, nodeID string) (*quartermasterpb.NodeResponse, error)
 	GetClusterFn                func(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	ListNodesFn                 func(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)

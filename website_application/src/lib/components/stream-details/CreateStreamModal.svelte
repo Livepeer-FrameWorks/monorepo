@@ -21,6 +21,7 @@
     DialogHeader,
     DialogTitle,
   } from "$lib/components/ui/dialog";
+  import TranscodeLadderSelect from "$lib/components/transcode/TranscodeLadderSelect.svelte";
 
   interface Props {
     open: boolean;
@@ -28,6 +29,7 @@
     description: string;
     record: boolean;
     liveVideoAbr: string;
+    transcodeLadder: string;
     ingestMode: "PUSH" | "PULL";
     pullSourceUri: string;
     pullSourceEnabled: boolean;
@@ -44,6 +46,7 @@
     description = $bindable(),
     record = $bindable(),
     liveVideoAbr = $bindable(),
+    transcodeLadder = $bindable(),
     ingestMode = $bindable(),
     pullSourceUri = $bindable(),
     pullSourceEnabled = $bindable(),
@@ -150,6 +153,11 @@
           <p class="text-xs text-muted-foreground">
             Audio conversion remains available for restream destinations.
           </p>
+          <TranscodeLadderSelect
+            id="createTranscodeLadder"
+            bind:value={transcodeLadder}
+            disabled={creating}
+          />
         </div>
       </details>
 

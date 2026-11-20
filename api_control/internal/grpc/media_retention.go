@@ -316,7 +316,8 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 	clipDays := row.DefaultClipRetentionDays
 
 	resp := &commodorepb.GetMediaRetentionPolicyResponse{
-		Bounds: &commodorepb.MediaRetentionBounds{MaxRecordingRetentionDays: bound},
+		Bounds:                    &commodorepb.MediaRetentionBounds{MaxRecordingRetentionDays: bound},
+		EffectiveKeepVodOriginals: !row.KeepVodOriginals.Valid || row.KeepVodOriginals.Bool,
 		EffectiveVodRetentionDays: resolveTenantPerClassEffective(
 			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, vodDays.Int32, vodDays.Valid, bound),
 		EffectiveDvrRetentionDays: resolveTenantPerClassEffective(
@@ -324,6 +325,10 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 		EffectiveClipRetentionDays: resolveTenantPerClassEffective(
 			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, clipDays.Int32, clipDays.Valid, bound),
 		UpdatedBy: row.UpdatedBy,
+	}
+	if row.KeepVodOriginals.Valid {
+		keep := row.KeepVodOriginals.Bool
+		resp.KeepVodOriginals = &keep
 	}
 	if vodDays.Valid {
 		v := vodDays.Int32
@@ -444,7 +449,7 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
 	}
-	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+	if authErr := requireTenantStreamPermission(ctx, "streams:write"); authErr != nil {
 		return nil, authErr
 	}
 	streamID := req.GetStreamId()
@@ -486,10 +491,12 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 		if v < 0 {
 			return status.Errorf(codes.InvalidArgument, "%s must be >= 0 (0 = no auto-expire)", column)
 		}
-		if bound > 0 {
-			if v == 0 || v > bound {
-				v = bound
-			}
+		if bound > 0 && v > bound {
+			return status.Errorf(codes.InvalidArgument,
+				"%s=%d exceeds tier cap %d; upgrade your plan to extend retention", column, v, bound)
+		}
+		if bound > 0 && v == 0 {
+			v = bound
 		}
 		*apply = true
 		*value = sql.NullInt32{Valid: true, Int32: v}
@@ -701,7 +708,7 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodo
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
 	}
-	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+	if authErr := requireTenantStreamPermission(ctx, "streams:write"); authErr != nil {
 		return nil, authErr
 	}
 
@@ -835,7 +842,7 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodor
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
 	}
-	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+	if authErr := requireTenantStreamPermission(ctx, "streams:write"); authErr != nil {
 		return nil, authErr
 	}
 

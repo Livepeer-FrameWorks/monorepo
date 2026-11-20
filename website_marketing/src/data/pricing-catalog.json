@@ -4,6 +4,7 @@
   "storageHoursPerMonth": 730,
   "tiers": [
     {
+      "maxVideoHeight": 2160,
       "id": "payg",
       "name": "Pay As You Go",
       "basePrice": 0,
@@ -20,10 +21,12 @@
         "storageGiB": 0,
         "retentionDays": 0,
         "maxConcurrentStreams": 0,
-        "maxConcurrentViewers": 0
+        "maxConcurrentViewers": 0,
+        "dvrMaxWindowSeconds": 43200
       }
     },
     {
+      "maxVideoHeight": 1080,
       "id": "free",
       "name": "Free",
       "basePrice": 0,
@@ -40,10 +43,12 @@
         "storageGiB": 10,
         "retentionDays": 30,
         "maxConcurrentStreams": 3,
-        "maxConcurrentViewers": 200
+        "maxConcurrentViewers": 200,
+        "dvrMaxWindowSeconds": 3600
       }
     },
     {
+      "maxVideoHeight": 2160,
       "id": "supporter",
       "name": "Supporter",
       "basePrice": 79,
@@ -60,10 +65,12 @@
         "storageGiB": 0,
         "retentionDays": 0,
         "maxConcurrentStreams": 0,
-        "maxConcurrentViewers": 0
+        "maxConcurrentViewers": 0,
+        "dvrMaxWindowSeconds": 21600
       }
     },
     {
+      "maxVideoHeight": 2160,
       "id": "developer",
       "name": "Developer",
       "basePrice": 249,
@@ -80,10 +87,12 @@
         "storageGiB": 0,
         "retentionDays": 0,
         "maxConcurrentStreams": 0,
-        "maxConcurrentViewers": 0
+        "maxConcurrentViewers": 0,
+        "dvrMaxWindowSeconds": 43200
       }
     },
     {
+      "maxVideoHeight": 2160,
       "id": "production",
       "name": "Production",
       "basePrice": 999,
@@ -100,7 +109,8 @@
         "storageGiB": 0,
         "retentionDays": 0,
         "maxConcurrentStreams": 0,
-        "maxConcurrentViewers": 0
+        "maxConcurrentViewers": 0,
+        "dvrMaxWindowSeconds": 86400
       }
     }
   ]

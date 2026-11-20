@@ -96,6 +96,9 @@ func normalizeFilterID(id *string, expectedType string) (string, error) {
 
 // DoGetTenant returns tenant information
 func (r *Resolver) DoGetTenant(ctx context.Context) (*quartermasterpb.Tenant, error) {
+	if err := middleware.RequirePermission(ctx, "account:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo tenant data")
 		return demo.GenerateTenant(), nil
@@ -512,6 +515,9 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 
 // DoGetClustersAccess returns clusters the current tenant can access
 func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *string) ([]*model.ClusterAccess, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		// Simple demo response with a single shared cluster
 		return []*model.ClusterAccess{
@@ -580,6 +586,9 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 
 // DoGetClustersAvailable returns clusters available for onboarding UX
 func (r *Resolver) DoGetClustersAvailable(ctx context.Context, first *int, after *string) ([]*model.AvailableCluster, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return []*model.AvailableCluster{
 			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", Tiers: []string{"free"}, AutoEnroll: true},
@@ -786,6 +795,7 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	if input.LiveVideoAbr != nil {
 		req.LiveVideoAbr = input.LiveVideoAbr
 	}
+	req.TranscodeLadder = input.TranscodeLadder
 	if input.IngestMode != nil {
 		req.IngestMode = strPtr(ingestModeToWire(*input.IngestMode))
 	}
@@ -1179,6 +1189,9 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 
 // DoListMySubscriptions lists clusters the tenant is subscribed to
 func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after *string) ([]*quartermasterpb.InfrastructureCluster, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning demo subscribed clusters")
 		return demo.GenerateMySubscriptions(), nil
@@ -1228,6 +1241,9 @@ func (r *Resolver) DoCheckIsSubscribed(ctx context.Context, cluster *quartermast
 // DoListMarketplaceClusters lists clusters in the marketplace.
 // Delegates to DoGetMarketplaceClustersConnection and extracts nodes.
 func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, after *string) ([]*quartermasterpb.MarketplaceClusterEntry, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	conn, err := r.DoGetMarketplaceClustersConnection(ctx, first, after, nil, nil)
 	if err != nil {
 		return nil, err
@@ -1238,6 +1254,9 @@ func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, af
 // DoGetMarketplaceCluster gets a marketplace cluster.
 // Uses Purser for pricing and Quartermaster for metadata (consistent with connection method).
 func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string, inviteToken *string) (*quartermasterpb.MarketplaceClusterEntry, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo marketplace cluster")
 		clusters := demo.GenerateMarketplaceClusters()
@@ -1770,6 +1789,9 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 
 // DoListMyClusterInvites lists pending invites for the current tenant
 func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*quartermasterpb.ClusterInvite, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo pending invites")
 		return demo.GenerateMyClusterInvites(), nil
@@ -2024,6 +2046,9 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 
 // DoGetClustersAccessConnection returns a Relay-style connection for cluster access.
 func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClusterAccessConnection, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		items := []*model.ClusterAccess{
 			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", AccessLevel: "shared"},
@@ -2074,6 +2099,9 @@ func buildClustersAccessConnectionFromSlice(items []*model.ClusterAccess, first 
 
 // DoGetClustersAvailableConnection returns a Relay-style connection for available clusters.
 func (r *Resolver) DoGetClustersAvailableConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.AvailableClusterConnection, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		items := []*model.AvailableCluster{
 			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", Tiers: []string{"free"}, AutoEnroll: true},
@@ -2168,6 +2196,9 @@ func buildClustersAvailableConnectionFromSlice(items []*model.AvailableCluster, 
 
 // DoGetMySubscriptionsConnection returns a Relay-style connection for user subscriptions.
 func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.MySubscriptionsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning demo subscribed clusters connection")
 		items := demo.GenerateMySubscriptions()
@@ -2271,6 +2302,9 @@ func buildMySubscriptionsConnectionFromSlice(items []*quartermasterpb.Infrastruc
 // DoGetMarketplaceClustersConnection returns a Relay-style connection for marketplace clusters.
 // Uses Quartermaster for paginated visibility/access and Purser for pricing enrichment.
 func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.MarketplaceClusterConnection, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo marketplace clusters connection")
 		items := demo.GenerateMarketplaceClusters()
@@ -2623,6 +2657,9 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 
 // DoGetMyClusterInvitesConnection returns a Relay-style connection for the user's cluster invites.
 func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClusterInviteConnection, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		items := demo.GenerateMyClusterInvites()
 		return buildClusterInvitesConnectionFromSlice(items, first, after, last, before), nil
@@ -2649,6 +2686,9 @@ func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *i
 // silently falling back to global build-time domains can send a tenant to the
 // wrong ingest or playback endpoints.
 func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingConfig, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamingConfig(), nil
 	}

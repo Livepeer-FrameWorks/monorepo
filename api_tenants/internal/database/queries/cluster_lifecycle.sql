@@ -10,13 +10,13 @@ WHERE is_default_cluster = true;
 INSERT INTO quartermaster.infrastructure_clusters
     (id, cluster_id, cluster_name, cluster_type, deployment_model,
      owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
-     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+     max_concurrent_streams, max_concurrent_viewers,
      health_status, is_active, is_platform_official, is_default_cluster,
      public_topology, allow_private_pull_sources, created_at, updated_at)
 VALUES (sqlc.arg(id)::uuid, sqlc.arg(cluster_id), sqlc.arg(cluster_name), sqlc.arg(cluster_type),
         sqlc.arg(deployment_model), NULLIF(sqlc.arg(owner_tenant_id)::text, '')::uuid,
         sqlc.arg(base_url), sqlc.narg(database_url), sqlc.narg(periscope_url), sqlc.arg(kafka_brokers)::text[],
-        sqlc.arg(max_concurrent_streams), sqlc.arg(max_concurrent_viewers), sqlc.arg(max_bandwidth_mbps),
+        sqlc.arg(max_concurrent_streams), sqlc.arg(max_concurrent_viewers),
         'healthy', true, sqlc.arg(is_platform_official), sqlc.arg(is_default_cluster),
         sqlc.arg(public_topology), sqlc.arg(allow_private_pull_sources),
         sqlc.arg(created_at)::timestamp, sqlc.arg(created_at)::timestamp);

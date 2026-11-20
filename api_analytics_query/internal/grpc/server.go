@@ -14,6 +14,7 @@ import (
 
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/metrics"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbqueries "github.com/Livepeer-FrameWorks/monorepo/pkg/database/queries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -3234,88 +3235,94 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 // GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).
 func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopepb.GetNetworkLiveStatsRequest) (*periscopepb.GetNetworkLiveStatsResponse, error) {
 	type clusterStats struct {
-		activeStreams     int32
-		viewers           int32
-		uploadBPS         uint64
-		downloadBPS       uint64
-		egressCapacityBPS uint64
-		activeNodes       int32
+		activeStreams      int32
+		viewers            int32
+		uploadBPS          uint64
+		downloadBPS        uint64
+		egressCapacityBPS  uint64
+		activeNodes        int32
+		defaultBudgetNodes uint32
 	}
 	statsMap := make(map[string]*clusterStats)
 
-	// Per-cluster node stats. Capacity sum excludes maintenance/draining nodes
-	// (they still report load but don't contribute available delivery capacity).
+	// Budget and load use the same fresh, healthy serving nodes. Older ingest
+	// versions write only bw_limit, which Foghorn also stamps with the budget.
 	nodeQuery := `
 		SELECT
 			cluster_id,
 			COALESCE(sum(up_speed), 0),
 			COALESCE(sum(down_speed), 0),
-			COALESCE(sumIf(bw_limit, is_healthy = 1 AND operational_mode = 'normal'), 0),
-			countIf(is_healthy = 1)
+			COALESCE(sum(if(egress_budget > 0, egress_budget, if(bw_limit > 0, bw_limit, 125000000))), 0),
+			count(),
+			countIf(budget_source = 'DEFAULT'),
+ COALESCE(sum(viewers),0)
 		FROM periscope.node_state_current FINAL
+		WHERE is_healthy = 1 AND operational_mode = 'normal'
+			AND updated_at >= now() - INTERVAL 60 SECOND
 		GROUP BY cluster_id
 	`
 	rows, err := periscopequerydb.Query(ctx, s.clickhouse, nodeQuery)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to query node stats: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "failed to query node stats: %v", err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var id string
 		var cs clusterStats
-		if scanErr := rows.Scan(&id, &cs.uploadBPS, &cs.downloadBPS, &cs.egressCapacityBPS, &cs.activeNodes); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("GetNetworkLiveStats: scan node row")
-			continue
+		if scanErr := rows.Scan(&id, &cs.uploadBPS, &cs.downloadBPS, &cs.egressCapacityBPS, &cs.activeNodes, &cs.defaultBudgetNodes, &cs.viewers); scanErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "failed to scan node stats: %v", scanErr)
 		}
 		statsMap[id] = &cs
 	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to read node stats: %v", rowsErr)
+	}
 
-	// Per-cluster stream counts + viewer counts from stream_state_current (authoritative source)
 	streamQuery := `
 		SELECT
 			n.cluster_id,
-			toInt32(count(*)),
-			COALESCE(sum(s.current_viewers), 0)
+			toInt32(count(*))
 		FROM periscope.stream_state_current AS s FINAL
 		INNER JOIN periscope.node_state_current AS n FINAL ON s.node_id = n.node_id
-		WHERE s.status = 'live'
+		WHERE s.status = 'live' AND n.is_healthy = 1 AND n.operational_mode = 'normal'
+			AND n.updated_at >= now() - INTERVAL 60 SECOND
+ AND s.updated_at >= now() - INTERVAL 60 SECOND
 		GROUP BY n.cluster_id
 	`
 	sRows, err := periscopequerydb.Query(ctx, s.clickhouse, streamQuery)
 	if err != nil {
-		s.logger.WithError(err).Warn("GetNetworkLiveStats: stream query failed")
-	} else {
-		defer sRows.Close()
-		for sRows.Next() {
-			var id string
-			var streams, viewers int32
-			if err := sRows.Scan(&id, &streams, &viewers); err != nil {
-				s.logger.WithError(err).Warn("Failed to scan cluster live stream count row")
-				continue
-			}
-			if cs, ok := statsMap[id]; ok {
-				cs.activeStreams = streams
-				cs.viewers = viewers
-			} else {
-				statsMap[id] = &clusterStats{activeStreams: streams, viewers: viewers}
-			}
+		return nil, status.Errorf(codes.Unavailable, "failed to query stream stats: %v", err)
+	}
+	defer sRows.Close()
+	for sRows.Next() {
+		var id string
+		var streams int32
+		if scanErr := sRows.Scan(&id, &streams); scanErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "failed to scan stream stats: %v", scanErr)
 		}
+		if cs, ok := statsMap[id]; ok {
+			cs.activeStreams = streams
+		}
+	}
+	if rowsErr := sRows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to read stream stats: %v", rowsErr)
 	}
 
 	resp := &periscopepb.GetNetworkLiveStatsResponse{}
 	for id, cs := range statsMap {
 		resp.Clusters = append(resp.Clusters, &periscopepb.NetworkClusterLiveStats{
-			ClusterId:           id,
-			ActiveStreams:       cs.activeStreams,
-			CurrentViewers:      cs.viewers,
-			UploadBytesPerSec:   cs.uploadBPS,
-			DownloadBytesPerSec: cs.downloadBPS,
-			ActiveNodes:         cs.activeNodes,
-			EgressCapacityBps:   cs.egressCapacityBPS,
+			ClusterId:                 id,
+			ActiveStreams:             cs.activeStreams,
+			CurrentViewers:            cs.viewers,
+			UploadBytesPerSec:         cs.uploadBPS,
+			DownloadBytesPerSec:       cs.downloadBPS,
+			ActiveNodes:               cs.activeNodes,
+			EgressBudgetBytesPerSec:   cs.egressCapacityBPS,
+			EgressUsableBytesPerSec:   (capacity.Link{Budget: cs.egressCapacityBPS}).Usable(),
+			EgressObservedBytesPerSec: cs.uploadBPS,
+			DefaultBudgetNodes:        cs.defaultBudgetNodes,
 		})
 	}
-
 	return resp, nil
 }
 

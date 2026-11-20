@@ -19,6 +19,42 @@ import (
 
 // RegisterVODTools registers VOD upload-related MCP tools.
 func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
+	addTool(server, &mcp.Tool{Name: "get_vod_original_download", Description: "Create a 15-minute attachment download of a retained original upload. Authenticated tenant access; rate limited; unmetered."}, func(ctx context.Context, _ *mcp.CallToolRequest, args DeleteVodAssetInput) (*mcp.CallToolResult, any, error) {
+		result, err := resolver.DoCreateVodOriginalDownload(ctx, args.ArtifactHash)
+		if err != nil {
+			return toolError(err.Error())
+		}
+		switch value := result.(type) {
+		case *model.VodOriginalDownload:
+			return toolSuccess(VodOriginalDownloadResult{URL: value.URL, ExpiresAt: value.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"), SizeBytes: int64(value.SizeBytes), Filename: value.Filename})
+		case *model.ValidationError:
+			return toolError(value.Message)
+		case *model.NotFoundError:
+			return toolError(value.Message)
+		default:
+			return toolError("Original download unavailable")
+		}
+	})
+	addTool(server, &mcp.Tool{Name: "delete_vod_original", Description: "Permanently delete only a VOD's original upload, keeping its processed video. Cannot be undone."}, func(ctx context.Context, _ *mcp.CallToolRequest, args DeleteVodOriginalInput) (*mcp.CallToolResult, any, error) {
+		if result, meta, err := requireConfirmation(args.Confirm, "DELETE ORIGINAL"); result != nil || meta != nil || err != nil {
+			return result, meta, err
+		}
+		result, err := resolver.DoDeleteVodOriginal(ctx, args.ArtifactHash)
+		if err != nil {
+			return toolError(err.Error())
+		}
+		switch value := result.(type) {
+		case *model.DeleteSuccess:
+			return toolSuccess(value)
+		case *model.ValidationError:
+			return toolError(value.Message)
+		case *model.NotFoundError:
+			return toolError(value.Message)
+		default:
+			return toolError("Original deletion unavailable")
+		}
+	})
+
 	// create_vod_upload - Initiate multipart upload (requires balance)
 	addTool(server,
 		&mcp.Tool{
@@ -88,15 +124,18 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 
 // CreateVodUploadInput represents input for create_vod_upload tool.
 type CreateVodUploadInput struct {
-	Filename    string  `json:"filename" jsonschema:"Original filename of the video"`
-	SizeBytes   int     `json:"size_bytes" jsonschema:"File size in bytes"`
-	ContentType *string `json:"content_type,omitempty" jsonschema:"MIME type (e.g. video/mp4)"`
-	Title       *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
-	Description *string `json:"description,omitempty" jsonschema:"Asset description"`
+	KeepOriginal    *bool   `json:"keep_original,omitempty" jsonschema:"Keep the byte-identical original; omit to inherit the account policy"`
+	TranscodeLadder *string `json:"transcode_ladder,omitempty" jsonschema:"Allowed ladder name; omit to inherit"`
+	Filename        string  `json:"filename" jsonschema:"Original filename of the video"`
+	SizeBytes       int     `json:"size_bytes" jsonschema:"File size in bytes"`
+	ContentType     *string `json:"content_type,omitempty" jsonschema:"MIME type (e.g. video/mp4)"`
+	Title           *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
+	Description     *string `json:"description,omitempty" jsonschema:"Asset description"`
 }
 
 // CreateVodUploadResult represents the result of initiating a VOD upload.
 type CreateVodUploadResult struct {
+	KeepOriginal *bool           `json:"keep_original,omitempty"`
 	UploadID     string          `json:"upload_id"`
 	PlaybackID   string          `json:"playback_id"`
 	ArtifactHash string          `json:"artifact_hash"`
@@ -136,6 +175,7 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 
 	// Build GraphQL input
 	input := model.CreateVodUploadInput{
+		KeepOriginal: args.KeepOriginal, TranscodeLadder: args.TranscodeLadder,
 		Filename:    args.Filename,
 		SizeBytes:   float64(args.SizeBytes),
 		ContentType: args.ContentType,
@@ -164,6 +204,7 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 		}
 
 		output := CreateVodUploadResult{
+			KeepOriginal: r.KeepOriginal,
 			UploadID:     r.ID,
 			PlaybackID:   r.PlaybackID,
 			ArtifactHash: r.ArtifactHash,
@@ -171,6 +212,9 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 			Parts:        parts,
 			ExpiresAt:    r.ExpiresAt.Format("2006-01-02T15:04:05Z"),
 			Message:      fmt.Sprintf("Upload session created. Upload %d parts using the presigned URLs, then call complete_vod_upload.", len(parts)),
+		}
+		if r.KeepOriginal != nil && !*r.KeepOriginal && args.KeepOriginal != nil && *args.KeepOriginal {
+			output.Message += " Original retention is temporarily unavailable; this upload keeps only the processed video."
 		}
 		if r.ArtifactHash != "" {
 			relay := globalid.Encode(globalid.TypeVodAsset, r.ArtifactHash)
@@ -184,10 +228,11 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 
 // ImportVodAssetInput represents input for import_vod_asset tool.
 type ImportVodAssetInput struct {
-	URL         string  `json:"url" jsonschema:"Source URL, https or http, publicly reachable"`
-	Filename    *string `json:"filename,omitempty" jsonschema:"Filename with a video extension (mp4, mov, mkv, webm, ts); required when the URL path has none"`
-	Title       *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
-	Description *string `json:"description,omitempty" jsonschema:"Asset description"`
+	TranscodeLadder *string `json:"transcode_ladder,omitempty" jsonschema:"Allowed ladder name; omit to inherit"`
+	URL             string  `json:"url" jsonschema:"Source URL, https or http, publicly reachable"`
+	Filename        *string `json:"filename,omitempty" jsonschema:"Filename with a video extension (mp4, mov, mkv, webm, ts, m2ts, mts); required when the URL path has none"`
+	Title           *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
+	Description     *string `json:"description,omitempty" jsonschema:"Asset description"`
 }
 
 // ImportVodAssetResult represents the accepted import.
@@ -214,7 +259,7 @@ func handleImportVodAsset(ctx context.Context, args ImportVodAssetInput, resolve
 	}
 
 	result, err := resolver.DoImportVodAsset(ctx, model.ImportVodAssetInput{
-		URL: args.URL, Filename: args.Filename, Title: args.Title, Description: args.Description,
+		TranscodeLadder: args.TranscodeLadder, URL: args.URL, Filename: args.Filename, Title: args.Title, Description: args.Description,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to import VOD asset")
@@ -550,3 +595,15 @@ func handleGetVodUploadStatus(ctx context.Context, args GetVodUploadStatusInput,
 }
 
 const timeRFC3339Nano = "2006-01-02T15:04:05.999999999Z07:00"
+
+type DeleteVodOriginalInput struct {
+	ArtifactHash string `json:"artifact_hash" jsonschema:"VOD artifact hash or relay ID"`
+	Confirm      string `json:"confirm" jsonschema:"Type DELETE ORIGINAL to permanently remove only the source upload"`
+}
+
+type VodOriginalDownloadResult struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+	SizeBytes int64  `json:"size_bytes"`
+	Filename  string `json:"filename"`
+}

@@ -1350,6 +1350,15 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 			return o
 		},
 	}}})
+	sections = append(sections, doctorSection{checks: []doctorCheck{{name: "Edge bandwidth capacity", progress: "reading node budgets and applied revisions", run: func(ctx context.Context) doctorOutcome {
+		result := doctorEdgeCapacity(ctx, rc)
+		outcome := doctorOutcome{result: result, passed: result.OK || result.Status == yugabyteLayoutWarning}
+		if !result.OK {
+			outcome.steps = []ux.NextStep{{Cmd: "frameworks edge capacity show <node-id>", Why: "Inspect defaults and pending application, then set the real operator-owned link budgets."}}
+		}
+		return outcome
+	}}}})
+
 	return sections
 }
 

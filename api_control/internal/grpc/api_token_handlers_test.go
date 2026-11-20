@@ -305,3 +305,9 @@ func TestRevokeAPIToken(t *testing.T) {
 		}
 	})
 }
+
+func TestSupportWritePermissionCanBeGranted(t *testing.T) {
+	if _, err := normalizeAPITokenPermissions([]string{"support:write"}); err != nil {
+		t.Fatalf("support mutation scope cannot be granted: %v", err)
+	}
+}

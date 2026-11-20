@@ -7,8 +7,8 @@
   import { getIngestUrls } from "$lib/config";
   import { formatDate } from "$lib/utils/stream-helpers";
   import { toast } from "$lib/stores/toast";
-  import EmptyState from "$lib/components/EmptyState.svelte";
   import RecommendedIngest from "$lib/components/placement/RecommendedIngest.svelte";
+  import StreamKeyCard from "./StreamKeyCard.svelte";
   import SourceLocationSummary from "./SourceLocationSummary.svelte";
   import type { SourceLocationValue } from "$lib/source-location";
 
@@ -36,15 +36,6 @@
     }> | null;
   }
 
-  interface StreamKey {
-    id: string;
-    keyName: string;
-    keyValue: string;
-    isActive: boolean;
-    createdAt?: string;
-    lastUsedAt?: string;
-  }
-
   interface ClusterOption {
     clusterId: string;
     clusterName: string;
@@ -52,28 +43,20 @@
 
   interface Props {
     stream: Stream;
-    streamKeys?: StreamKey[];
     clusterOptions?: ClusterOption[];
     placementHref?: string;
     onRefreshKey?: () => void;
     refreshingKey?: boolean;
-    onCreateKey?: () => void;
     onCopyKey?: (key: string) => void;
-    onDeleteKey?: (keyId: string) => void;
-    deleteLoading?: string | null;
   }
 
   let {
     stream,
-    streamKeys = [],
     clusterOptions = [],
     placementHref,
-    onRefreshKey: _onRefreshKey,
-    refreshingKey: _refreshingKey = false,
-    onCreateKey,
+    onRefreshKey,
+    refreshingKey = false,
     onCopyKey,
-    onDeleteKey,
-    deleteLoading = null,
   }: Props = $props();
 
   let copiedField = $state<string | null>(null);
@@ -130,9 +113,6 @@
 
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const CopyIcon = getIconComponent("Copy");
-  const PlusIcon = getIconComponent("Plus");
-  const TrashIcon = getIconComponent("Trash2");
-  const LoaderIcon = getIconComponent("Loader");
   const LinkIcon = getIconComponent("Link");
   const ActivityIcon = getIconComponent("Activity");
   const SignalIcon = getIconComponent("Signal");
@@ -191,13 +171,16 @@
             <ActivityIcon class="w-4 h-4 text-info" />
             <h4 class="font-medium text-sm">Recent source resolution</h4>
           </div>
+          {#if stream.recentPullSourceEvents?.[0]?.eventKind === "stream_cap"}
+            <p class="mb-3 text-sm text-warning" role="status">Stream cap reached</p>
+          {/if}
           {#if stream.recentPullSourceEvents?.length}
             <div class="space-y-2">
               {#each stream.recentPullSourceEvents as event (event.id)}
                 <div class="rounded-md border border-border/30 p-3 text-xs">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <Badge variant={event.eventKind === "resolved" ? "default" : "secondary"}>
-                      {event.eventKind}
+                      {event.eventKind === "stream_cap" ? "stream cap reached" : event.eventKind}
                     </Badge>
                     <span class="text-muted-foreground">
                       {event.createdAt ? formatDate(event.createdAt) : "Unknown time"}
@@ -315,99 +298,6 @@
   {/if}
 
   {#if stream.ingestMode === "PUSH"}
-    <!-- Stream Keys Management Section -->
-    <div class="slab">
-      <div class="slab-header flex items-center justify-between">
-        <div>
-          <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-            Stream Keys Management
-          </h3>
-          <p class="text-xs text-muted-foreground/70 mt-1">
-            Manage multiple stream keys for key rotation and security
-          </p>
-        </div>
-        {#if onCreateKey}
-          <Button
-            variant="ghost"
-            class="gap-2 text-primary hover:text-primary/80"
-            onclick={onCreateKey}
-          >
-            <PlusIcon class="w-4 h-4" />
-            Create Key
-          </Button>
-        {/if}
-      </div>
-
-      {#if streamKeys.length > 0}
-        <div class="slab-body--flush">
-          {#each streamKeys as key (key.id ?? key.keyValue)}
-            <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
-              <div class="flex items-center justify-between">
-                <div class="flex-1">
-                  <div class="flex items-center space-x-3 mb-2">
-                    <h5 class="font-medium text-foreground">
-                      {key.keyName}
-                    </h5>
-                    <Badge
-                      variant={key.isActive ? "default" : "secondary"}
-                      tone={key.isActive ? "green" : "default"}
-                    >
-                      {key.isActive ? "Active" : "Inactive"}
-                    </Badge>
-                  </div>
-
-                  <div class="flex items-center space-x-2 mb-2">
-                    <code class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20">
-                      {key.keyValue}
-                    </code>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      class="hover:bg-muted/50"
-                      onclick={() => onCopyKey?.(key.keyValue)}
-                    >
-                      <CopyIcon class="w-4 h-4" />
-                    </Button>
-                  </div>
-
-                  <div class="text-sm text-muted-foreground">
-                    Created: {formatDate(key.createdAt)}
-                    {#if key.lastUsedAt}
-                      • Last used: {formatDate(key.lastUsedAt)}
-                    {/if}
-                  </div>
-                </div>
-
-                {#if onDeleteKey}
-                  <Button
-                    variant="destructive"
-                    size="icon-sm"
-                    class="ml-4"
-                    onclick={() => onDeleteKey(key.id)}
-                    disabled={deleteLoading === key.id}
-                  >
-                    {#if deleteLoading === key.id}
-                      <LoaderIcon class="w-4 h-4 animate-spin" />
-                    {:else}
-                      <TrashIcon class="w-4 h-4" />
-                    {/if}
-                  </Button>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <div class="slab-body--padded">
-          <EmptyState
-            iconName="Key"
-            title="No Stream Keys"
-            description="Create your first stream key to start broadcasting"
-            actionText="Create Stream Key"
-            onAction={onCreateKey}
-          />
-        </div>
-      {/if}
-    </div>
+    <StreamKeyCard {stream} loading={refreshingKey} onRefresh={onRefreshKey} onCopy={onCopyKey} />
   {/if}
 </div>

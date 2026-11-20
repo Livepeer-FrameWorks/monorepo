@@ -75,3 +75,20 @@ func TestEdgeReadiness_serviceDown_adaptsToServiceName(t *testing.T) {
 		t.Fatalf("missing service-logs remediation: %+v", r.Warnings)
 	}
 }
+
+func TestEdgeReadinessCapacityDefaultsAndPendingApplication(t *testing.T) {
+	applied := uint64(2)
+	r := EdgeReadiness(EdgeInputs{HasEnv: true, Capacity: &EdgeCapacity{NodeID: "edge", EgressSource: "DEFAULT", IngressSource: "OPERATOR", Revision: 3, AppliedRevision: &applied}})
+	foundDefault, foundPending := false, false
+	for _, warning := range r.Warnings {
+		if warning.Subject == "edge.capacity.default" {
+			foundDefault = strings.Contains(warning.Detail, "1 Gbit/s") && strings.Contains(warning.Remediation.Cmd, "edge capacity set edge")
+		}
+		if warning.Subject == "edge.capacity.pending" {
+			foundPending = true
+		}
+	}
+	if !foundDefault || !foundPending {
+		t.Fatalf("capacity warnings missing: %+v", r.Warnings)
+	}
+}

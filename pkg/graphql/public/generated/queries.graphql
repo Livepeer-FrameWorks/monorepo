@@ -1734,6 +1734,12 @@ query GetTrackListConnection(
   }
 }
 
+query GetTranscodeLadderPolicy {
+  transcodeLadderPolicy {
+    ...TranscodeLadderPolicyDefaultFields
+  }
+}
+
 query GetValidateStreamKey(
   $streamKey: String!
 ) {

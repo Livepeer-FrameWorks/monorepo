@@ -250,3 +250,18 @@ func TestIngestGenerationStore_MaintenanceCoalescesCloseBurst(t *testing.T) {
 		t.Fatalf("1000 maintenance requests produced %d scans, want at most 2", runs)
 	}
 }
+
+func TestPublisherRejectionRequiresDurableIdentity(t *testing.T) {
+	for _, bad := range []struct {
+		name, generation string
+		pid              int64
+	}{{"", "10000000-0000-4000-8000-000000000001", 1}, {"live+stream", "bad-generation", 1}, {"live+stream", "10000000-0000-4000-8000-000000000001", 0}} {
+		store, err := NewIngestGenerationStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RevokeAdmission(bad.name, bad.generation, bad.pid); err == nil {
+			t.Fatalf("invalid publisher rejection persisted: %+v", bad)
+		}
+	}
+}

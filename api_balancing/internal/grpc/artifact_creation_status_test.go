@@ -380,8 +380,8 @@ func TestCreateVodUpload_IdempotentRetry(t *testing.T) {
 
 	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
 		WithArgs("vh1", "00000000-0000-0000-0000-000000000001").
-		WillReturnRows(sqlmock.NewRows([]string{"s3_upload_id", "s3_key", "total_parts", "upload_expires_at", "backend_id"}).
-			AddRow("up-existing", "vod/t1/vh1/video.mp4", 2, time.Now().Add(time.Hour), testStubBackendID))
+		WillReturnRows(sqlmock.NewRows([]string{"s3_upload_id", "s3_key", "total_parts", "upload_expires_at", "backend_id", "keep_original"}).
+			AddRow("up-existing", "vod/t1/vh1/video.mp4", 2, time.Now().Add(time.Hour), testStubBackendID, true))
 
 	internalName := "vod-test"
 	vodHash := "vh1"
@@ -396,7 +396,7 @@ func TestCreateVodUpload_IdempotentRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetUploadId() != "up-existing" {
+	if resp.GetUploadId() != "up-existing" || resp.KeepOriginal == nil || !resp.GetKeepOriginal() {
 		t.Fatalf("upload_id = %q, want existing up-existing (no second multipart)", resp.GetUploadId())
 	}
 	if s3.abortCalls != 0 {

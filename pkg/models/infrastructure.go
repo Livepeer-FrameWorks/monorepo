@@ -88,7 +88,6 @@ type InfrastructureCluster struct {
 	// Capacity limits
 	MaxConcurrentStreams int `json:"max_concurrent_streams" db:"max_concurrent_streams"`
 	MaxConcurrentViewers int `json:"max_concurrent_viewers" db:"max_concurrent_viewers"`
-	MaxBandwidthMbps     int `json:"max_bandwidth_mbps" db:"max_bandwidth_mbps"`
 
 	// Health
 	IsActive           bool       `json:"is_active" db:"is_active"`

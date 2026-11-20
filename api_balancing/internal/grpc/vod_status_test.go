@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +157,21 @@ func TestCreateVodUpload_MetadataFailureAbortsMultipartUpload(t *testing.T) {
 	}
 	if s3.abortUpID != "up-1" {
 		t.Fatalf("expected multipart upload to be aborted, got upload_id %q", s3.abortUpID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateVodUploadRefusesUnsupportedFilenameBeforeMultipart(t *testing.T) {
+	srv, mock, cleanup := newStatusServer(t, &fakeVodS3Client{})
+	defer cleanup()
+	name := "vod-test"
+	_, err := srv.CreateVodUpload(context.Background(), &sharedpb.CreateVodUploadRequest{
+		TenantId: "tenant", Filename: "payload.xyz", SizeBytes: 1024, InternalName: &name, ClusterId: "central-primary",
+	})
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "unsupported filename") {
+		t.Fatalf("error = %v, want InvalidArgument before any database or multipart access", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

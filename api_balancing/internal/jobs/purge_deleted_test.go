@@ -378,8 +378,8 @@ func TestPurge_ClipUsesFormatColumnFromRow(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
-		AddRow("clip-1", "clip", "tenant-a", "stream-x", "webm", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
+		AddRow("clip-1", "clip", "tenant-a", "stream-x", "webm", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(rows)
 	expectThumbnailCleanup(mock, "tenant-a", "clip-1")
@@ -407,8 +407,8 @@ func TestPurge_DVRDeletesPrefix(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
-		AddRow("dvr-1", "dvr", "tenant-a", "stream-x", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
+		AddRow("dvr-1", "dvr", "tenant-a", "stream-x", "", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(rows)
 	expectThumbnailCleanup(mock, "tenant-a", "dvr-1")
@@ -434,8 +434,8 @@ func TestPurge_VODUsesS3KeyFromMetadataJoin(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
-		AddRow("vod-1", "vod", "tenant-a", "", "", "", "", "vod/tenant-a/vod-1/movie.mp4", "", "", "", "", false, "backend-eu", "deleted")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
+		AddRow("vod-1", "vod", "tenant-a", "", "", "", "", "vod/tenant-a/vod-1/movie.mp4", "", "", "", "", "", false, "backend-eu", "deleted")
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(rows)
 	expectThumbnailCleanup(mock, "tenant-a", "vod-1")
@@ -460,8 +460,8 @@ func TestPurge_S3FailureKeepsRow(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
-		AddRow("clip-1", "clip", "tenant-a", "stream-x", "mp4", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
+		AddRow("clip-1", "clip", "tenant-a", "stream-x", "mp4", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(rows)
 	// NO ExpectExec for DELETE FROM foghorn.artifacts — must not be called.
@@ -484,8 +484,8 @@ func TestPurge_MissingTargetOnDeletedDropsRow(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
-		AddRow("vod-2", "vod", "tenant-a", "", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}).
+		AddRow("vod-2", "vod", "tenant-a", "", "", "", "", "", "", "", "", "", "", false, "backend-eu", "deleted")
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(rows)
 	expectThumbnailCleanup(mock, "tenant-a", "vod-2")
@@ -518,7 +518,7 @@ func TestPurge_FailedRowMarkedDeletedBeforeReap(t *testing.T) {
 	expectMarkFailedDeleted(mock)
 	// The deleted sweep (coverage-gated) returns nothing for the just-marked row.
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(
-		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
+		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
 	)
 	// NO ExpectExec for DELETE FROM foghorn.artifacts — nothing is reaped this cycle.
 
@@ -546,7 +546,7 @@ func TestPurge_CoverageGateInSelect(t *testing.T) {
 	// The expectation matches only if the SELECT contains the coverage gate.
 	mock.ExpectQuery(`(?s)catalog_synced_rev >= a.catalog_revision.*LIMIT`).
 		WithArgs("720h0m0s", "backend-eu").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
 	expectStaleNodeRowsCleanup(mock)
 
 	j.purge()
@@ -569,7 +569,7 @@ func TestPurge_ExcludesRemoteRowsWhenDeleteDisabled(t *testing.T) {
 	// row (different backend_id) is never selected, so it can't be reaped here nor starve local reaping.
 	mock.ExpectQuery(`(?s)a.backend_id = \$2.*ORDER BY a.updated_at`).
 		WithArgs("720h0m0s", "backend-eu").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
 	expectStaleNodeRowsCleanup(mock)
 
 	j.purge()
@@ -601,7 +601,7 @@ func TestPurge_BackendAffinityFiltersForeignRows(t *testing.T) {
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery(`(?s)a.backend_id = \$2.*ORDER BY a.updated_at`).
 		WithArgs("720h0m0s", "backend-eu").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
 	expectStaleNodeRowsCleanup(mock)
 
 	j.purge()
@@ -633,7 +633,7 @@ func TestPurge_ReapsAllWhenDeleteEnabled(t *testing.T) {
 	// Only the retention interval is bound — no $2 filter.
 	mock.ExpectQuery("FROM foghorn.artifacts a").
 		WithArgs("720h0m0s").
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}))
 	expectStaleNodeRowsCleanup(mock)
 
 	j.purge()
@@ -720,7 +720,7 @@ func TestPurge_StaleUploadingAborts(t *testing.T) {
 	// No rows for the deleted sweep.
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(
-		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
+		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
 	)
 
 	expectStaleNodeRowsCleanup(mock)
@@ -747,7 +747,7 @@ func TestPurge_RemoteStaleUploadingSkipped(t *testing.T) {
 
 	expectMarkFailedDeleted(mock)
 	mock.ExpectQuery("FROM foghorn.artifacts a").WithArgs("720h0m0s", "backend-eu").WillReturnRows(
-		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
+		sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_internal_name", "format", "storage_cluster_id", "origin_cluster_id", "s3_key", "original_s3_key", "s3_url", "sync_object_key", "active_object_key", "active_dtsh_key", "durable_backend_local", "backend_id", "status"}),
 	)
 	expectStaleNodeRowsCleanup(mock)
 

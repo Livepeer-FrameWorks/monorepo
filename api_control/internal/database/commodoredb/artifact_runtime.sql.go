@@ -63,7 +63,14 @@ SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.descripti
        c.size_bytes, c.retention_until, COALESCE(c.retention_source, '')::text AS retention_source,
        c.created_at, c.updated_at,
        COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, '')::text AS thumbnail_cluster,
-       c.has_thumbnails
+       c.has_thumbnails,
+       CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
+            WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
+            WHEN c.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
+            WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
+            ELSE 'processing' END::text AS status,
+       c.error_message, c.storage_location, c.sync_status, c.is_synced, c.is_finalized,
+       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id
 FROM commodore.clips c
 WHERE c.tenant_id = $1 AND c.clip_hash = $2
 `
@@ -91,6 +98,13 @@ type GetClipRegistryRow struct {
 	UpdatedAt        sql.NullTime   `db:"updated_at" json:"updated_at"`
 	ThumbnailCluster string         `db:"thumbnail_cluster" json:"thumbnail_cluster"`
 	HasThumbnails    bool           `db:"has_thumbnails" json:"has_thumbnails"`
+	Status           string         `db:"status" json:"status"`
+	ErrorMessage     sql.NullString `db:"error_message" json:"error_message"`
+	StorageLocation  sql.NullString `db:"storage_location" json:"storage_location"`
+	SyncStatus       sql.NullString `db:"sync_status" json:"sync_status"`
+	IsSynced         sql.NullBool   `db:"is_synced" json:"is_synced"`
+	IsFinalized      sql.NullBool   `db:"is_finalized" json:"is_finalized"`
+	StorageClusterID string         `db:"storage_cluster_id" json:"storage_cluster_id"`
 }
 
 func (q *Queries) GetClipRegistry(ctx context.Context, arg GetClipRegistryParams) (GetClipRegistryRow, error) {
@@ -114,6 +128,13 @@ func (q *Queries) GetClipRegistry(ctx context.Context, arg GetClipRegistryParams
 		&i.UpdatedAt,
 		&i.ThumbnailCluster,
 		&i.HasThumbnails,
+		&i.Status,
+		&i.ErrorMessage,
+		&i.StorageLocation,
+		&i.SyncStatus,
+		&i.IsSynced,
+		&i.IsFinalized,
+		&i.StorageClusterID,
 	)
 	return i, err
 }

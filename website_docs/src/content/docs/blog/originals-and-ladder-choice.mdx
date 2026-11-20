@@ -1,0 +1,41 @@
+---
+title: "Keep Your Original, Choose Your Playback Quality"
+date: 2026-11-18
+authors:
+  - frameworks
+excerpt: "Keep a source upload for later edits while choosing the playback renditions your audience needs."
+description: "Original upload retention and named transcode ladders give FrameWorks accounts separate control over source files and playback quality."
+tags:
+  - product
+  - video
+---
+
+You upload a finished film, publish it, and come back weeks later to make a shorter cut. The copy that viewers watch is useful for playback, but you need the file you uploaded: its source quality, its original container, and the exact bytes your editor exported. Until now, FrameWorks processed that upload into playback renditions and removed the source file after the processed output reached storage.
+
+File uploads can now keep their original alongside the processed video. They do so by default, with an account setting and a choice on each upload. Paid accounts can also choose playback ladders that reach 1440p or 4K. Keeping a source and deciding what to serve become separate choices.
+
+## Your source stays useful after publication
+
+Consider a team publishing a 4K conference recording. Most viewers watch on laptops or phones, so the team leaves its playback ladder at the standard setting. Later, an editor needs a close crop of the speaker for a promotional clip. The original download gives that editor the file the team uploaded, including the detail that the playback encodes did not keep.
+
+The original is byte-identical. It is not a new export assembled from the playback tracks. The library offers an original download separately from the processed MP4 download, so the team can choose the file suited to the job.
+
+This changes a concrete behavior we found while tracing upload cleanup. Previously, publishing the processed recording made the upload object eligible for deletion. The new retention path records the original separately and preserves it when the processed version replaces it for playback. The same rule covers uploads already in the recording container: publishing processed output must still leave the source intact.
+
+## Playback quality follows the audience
+
+Keeping an original does not require serving it to every viewer. Standard playback still defaults to four renditions, from 360p through 1080p. Free accounts keep that ladder. Paid accounts can choose a 1440p ladder or a 4K ladder, adding one or two higher renditions to the same standard set.
+
+For the conference team, this means a large-screen screening can use 4K playback while smaller devices continue to choose lower renditions. A separate stream with a modest source can keep the standard choice. Renditions above the source size are skipped, so choosing the larger ladder does not create source detail that the camera never captured.
+
+The account can set a default and override it for a stream or an upload. Live changes take effect with the next broadcast. The choices also survive a plan change: when a stored choice is outside the current plan, playback falls back to an allowed ladder. Upgrading restores the stored choice without requiring the team to find every affected stream.
+
+## Storage and processing still have a cost
+
+A source file takes additional space. Originals count toward the account's storage cap and are billed at the normal storage rate. A team that already archives its camera masters elsewhere can turn original retention off for future uploads. It can also make that decision for one upload without changing the account default.
+
+The library can delete just an original while keeping processed playback available. That deletion is permanent and asks for confirmation. Deleting the whole video, or letting it reach its retention deadline, removes both copies. Existing videos cannot recover originals that were already deleted, and URL imports do not retain a separate original upload.
+
+Larger playback ladders also mean more encoding work and more stored rendition data. Standard remains the default so enabling the feature does not silently add higher playback encodes to existing choices. Original download grants are authenticated and temporary; they are not public playback links and do not generate playback usage charges.
+
+The [original upload guide](/builders/recordings#original-uploads) explains retention, download and original-only deletion. The [encoder guide](/builders/encoder-setup#custom-transcoding-profiles) lists the ladder choices, sizes and bitrates.

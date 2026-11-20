@@ -10,7 +10,9 @@ import (
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -18,6 +20,8 @@ import (
 // no-active-session decision. The intent is persisted in the same transaction that draws its source
 // revision; no trigger goroutine owns completion.
 type OfflineEffectIntent struct {
+	DrainPublisher   bool
+	DrainRuntimeName string
 	SetNodeOffline   bool
 	TeardownStream   bool
 	BroadcastOffline bool
@@ -26,6 +30,10 @@ type OfflineEffectIntent struct {
 
 // OfflineEffect is one leased durable offline transition.
 type OfflineEffect struct {
+	DrainPublisher       bool
+	DrainDone            bool
+	DrainRuntimeName     string
+	StateSuperseded      bool
 	ID                   int64
 	TenantID             string
 	InternalName         string
@@ -44,9 +52,10 @@ type OfflineEffect struct {
 }
 
 // OfflineEffectLegResults records the locally completed legs from one unlocked
-// dispatch pass. Teardown completion is intentionally absent: only Helmsman's
-// generation-correlated post-stop inventory acknowledgement can settle it.
+// dispatch pass. Teardown and publisher drain complete only on Helmsman's
+// generation-correlated post-stop acknowledgement.
 type OfflineEffectLegResults struct {
+	StateSuperseded      bool
 	SetNodeOfflineDone   bool
 	BroadcastOfflineDone bool
 	DecklogDone          bool
@@ -64,7 +73,8 @@ func FailExhaustedOfflineEffects(ctx context.Context) ([]OfflineEffectDeadLetter
 	if db == nil {
 		return nil, nil
 	}
-	rows, err := foghorndb.New(db).FailExhaustedOfflineEffects(ctx)
+	queries := foghorndb.New(db)
+	rows, err := queries.FailExhaustedOfflineEffects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dead-letter exhausted offline effects: %w", err)
 	}
@@ -146,7 +156,7 @@ func LatestEndedNodeIngestSession(ctx context.Context, nodeID, internalName stri
 }
 
 // ErrOfflineEffectSuperseded means a newer source transition already won the shared revision CAS.
-// The durable row is terminal, but none of its external effects may run.
+// Routing cleanup is obsolete; a separately owed publisher drain remains mandatory.
 var ErrOfflineEffectSuperseded = errors.New("offline effect superseded by newer source revision")
 
 // ErrOfflineEffectDeferred means the claimant lacks the authority an owed part of this effect needs
@@ -179,7 +189,20 @@ func enqueueOfflineEffectTx(ctx context.Context, tx *sql.Tx, tenantID, internalN
 		// already-empty inventory/restart reconciliation.
 		intent.TeardownStream = false
 	}
+	if intent.DrainPublisher {
+		if _, err := uuid.Parse(generation); err != nil || strings.TrimSpace(nodeID) == "" {
+			return errors.New("publisher drain requires a node and source generation")
+		}
+		if binding, ok := streamident.ParseRuntimeBinding(intent.DrainRuntimeName); ok {
+			if binding.Role != streamident.RuntimePublisher || binding.InternalName != internalName || binding.ExecutionID != generation {
+				return errors.New("publisher drain runtime differs from its generation")
+			}
+		} else if intent.DrainRuntimeName != "live+"+internalName {
+			return errors.New("publisher drain requires its exact runtime binding")
+		}
+	}
 	err := foghorndb.New(tx).EnqueueOfflineEffect(ctx, foghorndb.EnqueueOfflineEffectParams{
+		DrainPublisher: intent.DrainPublisher, DrainRuntimeName: intent.DrainRuntimeName,
 		TenantID: tenantID, StreamInternalName: internalName, SourceNodeID: nodeID,
 		SourceGeneration: generation, SourceRevision: revision, SetNodeOffline: intent.SetNodeOffline,
 		TeardownStream: intent.TeardownStream, BroadcastOffline: intent.BroadcastOffline, DecklogTrigger: intent.DecklogTrigger,
@@ -211,6 +234,7 @@ func ClaimOfflineEffects(ctx context.Context, limit int, lease time.Duration, in
 	out := make([]OfflineEffect, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, OfflineEffect{
+			DrainPublisher: row.DrainPublisher, DrainDone: row.DrainDone, DrainRuntimeName: row.DrainRuntimeName, StateSuperseded: row.StateSuperseded,
 			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.SourceNodeID,
 			SourceGeneration: row.SourceGeneration, SourceRevision: row.SourceRevision,
 			SetNodeOffline: row.SetNodeOffline, SetNodeOfflineDone: row.SetNodeOfflineDone,
@@ -223,14 +247,14 @@ func ClaimOfflineEffects(ctx context.Context, limit int, lease time.Duration, in
 }
 
 type offlineLegFlags struct {
-	nodeOffline, teardown, broadcast, decklog bool
+	nodeOffline, teardown, broadcast, decklog, drain, stateSuperseded bool
 }
 
 func (f offlineLegFlags) allDone(effect OfflineEffect) bool {
 	return (!effect.SetNodeOffline || f.nodeOffline) &&
 		(!effect.TeardownStream || f.teardown) &&
 		(!effect.BroadcastOffline || f.broadcast) &&
-		(len(effect.DecklogTrigger) == 0 || f.decklog)
+		(len(effect.DecklogTrigger) == 0 || f.decklog) && (!effect.DrainPublisher || f.drain)
 }
 
 func readOfflineLegsLocked(ctx context.Context, tx *sql.Tx, effect OfflineEffect) (offlineLegFlags, error) {
@@ -239,12 +263,13 @@ func readOfflineLegsLocked(ctx context.Context, tx *sql.Tx, effect OfflineEffect
 	})
 	return offlineLegFlags{
 		nodeOffline: row.SetNodeOfflineDone, teardown: row.TeardownDone,
-		broadcast: row.BroadcastOfflineDone, decklog: row.DecklogDone,
+		broadcast: row.BroadcastOfflineDone, decklog: row.DecklogDone, drain: row.DrainDone, stateSuperseded: row.StateSuperseded,
 	}, err
 }
 
 func settleOfflineEffectLocked(ctx context.Context, tx *sql.Tx, effect OfflineEffect, flags offlineLegFlags, releaseLease bool) (bool, error) {
 	n, err := foghorndb.New(tx).SettleOfflineEffect(ctx, foghorndb.SettleOfflineEffectParams{
+		DrainDone: flags.drain, StateSuperseded: flags.stateSuperseded,
 		SetNodeOfflineDone: flags.nodeOffline, TeardownDone: flags.teardown,
 		BroadcastOfflineDone: flags.broadcast, DecklogDone: flags.decklog,
 		ReleaseLease: releaseLease, EffectID: effect.ID, LeaseToken: effect.LeaseToken,
@@ -259,7 +284,7 @@ func settleOfflineEffectLocked(ctx context.Context, tx *sql.Tx, effect OfflineEf
 // effects: verify authority under the stream lock, perform network I/O without
 // locks, then merge acknowledgements and completed local legs under the lock.
 // This prevents a slow Helmsman call from blocking a reconnect and ensures an
-// acknowledgement wait re-dispatches only teardown, never Decklog or federation.
+// acknowledgement wait re-dispatches only unfinished stop legs.
 func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply func(context.Context, OfflineEffect) (OfflineEffectLegResults, error)) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("apply offline effect: no database configured")
@@ -289,11 +314,17 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 		effect.TeardownDone = flags.teardown
 		effect.BroadcastOfflineDone = flags.broadcast
 		effect.DecklogDone = flags.decklog
+		effect.DrainDone = flags.drain
+		effect.StateSuperseded = flags.stateSuperseded
 		active, probeErr := qtx.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
 		if probeErr != nil {
 			return fmt.Errorf("recheck offline effect authority: %w", probeErr)
 		}
-		if active {
+		if active || flags.stateSuperseded {
+			if effect.DrainPublisher && !flags.drain {
+				effect.StateSuperseded = true
+				return nil
+			}
 			n, updateErr := qtx.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
 			if updateErr != nil {
 				return fmt.Errorf("supersede offline effect: %w", updateErr)
@@ -337,13 +368,17 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 		if probeErr != nil {
 			return fmt.Errorf("recheck offline effect authority for settle: %w", probeErr)
 		}
-		if active || errors.Is(applyErr, ErrOfflineEffectSuperseded) {
+		if (active || current.stateSuperseded || legs.StateSuperseded || errors.Is(applyErr, ErrOfflineEffectSuperseded)) && !effect.DrainPublisher {
 			n, updateErr := qtx3.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
 			if updateErr != nil {
 				return fmt.Errorf("supersede offline effect after dispatch: %w", updateErr)
 			}
 			settleSuperseded, settleOutcome = true, n == 1
 			return nil
+		}
+		if active || current.stateSuperseded || effect.StateSuperseded || legs.StateSuperseded || errors.Is(applyErr, ErrOfflineEffectSuperseded) {
+			current.stateSuperseded = true
+			current.nodeOffline, current.teardown, current.broadcast, current.decklog = true, true, true, true
 		}
 		current.nodeOffline = current.nodeOffline || legs.SetNodeOfflineDone
 		current.broadcast = current.broadcast || legs.BroadcastOfflineDone
@@ -367,6 +402,47 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 	return settleOutcome, nil
 }
 
+// offlineAcknowledgementTenant resolves old edge replies using their authenticated
+// node and immutable generation. Ambiguous identities cannot authorize any mutation.
+func offlineAcknowledgementTenant(ctx context.Context, nodeID, sourceGeneration string) (string, error) {
+	if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+		return tenantID, nil
+	}
+	tenants, err := foghorndb.New(db).ListOfflineAcknowledgementTenants(ctx, foghorndb.ListOfflineAcknowledgementTenantsParams{SourceNodeID: nodeID, SourceGeneration: sourceGeneration})
+	if err != nil {
+		return "", fmt.Errorf("resolve offline acknowledgement tenant: %w", err)
+	}
+	if len(tenants) > 1 {
+		return "", errors.New("offline acknowledgement identity has multiple tenants")
+	}
+	if len(tenants) == 0 {
+		return "", nil
+	}
+	return tenants[0], nil
+}
+
+// MarkOfflinePublisherDrainDone accepts an acknowledgement only for the authenticated
+// node and the retired publisher generation. A replacement publisher cannot settle it.
+func MarkOfflinePublisherDrainDone(ctx context.Context, nodeID, sourceGeneration string) error {
+	if db == nil {
+		return nil
+	}
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" {
+		return errors.New("mark publisher drain requires node and source generation")
+	}
+	tenantID, tenantErr := offlineAcknowledgementTenant(ctx, nodeID, sourceGeneration)
+	if tenantErr != nil || tenantID == "" {
+		return tenantErr
+	}
+	_, err := foghorndb.New(db).MarkOfflinePublisherDrainDone(ctx, foghorndb.MarkOfflinePublisherDrainDoneParams{
+		TenantID: tenantID, SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
+	})
+	if err != nil {
+		return fmt.Errorf("mark publisher drain done: %w", err)
+	}
+	return nil
+}
+
 // MarkOfflineTeardownDone records Helmsman's post-stop PushList convergence
 // proof. The authenticated node identity and exact source generation prevent a
 // stale or cross-node acknowledgement from completing another teardown.
@@ -377,9 +453,13 @@ func MarkOfflineTeardownDone(ctx context.Context, nodeID, sourceGeneration strin
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" {
 		return errors.New("mark offline teardown requires node and source generation")
 	}
+	tenantID, tenantErr := offlineAcknowledgementTenant(ctx, nodeID, sourceGeneration)
+	if tenantErr != nil || tenantID == "" {
+		return tenantErr
+	}
 	queries := foghorndb.New(db)
 	revived, err := queries.ReviveFailedOfflineTeardownDone(ctx, foghorndb.ReviveFailedOfflineTeardownDoneParams{
-		SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
+		TenantID: tenantID, SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
 	})
 	if err != nil {
 		return fmt.Errorf("revive failed offline teardown: %w", err)
@@ -388,7 +468,7 @@ func MarkOfflineTeardownDone(ctx context.Context, nodeID, sourceGeneration strin
 		ObserveOfflineEffectDeadLetter("revived")
 	}
 	_, err = queries.MarkOfflineTeardownDone(ctx, foghorndb.MarkOfflineTeardownDoneParams{
-		SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
+		TenantID: tenantID, SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
 	})
 	if err != nil {
 		return fmt.Errorf("mark offline teardown done: %w", err)

@@ -21,14 +21,9 @@
     createdAt?: string | null;
     updatedAt?: string | null;
     ingestMode?: "PUSH" | "PULL" | "MANAGED" | string | null;
-    metrics?: {
+    ingest?: {
       isLive?: boolean;
     } | null;
-  }
-
-  interface StreamKeyData {
-    id?: string;
-    keyValue?: string;
   }
 
   // Overview is a config/status panel: live tracks, stream metadata, config counts.
@@ -36,12 +31,10 @@
   // the dedicated /streams/[id]/analytics route, not here.
   let {
     stream,
-    streamKeys,
     recordings,
     tracks = null,
   }: {
     stream: StreamData;
-    streamKeys: StreamKeyData[];
     recordings: unknown[];
     tracks?: TrackInfo | null;
   } = $props();
@@ -196,7 +189,7 @@
         {/if}
       </div>
     </div>
-  {:else if stream.metrics?.isLive}
+  {:else if stream.ingest?.isLive}
     <!-- Stream is live but no track info yet -->
     <div class="slab col-span-full">
       <div class="slab-body--padded flex flex-col items-center justify-center py-8 text-center">
@@ -252,12 +245,7 @@
       </h3>
     </div>
     <div class="slab-body--padded space-y-3">
-      {#if stream.ingestMode === "PUSH"}
-        <div class="flex justify-between items-center">
-          <span class="text-muted-foreground">Total Stream Keys:</span>
-          <span class="font-mono text-info font-medium">{streamKeys.length}</span>
-        </div>
-      {:else}
+      {#if stream.ingestMode !== "PUSH"}
         <div class="flex justify-between items-center">
           <span class="text-muted-foreground">Source Mode:</span>
           <span class="font-mono text-info font-medium">

@@ -21,3 +21,19 @@ func (sm *StreamStateManager) notifyNodeCluster(nodeID string) {
 		observer(clusterID)
 	}
 }
+
+// A cluster identity arriving after stream presence can complete the source's
+// federation proof, so re-evaluate the streams this node already carries.
+func (sm *StreamStateManager) notifyNodeStreamsChanged(nodeID string) {
+	sm.mu.RLock()
+	var names []string
+	for name, instances := range sm.streamInstances {
+		if instances[nodeID] != nil {
+			names = append(names, name)
+		}
+	}
+	sm.mu.RUnlock()
+	for _, name := range names {
+		sm.notifyStreamChanged(name)
+	}
+}

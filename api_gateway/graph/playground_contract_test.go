@@ -490,6 +490,8 @@ func defaultIDForOperation(opName string) string {
 		return demoStreamGlobalID
 	case strings.Contains(opName, "Clip"):
 		return demoClipGlobalID
+	case strings.Contains(opName, "Dvr") || strings.Contains(opName, "DVR") || strings.Contains(opName, "Recording"):
+		return demo.DemoDVRRecordingID
 	case strings.Contains(opName, "Vod"):
 		return demo.DemoVodHash
 	case strings.Contains(opName, "InfrastructureNode"):
@@ -609,6 +611,8 @@ func defaultInputValue(typeName string) any {
 		return map[string]any{"targetId": demo.DemoVodHash, "targetType": "VOD", "retentionDays": 30}
 	case "ResetMediaRetentionOverrideInput":
 		return map[string]any{"targetId": demo.DemoVodHash, "targetType": "VOD"}
+	case "SetNodeCapacityInput":
+		return map[string]any{"nodeId": demoNodeGlobalID, "expectedRevision": 0}
 	case "SetNodeModeInput":
 		return map[string]any{"nodeId": demoNodeGlobalID, "mode": "NORMAL"}
 	case "OpenMistAdminSessionInput":

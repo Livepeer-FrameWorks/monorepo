@@ -553,7 +553,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 }
 
 // GetClusterRouting returns the best cluster for a tenant's stream.
-// Validates cluster has capacity (max_streams, max_bandwidth_mbps) before returning.
+// Returns routing and entitlement limits; Foghorn enforces admission capacity.
 func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -655,9 +655,8 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 		// Surface access-specific runtime cap overrides so Foghorn can enforce
 		// them at trigger time. Plan-level Free caps come from Purser tier
 		// entitlements; an empty tenant_cluster_access.resource_limits column
-		// means "no cluster override". Bandwidth caps (max_bandwidth_mbps) are
-		// not enforced runtime today and intentionally not surfaced on the typed
-		// response — they live in the JSONB column as a future hook.
+		// means "no cluster override". Stored bandwidth caps are not enforced
+		// or surfaced on the typed response.
 		tenantResourceLimits, limitsErr := queries.GetTenantClusterResourceLimits(ctx, quartermasterdb.GetTenantClusterResourceLimitsParams{
 			TenantID: tenantID, ClusterID: primaryClusterID,
 		})
@@ -3661,8 +3660,8 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 			DeploymentModel: validString(deploymentModel), OwnerTenantID: ownerTenantID, BaseUrl: baseURL,
 			DatabaseUrl: optionalString(req.DatabaseUrl), PeriscopeUrl: optionalString(req.PeriscopeUrl),
 			KafkaBrokers: req.GetKafkaBrokers(), MaxConcurrentStreams: validInt32(req.GetMaxConcurrentStreams()),
-			MaxConcurrentViewers: validInt32(req.GetMaxConcurrentViewers()), MaxBandwidthMbps: validInt32(req.GetMaxBandwidthMbps()),
-			IsPlatformOfficial: validBool(isPlatformOfficial), IsDefaultCluster: validBool(isDefaultCluster),
+			MaxConcurrentViewers: validInt32(req.GetMaxConcurrentViewers()),
+			IsPlatformOfficial:   validBool(isPlatformOfficial), IsDefaultCluster: validBool(isDefaultCluster),
 			PublicTopology: publicTopology, AllowPrivatePullSources: allowPrivatePullSources, CreatedAt: now,
 		}); createErr != nil {
 			return fmt.Errorf("create cluster: %w", createErr)
@@ -3724,7 +3723,8 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 	}
 	if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) &&
 		(req.OwnerTenantId != nil || req.DeploymentModel != nil || req.IsPlatformOfficial != nil ||
-			req.IsDefaultCluster != nil || req.PublicTopology != nil || req.HealthStatus != nil) {
+			req.IsDefaultCluster != nil || req.PublicTopology != nil || req.HealthStatus != nil ||
+			req.DatabaseUrl != nil || req.PeriscopeUrl != nil || len(req.KafkaBrokers) > 0) {
 		return nil, status.Error(codes.PermissionDenied, "cluster ownership and platform fields are control-plane managed")
 	}
 	var clusterUpdate quartermasterdb.ClusterUpdate
@@ -3738,6 +3738,34 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 		baseURL := dns.NormalizeDomainScope(*req.BaseUrl)
 		clusterUpdate.BaseURL = &baseURL
 		hasUpdates = true
+	}
+	if req.DatabaseUrl != nil && *req.DatabaseUrl != "" {
+		clusterUpdate.DatabaseURL = req.DatabaseUrl
+		hasUpdates = true
+	}
+	if req.PeriscopeUrl != nil && *req.PeriscopeUrl != "" {
+		clusterUpdate.PeriscopeURL = req.PeriscopeUrl
+		hasUpdates = true
+	}
+	if len(req.KafkaBrokers) > 0 {
+		clusterUpdate.KafkaBrokers = req.KafkaBrokers
+		hasUpdates = true
+	}
+	for _, limit := range []struct {
+		name   string
+		value  *int32
+		target **int32
+	}{
+		{"max_concurrent_streams", req.MaxConcurrentStreams, &clusterUpdate.MaxConcurrentStreams},
+		{"max_concurrent_viewers", req.MaxConcurrentViewers, &clusterUpdate.MaxConcurrentViewers},
+	} {
+		if limit.value != nil {
+			if *limit.value < 0 {
+				return nil, status.Errorf(codes.InvalidArgument, "%s must be non-negative", limit.name)
+			}
+			*limit.target = limit.value
+			hasUpdates = true
+		}
 	}
 	if req.HealthStatus != nil {
 		clusterUpdate.HealthStatus = req.HealthStatus
@@ -4121,7 +4149,7 @@ func normalizeGrantedResourceLimits(limits *structpb.Struct) (sql.NullString, er
 	if limits == nil || len(limits.GetFields()) == 0 {
 		return validString("{}"), nil
 	}
-	allowed := map[string]struct{}{"max_streams": {}, "max_viewers": {}, "max_bandwidth_mbps": {}}
+	allowed := map[string]struct{}{"max_streams": {}, "max_viewers": {}}
 	for key, value := range limits.GetFields() {
 		if _, ok := allowed[key]; !ok {
 			return sql.NullString{}, status.Errorf(codes.InvalidArgument, "unsupported resource_limits key %q", key)
@@ -5958,6 +5986,10 @@ func nodeFromRecord(row quartermasterdb.GetInfrastructureNodeRow) *quartermaster
 	node := &quartermasterpb.InfrastructureNode{
 		Id: row.ID, NodeId: row.NodeID, ClusterId: row.ClusterID, NodeName: row.NodeName, NodeType: row.NodeType,
 		EnrollmentOrigin: row.EnrollmentOrigin,
+		Capacity: nodeCapacityFromRecord(quartermasterdb.GetNodeCapacityRow{
+			EgressBudgetBytesPerSec: row.EgressBudgetBytesPerSec, IngressBudgetBytesPerSec: row.IngressBudgetBytesPerSec,
+			Revision: row.CapacityRevision, UpdatedBy: row.CapacityUpdatedBy, UpdatedAt: row.CapacityUpdatedAt,
+		}),
 		ResourceSnapshot: nodeSnapshotProto(row.SnapshotCpuPercent, row.SnapshotRamUsedBytes, row.SnapshotRamTotalBytes,
 			row.SnapshotDiskUsedBytes, row.SnapshotDiskTotalBytes, row.SnapshotUptimeSeconds, row.SnapshotAt),
 	}
@@ -6023,7 +6055,7 @@ func clusterFromListRow(row quartermasterdb.ClusterListRow) *quartermasterpb.Inf
 		Id: row.ID, ClusterId: row.ClusterID, ClusterName: row.ClusterName, ClusterType: row.ClusterType,
 		DeploymentModel: row.DeploymentModel, BaseUrl: row.BaseURL, KafkaBrokers: row.KafkaBrokers,
 		MaxConcurrentStreams: row.MaxConcurrentStreams, MaxConcurrentViewers: row.MaxConcurrentViewers,
-		MaxBandwidthMbps: row.MaxBandwidthMbps, HealthStatus: row.HealthStatus, IsActive: row.IsActive,
+		HealthStatus: row.HealthStatus, IsActive: row.IsActive,
 		IsDefaultCluster: row.IsDefaultCluster, IsPlatformOfficial: row.IsPlatformOfficial, PublicTopology: row.PublicTopology,
 		AllowPrivatePullSources: row.AllowPrivatePullSources, CreatedAt: timestamppb.New(row.CreatedAt), UpdatedAt: timestamppb.New(row.UpdatedAt),
 	}
@@ -9262,7 +9294,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !row.DeploymentModel.Valid || !row.MaxConcurrentStreams.Valid || !row.MaxConcurrentViewers.Valid ||
-		!row.MaxBandwidthMbps.Valid || !row.HealthStatus.Valid || !row.IsActive.Valid ||
+		!row.HealthStatus.Valid || !row.IsActive.Valid ||
 		!row.IsDefaultCluster.Valid || !row.IsPlatformOfficial.Valid || !row.CreatedAt.Valid ||
 		!row.UpdatedAt.Valid || !row.Visibility.Valid || !row.RequiresApproval.Valid {
 		return nil, status.Error(codes.Internal, "database error: required cluster field is NULL")
@@ -9271,10 +9303,11 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		Id: row.ID, ClusterId: row.ClusterID, ClusterName: row.ClusterName, ClusterType: row.ClusterType,
 		DeploymentModel: row.DeploymentModel.String, BaseUrl: row.BaseUrl, KafkaBrokers: row.KafkaBrokers,
 		MaxConcurrentStreams: row.MaxConcurrentStreams.Int32, MaxConcurrentViewers: row.MaxConcurrentViewers.Int32,
-		MaxBandwidthMbps: row.MaxBandwidthMbps.Int32, HealthStatus: row.HealthStatus.String,
-		IsActive: row.IsActive.Bool, IsDefaultCluster: row.IsDefaultCluster.Bool,
+		HealthStatus: row.HealthStatus.String,
+		IsActive:     row.IsActive.Bool, IsDefaultCluster: row.IsDefaultCluster.Bool,
 		IsPlatformOfficial: row.IsPlatformOfficial.Bool, PublicTopology: row.PublicTopology,
-		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		AllowPrivatePullSources: row.AllowPrivatePullSources,
+		CreatedAt:               timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		Visibility: visibilityStringToProto(row.Visibility.String), RequiresApproval: row.RequiresApproval.Bool,
 		S3Bucket: row.S3Bucket, S3Endpoint: row.S3Endpoint, S3Region: row.S3Region, S3Prefix: row.S3Prefix,
 		S3PrefixPresent: row.S3PrefixPresent, RegionId: row.RegionID, CellId: row.CellID,
@@ -9286,6 +9319,9 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	}
 	if row.DatabaseUrl.Valid {
 		cluster.DatabaseUrl = &row.DatabaseUrl.String
+	}
+	if row.PeriscopeUrl.Valid {
+		cluster.PeriscopeUrl = &row.PeriscopeUrl.String
 	}
 	if row.ShortDescription.Valid {
 		cluster.ShortDescription = &row.ShortDescription.String
@@ -9833,6 +9869,11 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 		return nil, err
 	}
 
+	resourceLimits, err := normalizeGrantedResourceLimits(req.GetResourceLimits())
+	if err != nil {
+		return nil, err
+	}
+
 	userID := middleware.GetUserID(ctx)
 	// Verify ownership and get cluster name
 	queries := quartermasterdb.New(s.db)
@@ -9894,16 +9935,6 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	}
 	expiresAt := now.Add(time.Duration(expiresInDays) * 24 * time.Hour)
 
-	// Serialize resource limits
-	var resourceLimitsJSON []byte
-	if req.GetResourceLimits() != nil {
-		resourceLimitsJSON, _ = json.Marshal(req.GetResourceLimits().AsMap())
-	}
-
-	resourceLimits := sql.NullString{}
-	if len(resourceLimitsJSON) > 0 {
-		resourceLimits = validString(string(resourceLimitsJSON))
-	}
 	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		if createErr := quartermasterdb.New(tx).CreateClusterInviteRecord(ctx, quartermasterdb.CreateClusterInviteRecordParams{
 			ID: id, ClusterID: clusterID, InvitedTenantID: invitedTenantID, InviteToken: token,

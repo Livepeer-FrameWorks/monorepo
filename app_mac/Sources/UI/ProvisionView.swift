@@ -5,6 +5,7 @@ struct ProvisionView: View {
   var closePanel: () -> Void
 
   @State private var enrollmentToken = ""
+  @State private var bandwidthMbps = ""
   @State private var output = ""
   @State private var isRunning = false
 
@@ -42,6 +43,15 @@ struct ProvisionView: View {
       }
       .padding(.horizontal)
       .padding(.vertical, 8)
+
+      VStack(alignment: .leading, spacing: 4) {
+        TextField("Bandwidth (Mbit/s, optional)", text: $bandwidthMbps)
+          .textFieldStyle(.roundedBorder).disabled(isRunning)
+        Text("Requires sign-in to set through the API. Leave blank to keep the budget; new nodes default to 1 Gbit/s.")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+      .padding(.horizontal)
+      .padding(.bottom, 8)
 
       Divider()
 
@@ -86,6 +96,15 @@ struct ProvisionView: View {
     let token = enrollmentToken.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !token.isEmpty, !isRunning else { return }
     output = ""
+    let requestedBandwidth = bandwidthMbps.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !requestedBandwidth.isEmpty {
+      do { _ = try NodeCapacityService.overrideBytes(mbps: requestedBandwidth) }
+      catch { output = error.localizedDescription; return }
+      guard GatewayClient.shared.accessToken != nil else {
+        output = "Sign in to set node bandwidth through the API, or leave the field blank and set it later with frameworks edge capacity set."
+        return
+      }
+    }
     isRunning = true
 
     Task {
@@ -95,6 +114,22 @@ struct ProvisionView: View {
         ) { line in
           Task { @MainActor in
             output += line + "\n"
+          }
+        }
+
+        if exitCode == 0 && !requestedBandwidth.isEmpty {
+          do {
+            let health = try await EdgeClient.shared.fetchHealth()
+            let service = NodeCapacityService()
+            let current = try await service.fetch(nodeId: health.nodeId)
+            _ = try await service.set(nodeId: health.nodeId, revision: current.revision,
+              egressMbps: requestedBandwidth, ingressMbps: requestedBandwidth)
+            await MainActor.run { output += "\n[capacity saved: \(requestedBandwidth) Mbit/s per direction]\n" }
+          } catch {
+            await MainActor.run {
+              output += "\n[edge provisioned; capacity was not saved: \(error.localizedDescription)]\n"
+              output += "Set it later with frameworks edge capacity set.\n"
+            }
           }
         }
         await MainActor.run {

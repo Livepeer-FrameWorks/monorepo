@@ -48,10 +48,10 @@ const (
 
 const (
 	demoProcessesLive        = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]`
-	demoProcessesDVR         = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Thumbnail Sprites"}]`
-	demoProcessesClip        = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Clip Thumbnail Sprites"}]`
-	demoProcessesDVRFinalize = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Chapter Thumbnail Sprites"}]`
-	demoProcessesVOD         = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]`
+	demoProcessesDVR         = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Thumbnail Sprites"}]`
+	demoProcessesClip        = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Clip Thumbnail Sprites"}]`
+	demoProcessesDVRFinalize = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Chapter Thumbnail Sprites"}]`
+	demoProcessesVOD         = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]`
 )
 
 // GenerateStreams creates realistic demo stream data
@@ -273,7 +273,7 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			Id:          "tier_demo_supporter",
 			TierName:    "supporter",
 			DisplayName: "Supporter",
-			Description: "120K delivered mins, hosted load balancer, custom subdomain. ~100-300 viewers.",
+			Description: "120K delivered mins, hosted load balancer, custom subdomain.",
 			BasePrice:   79.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
@@ -289,7 +289,7 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			Id:          "tier_demo_developer",
 			TierName:    "developer",
 			DisplayName: "Developer",
-			Description: "500K delivered mins, lower overage rates, team features as they ship. ~500-1K viewers.",
+			Description: "500K delivered mins, lower overage rates, team features as they ship.",
 			BasePrice:   249.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
@@ -305,7 +305,7 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			Id:          "tier_demo_production",
 			TierName:    "production",
 			DisplayName: "Production",
-			Description: "2M delivered mins, lowest overage rates, dedicated processing allocation. ~2-5K viewers.",
+			Description: "2M delivered mins, lowest overage rates, dedicated processing allocation.",
 			BasePrice:   999.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
@@ -634,7 +634,7 @@ func GenerateBillingStatus() *purserpb.BillingStatusResponse {
 			Id:            "tier_demo_developer",
 			TierName:      "developer",
 			DisplayName:   "Developer",
-			Description:   "500K delivered mins, lower overage rates, team features as they ship. ~500-1K viewers.",
+			Description:   "500K delivered mins, lower overage rates, team features as they ship.",
 			BasePrice:     249.00,
 			Currency:      "EUR",
 			BillingPeriod: "monthly",
@@ -766,39 +766,6 @@ func GenerateDeveloperTokens() []*commodorepb.APITokenInfo {
 			LastUsedAt:  timestamppb.New(now.Add(-10 * 24 * time.Hour)),
 			ExpiresAt:   timestamppb.New(now.Add(30 * 24 * time.Hour)),
 			CreatedAt:   timestamppb.New(now.Add(-90 * 24 * time.Hour)),
-		},
-	}
-}
-
-// GenerateStreamKeys creates demo stream key data
-func GenerateStreamKeys(streamID string) []*commodorepb.StreamKey {
-	now := time.Now()
-	lastUsed1 := now.Add(-1 * time.Hour)
-	lastUsed2 := now.Add(-3 * 24 * time.Hour)
-	return []*commodorepb.StreamKey{
-		{
-			Id:         "sk_demo_1",
-			TenantId:   "tenant_demo_1",
-			UserId:     "user_demo_1",
-			StreamId:   streamID,
-			KeyValue:   "sk_demo_live_primary",
-			KeyName:    "Primary Key",
-			IsActive:   true,
-			LastUsedAt: timestamppb.New(lastUsed1),
-			CreatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
-			UpdatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
-		},
-		{
-			Id:         "sk_demo_2",
-			TenantId:   "tenant_demo_1",
-			UserId:     "user_demo_1",
-			StreamId:   streamID,
-			KeyValue:   "sk_demo_live_backup",
-			KeyName:    "Backup Key",
-			IsActive:   false,
-			LastUsedAt: timestamppb.New(lastUsed2),
-			CreatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
-			UpdatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 		},
 	}
 }
@@ -3191,7 +3158,6 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			BaseUrl:              "https://us-west.demo.frameworks.video",
 			MaxConcurrentStreams: 100,
 			MaxConcurrentViewers: 10000,
-			MaxBandwidthMbps:     10000,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			CreatedAt:            timestamppb.New(now.Add(-60 * 24 * time.Hour)),
@@ -3206,7 +3172,6 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			BaseUrl:              "https://eu-west.demo.frameworks.video",
 			MaxConcurrentStreams: 50,
 			MaxConcurrentViewers: 5000,
-			MaxBandwidthMbps:     5000,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			CreatedAt:            timestamppb.New(now.Add(-45 * 24 * time.Hour)),
@@ -3343,7 +3308,6 @@ func GenerateMySubscriptions() []*quartermasterpb.InfrastructureCluster {
 			BaseUrl:              "https://api.demo.frameworks.dev",
 			MaxConcurrentStreams: 100,
 			MaxConcurrentViewers: 10000,
-			MaxBandwidthMbps:     10000,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			IsDefaultCluster:     true,
@@ -3359,7 +3323,6 @@ func GenerateMySubscriptions() []*quartermasterpb.InfrastructureCluster {
 			BaseUrl:              "https://selfhosted.demo.frameworks.dev",
 			MaxConcurrentStreams: 25,
 			MaxConcurrentViewers: 2500,
-			MaxBandwidthMbps:     1000,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			IsDefaultCluster:     false,
@@ -4358,8 +4321,9 @@ func GenerateTenantEvents() []*signalmanpb.TenantEvent {
 		subject   string
 		data      proto.Message
 	}{
-		{"stream.connected", "streams/" + DemoStreamID, &publicv1.StreamConnected{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID, Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP}},
-		{"stream.live", "streams/" + DemoStreamID, &publicv1.StreamLive{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID}},
+		{"stream.connected", "streams/" + DemoStreamID, &publicv1.StreamConnected{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID, Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP, SessionId: "demo-session-" + DemoStreamID}},
+		{"stream.live", "streams/" + DemoStreamID, &publicv1.StreamLive{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID, SessionId: "demo-session-" + DemoStreamID}},
+		{"stream.ended", "streams/" + DemoStreamID, &publicv1.StreamEnded{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID, SessionId: "demo-ended-session-" + DemoStreamID}},
 		{"clip.requested", "artifacts/" + DemoClipHash, &publicv1.ClipRequested{Artifact: clip, DurationMs: 30000}},
 		{"clip.ready", "artifacts/" + DemoClipHash, &publicv1.ClipReady{Artifact: clip, DurationMs: 30000, SizeBytes: 4_812_345}},
 		{"upload.ready", "artifacts/" + DemoVodHash, &publicv1.UploadReady{Artifact: upload, DurationMs: 4000, SizeBytes: 149099}},
@@ -5001,9 +4965,9 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 	return &model.NetworkStatus{
 		Clusters: []*model.NetworkClusterStatus{
 			{ClusterID: "central-primary", Name: "Central Platform", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 2, Status: "healthy", ClusterType: infra.ClusterTypeCentral, ShortDescription: &platformDesc, CurrentStreams: 0, CurrentViewers: 0, EgressMbps: 0, EgressCapacityMbps: 0, IngressMbps: 0, Services: []string{"bridge", "commodore", "decklog", "foghorn", "periscope-ingest", "purser", "signalman", "skipper"}},
-			{ClusterID: "demo-media", Name: "Demo Media Cluster", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 0, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &mediaDesc, CurrentStreams: 12, CurrentViewers: 340, EgressMbps: 1200, EgressCapacityMbps: 10000, IngressMbps: 300, Services: []string{"helmsman"}},
-			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &usEastDesc, CurrentStreams: 5, CurrentViewers: 180, EgressMbps: 600, EgressCapacityMbps: 5000, IngressMbps: 150, Services: []string{"foghorn", "helmsman"}},
-			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &apacDesc, CurrentStreams: 3, CurrentViewers: 95, EgressMbps: 280, EgressCapacityMbps: 3000, IngressMbps: 80, Services: []string{"foghorn", "helmsman"}},
+			{ClusterID: "demo-media", Name: "Demo Media Cluster", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 0, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &mediaDesc, CurrentStreams: 12, CurrentViewers: 340, EgressMbps: 1200, EgressCapacityMbps: 3000, EgressUsableMbps: 2550, DefaultBudgetNodes: 3, IngressMbps: 300, Services: []string{"helmsman"}},
+			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &usEastDesc, CurrentStreams: 5, CurrentViewers: 180, EgressMbps: 600, EgressCapacityMbps: 3000, EgressUsableMbps: 2550, DefaultBudgetNodes: 3, IngressMbps: 150, Services: []string{"foghorn", "helmsman"}},
+			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &apacDesc, CurrentStreams: 3, CurrentViewers: 95, EgressMbps: 280, EgressCapacityMbps: 2000, EgressUsableMbps: 1700, DefaultBudgetNodes: 2, IngressMbps: 80, Services: []string{"foghorn", "helmsman"}},
 		},
 		PeerConnections: []*model.NetworkPeerConnection{
 			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true, ConnectionType: "assignment"},
@@ -5208,4 +5172,60 @@ func demoPricingRulesForTier(tierName string) []*purserpb.PricingRule {
 			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
 		}
 	}
+}
+
+// GenerateStreamIngest follows the sandbox stream's fixture lifecycle.
+func GenerateStreamIngest(stream *commodorepb.Stream) *model.StreamIngest {
+	result := &model.StreamIngest{State: model.StreamIngestStateIdle}
+	if stream == nil {
+		return result
+	}
+	if stream.GetIsLive() {
+		result.State = model.StreamIngestStateLive
+		result.IsLive = true
+	} else if stream.GetStatus() == "connected" {
+		result.State = model.StreamIngestStateConnected
+	}
+	if result.State != model.StreamIngestStateIdle || stream.GetEndedAt() != nil {
+		id := "demo-session-" + stream.GetStreamId()
+		result.SessionID = &id
+	}
+	if stream.GetStartedAt() != nil {
+		t := stream.GetStartedAt().AsTime()
+		result.ConnectedAt = &t
+		if stream.GetIsLive() {
+			result.LiveSince = &t
+		}
+	}
+	if stream.GetEndedAt() != nil {
+		t := stream.GetEndedAt().AsTime()
+		result.EndedAt = &t
+	}
+	return result
+}
+
+const DemoDVRRecordingID = "5eed517e-0000-0000-0000-00000000d701"
+const DemoDVRHash = "5eedd700000000000000000000000001"
+
+func GenerateDVRRecording() *sharedpb.DVRInfo {
+	now := time.Now().UTC()
+	return &sharedpb.DVRInfo{Id: proto.String(DemoDVRRecordingID), DvrHash: DemoDVRHash, InternalName: "dvr+demo", PlaybackId: proto.String("dvr_demo_playback"), StreamId: proto.String(DemoStreamID), Title: proto.String("Demo recording"), Status: "completed", CreatedAt: timestamppb.New(now.Add(-2 * time.Hour)), UpdatedAt: timestamppb.New(now.Add(-time.Hour)), StartedAt: timestamppb.New(now.Add(-2 * time.Hour)), EndedAt: timestamppb.New(now.Add(-time.Hour))}
+}
+
+func GenerateStreamArtifactsConnection(kind string) *model.StreamArtifactsConnection {
+	now := time.Now().UTC()
+	artifactKind, hash, id := model.StorageArtifactKindDvr, DemoDVRHash, DemoDVRRecordingID
+	if kind == "clip" {
+		artifactKind, hash, id = model.StorageArtifactKindClip, DemoClipHash, "5eed517e-0000-0000-0000-00000000c101"
+	}
+	node := &model.StorageArtifact{Key: kind + ":" + hash, Kind: artifactKind, ID: id, Hash: hash, StreamID: proto.String(DemoStreamID), StreamTitle: "Demo stream", Title: "Saved demo media", Status: "ready", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, DeleteID: hash, RetentionID: hash, PlaybackID: proto.String("demo_" + kind + "_playback")}
+	cursor := pagination.EncodeCursor(node.CreatedAt, id)
+	return &model.StreamArtifactsConnection{Nodes: []*model.StorageArtifact{node}, Edges: []*model.StreamArtifactEdge{{Cursor: cursor, Node: node}}, PageInfo: &model.PageInfo{StartCursor: &cursor, EndCursor: &cursor}, TotalCount: 1}
+}
+
+func GenerateDVRChapterConnection() *model.DVRChapterConnection {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Hour).UnixMilli()
+	node := &model.DVRChapterRef{ChapterID: "5eedc4a0000000000000000000000001", Mode: model.DVRChapterModeWindowSized, StartMs: float64(start), EndMs: float64(start + 3600000), State: model.DVRChapterStateFinalized, SegmentCount: 600, PlaybackID: proto.String("demo_chapter_playback")}
+	cursor := pagination.EncodeCursorWithSortKey(start, node.ChapterID)
+	return &model.DVRChapterConnection{Nodes: []*model.DVRChapterRef{node}, Edges: []*model.DVRChapterEdge{{Cursor: cursor, Node: node}}, PageInfo: &model.PageInfo{StartCursor: &cursor, EndCursor: &cursor}, TotalCount: 1}
 }

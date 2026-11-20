@@ -105,9 +105,9 @@ type FoghornMediaAuthority struct {
 // are used and fall back to their defaults on values that do not parse.
 type FoghornAdmission struct {
 	IngestRejectOverAllowanceLoad string `env:"FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD" default:"0.5" desc:"Cluster load between 0 and 1 above which over-allowance free-tier ingest is rejected. Values outside the open range use 0.5." introduced:"v0.3.0"`
-	IngestRejectFreeLoad          string `env:"FOGHORN_INGEST_REJECT_FREE_LOAD" default:"0.95" desc:"Cluster load between 0 and 1 above which any free-tier ingest is rejected. Values outside the open range use 0.95." introduced:"v0.3.0"`
+	IngestRejectFreeLoad          string `env:"FOGHORN_INGEST_REJECT_FREE_LOAD" default:"0.85" desc:"Cluster load between 0 and 1 above which any free-tier ingest is rejected. The threshold is capped at 0.85; invalid values use 0.85." introduced:"v0.3.0"`
 	ViewerRejectOverAllowanceLoad string `env:"FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD" default:"0.8" desc:"Cluster load between 0 and 1 above which over-allowance free-tier viewers are rejected. Values outside the open range use 0.8." introduced:"v0.3.0"`
-	ViewerRejectFreeLoad          string `env:"FOGHORN_VIEWER_REJECT_FREE_LOAD" default:"0.95" desc:"Cluster load between 0 and 1 above which any free-tier viewer is rejected. Values outside the open range use 0.95." introduced:"v0.3.0"`
+	ViewerRejectFreeLoad          string `env:"FOGHORN_VIEWER_REJECT_FREE_LOAD" default:"0.85" desc:"Cluster load between 0 and 1 above which any free-tier viewer is rejected. The threshold is capped at 0.85; invalid values use 0.85." introduced:"v0.3.0"`
 
 	IngestResolveRatePerMinute string `env:"INGEST_RESOLVE_RATE_PER_MIN" default:"60" desc:"Per-client-IP refill rate of the unauthenticated ingest resolver, in requests per minute. Re-read on every request; values below 1 use 1." introduced:"v0.3.0"`
 	IngestResolveBurst         string `env:"INGEST_RESOLVE_BURST" default:"10" desc:"Per-client-IP burst of the ingest resolver rate limit. Re-read on every request; values below 1 use 1." introduced:"v0.3.0"`

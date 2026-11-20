@@ -11,7 +11,8 @@ INSERT INTO purser.billing_tiers (
     metering_enabled, tier_level, is_enterprise,
     is_default_prepaid, is_default_postpaid,
     processes_live, processes_dvr, processes_clip,
-    processes_dvr_finalize, processes_vod
+    processes_dvr_finalize, processes_vod,
+    transcode_ladders, default_transcode_ladder
 ) VALUES (
     sqlc.arg(tier_name), sqlc.arg(display_name), COALESCE(sqlc.arg(description)::text, ''),
     sqlc.arg(base_price)::text::numeric, sqlc.arg(currency), sqlc.arg(billing_period),
@@ -23,7 +24,8 @@ INSERT INTO purser.billing_tiers (
     COALESCE(sqlc.arg(is_default_postpaid)::boolean, false),
     sqlc.arg(processes_live)::text::jsonb, sqlc.arg(processes_dvr)::text::jsonb,
     sqlc.arg(processes_clip)::text::jsonb, sqlc.arg(processes_dvr_finalize)::text::jsonb,
-    sqlc.arg(processes_vod)::text::jsonb
+    sqlc.arg(processes_vod)::text::jsonb,
+    sqlc.arg(transcode_ladders)::text::jsonb, sqlc.arg(default_transcode_ladder)
 )
 RETURNING id;
 
@@ -46,7 +48,9 @@ SELECT
     COALESCE(processes_dvr, '[]'::jsonb) AS processes_dvr,
     COALESCE(processes_clip, '[]'::jsonb) AS processes_clip,
     COALESCE(processes_dvr_finalize, '[]'::jsonb) AS processes_dvr_finalize,
-    COALESCE(processes_vod, '[]'::jsonb) AS processes_vod
+    COALESCE(processes_vod, '[]'::jsonb) AS processes_vod,
+    transcode_ladders,
+    default_transcode_ladder
 FROM purser.billing_tiers
 WHERE tier_name = sqlc.arg(tier_name);
 
@@ -69,7 +73,9 @@ SET display_name = sqlc.arg(display_name),
     processes_dvr = sqlc.arg(processes_dvr)::text::jsonb,
     processes_clip = sqlc.arg(processes_clip)::text::jsonb,
     processes_dvr_finalize = sqlc.arg(processes_dvr_finalize)::text::jsonb,
-    processes_vod = sqlc.arg(processes_vod)::text::jsonb
+    processes_vod = sqlc.arg(processes_vod)::text::jsonb,
+    transcode_ladders = sqlc.arg(transcode_ladders)::text::jsonb,
+    default_transcode_ladder = sqlc.arg(default_transcode_ladder)
 WHERE tier_name = sqlc.arg(tier_name);
 
 -- name: ListBootstrapTierEntitlements :many

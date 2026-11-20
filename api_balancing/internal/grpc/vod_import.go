@@ -16,6 +16,7 @@ import (
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -47,6 +48,15 @@ func (s *FoghornGRPCServer) importVodAssetImpl(ctx context.Context, req *sharedp
 		return nil, status.Error(codes.InvalidArgument, "source_url must be an http or https URL without credentials")
 	}
 	filename := strings.TrimSpace(req.GetFilename())
+	if filename == "" {
+		filename = path.Base(source.Path)
+	}
+	if err := vodupload.ValidateFilename(filename); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if !vodupload.RelaySafe(path.Ext(filename)) {
+		return nil, status.Error(codes.InvalidArgument, "import requires a supported remote video container")
+	}
 	format := strings.TrimPrefix(strings.ToLower(path.Ext(filename)), ".")
 	if filename == "" || format == "" {
 		return nil, status.Error(codes.InvalidArgument, "filename with a video extension is required")

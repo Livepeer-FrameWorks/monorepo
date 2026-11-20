@@ -83,27 +83,31 @@ WHERE artifact_hash IN (
 );
 
 -- name: ListArtifactsForCatalogProjection :many
-SELECT artifact_hash, artifact_type, tenant_id::text AS tenant_id,
-       storage_cluster_id, has_thumbnails, size_bytes,
-       COALESCE(duration_ms, duration_seconds * 1000) AS duration_ms,
-       tracks, sync_status, dtsh_synced, storage_location,
-       catalog_revision, status,
-       retention_until,
-       error_message, thumbnail_serving_cluster_id
-FROM foghorn.artifacts
-WHERE tenant_id IS NOT NULL
-  AND origin_cluster_id = $2
-  AND catalog_revision > catalog_synced_rev
-  AND catalog_revision > catalog_quarantined_rev
-  AND (catalog_next_attempt_at IS NULL OR catalog_next_attempt_at <= NOW())
+SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text AS tenant_id,
+       a.storage_cluster_id, a.has_thumbnails, a.size_bytes,
+       COALESCE(a.duration_ms, a.duration_seconds * 1000) AS duration_ms,
+       a.tracks, a.sync_status, a.dtsh_synced, a.storage_location,
+       a.catalog_revision, a.status,
+       a.retention_until,
+       a.error_message, a.thumbnail_serving_cluster_id,
+       v.original_size_bytes, a.started_at, a.ended_at
+FROM foghorn.artifacts a
+LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
+WHERE a.tenant_id IS NOT NULL
+  AND a.origin_cluster_id = $2
+  AND (a.catalog_revision > a.catalog_synced_rev OR (a.artifact_type='dvr' AND a.catalog_revision > a.catalog_capture_times_synced_rev))
+  AND a.catalog_revision > a.catalog_quarantined_rev
+  AND (a.catalog_next_attempt_at IS NULL OR a.catalog_next_attempt_at <= NOW())
 ORDER BY catalog_synced_rev ASC, catalog_revision ASC
 LIMIT $1;
 
 -- name: AdvanceCatalogWatermark :exec
 UPDATE foghorn.artifacts
-SET catalog_synced_rev = $1, catalog_quarantine_error = NULL,
+SET catalog_synced_rev = GREATEST(catalog_synced_rev,$1),
+    catalog_capture_times_synced_rev = CASE WHEN artifact_type='dvr' THEN GREATEST(catalog_capture_times_synced_rev,$1) ELSE catalog_capture_times_synced_rev END,
+    catalog_quarantine_error = NULL,
     catalog_next_attempt_at = NULL, catalog_projection_attempts = 0
-WHERE artifact_hash = $2 AND catalog_synced_rev < $1;
+WHERE artifact_hash = $2 AND (catalog_synced_rev < $1 OR (artifact_type='dvr' AND catalog_capture_times_synced_rev < $1));
 
 -- name: BackoffCatalogProjection :exec
 UPDATE foghorn.artifacts

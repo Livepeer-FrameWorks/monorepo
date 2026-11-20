@@ -46,16 +46,33 @@ func (q *Queries) GetVODPlaybackID(ctx context.Context, arg GetVODPlaybackIDPara
 	return playback_id, err
 }
 
+const getVODTranscodeLadder = `-- name: GetVODTranscodeLadder :one
+SELECT transcode_ladder FROM commodore.vod_assets
+WHERE tenant_id=$1::uuid AND vod_hash=$2
+`
+
+type GetVODTranscodeLadderParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	VodHash  string `db:"vod_hash" json:"vod_hash"`
+}
+
+func (q *Queries) GetVODTranscodeLadder(ctx context.Context, arg GetVODTranscodeLadderParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getVODTranscodeLadder, arg.TenantID, arg.VodHash)
+	var transcode_ladder string
+	err := row.Scan(&transcode_ladder)
+	return transcode_ladder, err
+}
+
 const insertVODUploadRegistration = `-- name: InsertVODUploadRegistration :exec
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type, size_bytes,
-    origin_cluster_id, retention_until, requires_auth, created_at, updated_at
+    origin_cluster_id, retention_until, requires_auth, transcode_ladder, created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9, $10, $11,
-    $12, $13, false, NOW(), NOW()
+    $12, $13, false, $14, NOW(), NOW()
 )
 `
 
@@ -73,6 +90,7 @@ type InsertVODUploadRegistrationParams struct {
 	SizeBytes       sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
 	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RetentionUntil  sql.NullTime   `db:"retention_until" json:"retention_until"`
+	TranscodeLadder string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) InsertVODUploadRegistration(ctx context.Context, arg InsertVODUploadRegistrationParams) error {
@@ -90,6 +108,7 @@ func (q *Queries) InsertVODUploadRegistration(ctx context.Context, arg InsertVOD
 		arg.SizeBytes,
 		arg.OriginClusterID,
 		arg.RetentionUntil,
+		arg.TranscodeLadder,
 	)
 	return err
 }

@@ -5,6 +5,12 @@
     flex-direction: column;
     gap: clamp(0.35rem, 0.6vw, 0.5rem);
   }
+  .pricing-estimate-link {
+    margin-top: 1rem;
+    text-align: center;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.85rem;
+  }
   .pricing-processing-feature__link {
     color: hsl(var(--accent));
     font-size: 0.8rem;

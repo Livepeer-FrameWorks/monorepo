@@ -1025,9 +1025,9 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 	if nlu.RamMax != 0 {
 		t.Fatalf("expected 0 RAM max, got %d", nlu.RamMax)
 	}
-	// Default bwlimit when not provided
-	if nlu.BwLimit != 128*1024*1024 {
-		t.Fatalf("expected default bwlimit, got %d", nlu.BwLimit)
+	// A missing seed and missing Mist limit do not invent a node budget.
+	if nlu.BwLimit != 0 {
+		t.Fatalf("expected no reported budget without a seed or Mist limit, got %d", nlu.BwLimit)
 	}
 	if nlu.UpSpeed != 0 {
 		t.Fatalf("expected 0 up speed on first poll, got %d", nlu.UpSpeed)
@@ -1037,7 +1037,7 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 	}
 }
 
-func TestConvertNodeAPI_ConfiguredBandwidthLimitOverridesMist(t *testing.T) {
+func TestConvertNodeAPI_ProvisioningEnvDoesNotOverrideMist(t *testing.T) {
 	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "250000000")
 	pm := &PrometheusMonitor{baseURL: "http://mist:4242"}
 	jsonData := map[string]interface{}{
@@ -1048,8 +1048,8 @@ func TestConvertNodeAPI_ConfiguredBandwidthLimitOverridesMist(t *testing.T) {
 	trigger := pm.convertNodeAPIToMistTrigger("node-override", jsonData, logging.NewLogger())
 	nlu := trigger.GetNodeLifecycleUpdate()
 
-	if nlu.BwLimit != 250000000 {
-		t.Fatalf("expected configured bwlimit 250000000, got %d", nlu.BwLimit)
+	if nlu.BwLimit != 134217728 {
+		t.Fatalf("expected Mist budget without a capacity seed, got %d", nlu.BwLimit)
 	}
 }
 

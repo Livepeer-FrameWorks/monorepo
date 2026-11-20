@@ -42,6 +42,7 @@ SET title = CASE WHEN sqlc.arg(apply_title)::boolean THEN sqlc.arg(title) ELSE t
     dvr_chapter_interval_seconds = CASE WHEN sqlc.arg(apply_chapter_interval)::boolean THEN sqlc.narg(chapter_interval)::integer ELSE dvr_chapter_interval_seconds END,
     monitoring_enabled = CASE WHEN sqlc.arg(apply_monitoring)::boolean THEN sqlc.narg(monitoring_enabled)::boolean ELSE monitoring_enabled END,
     live_video_abr = CASE WHEN sqlc.arg(apply_live_video_abr)::boolean THEN sqlc.arg(live_video_abr)::varchar ELSE live_video_abr END,
+    transcode_ladder = CASE WHEN sqlc.arg(apply_transcode_ladder)::boolean THEN sqlc.arg(transcode_ladder)::varchar ELSE transcode_ladder END,
     updated_at = NOW()
 WHERE id = sqlc.arg(stream_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid
@@ -60,10 +61,6 @@ WHERE stream_id = sqlc.arg(stream_id)::uuid;
 SELECT internal_name, title
 FROM commodore.streams
 WHERE id = $1 AND user_id = $2 AND tenant_id = $3;
-
--- name: DeleteStreamKeysForDeletion :exec
-DELETE FROM commodore.stream_keys
-WHERE stream_id = $1 AND tenant_id = $2;
 
 -- name: SoftDeleteStream :exec
 UPDATE commodore.streams
@@ -98,52 +95,12 @@ SELECT EXISTS (
     WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL
 ) AS stream_exists;
 
--- name: InsertStreamKey :exec
-INSERT INTO commodore.stream_keys (
-    id, tenant_id, user_id, stream_id, key_value, key_name, is_active
-)
-VALUES ($1, $2, $3, $4, $5, $6, true);
+-- name: GetCurrentPrimaryStreamKey :one
+SELECT id, tenant_id, user_id, stream_key, created_at, updated_at
+FROM commodore.streams
+WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+  AND ingest_mode = 'push' AND deleted_at IS NULL;
 
--- name: CountStreamKeys :one
-SELECT COUNT(*)::integer
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3;
-
--- name: ListStreamKeysForward :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-ORDER BY created_at DESC, id DESC
-LIMIT $4;
-
--- name: ListStreamKeysForwardAfter :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-  AND (created_at, id) < ($4::timestamp, $5::uuid)
-ORDER BY created_at DESC, id DESC
-LIMIT $6;
-
--- name: ListStreamKeysBackward :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-ORDER BY created_at ASC, id ASC
-LIMIT $4;
-
--- name: ListStreamKeysBackwardBefore :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-  AND (created_at, id) > ($4::timestamp, $5::uuid)
-ORDER BY created_at ASC, id ASC
-LIMIT $6;
-
--- name: DeactivateStreamKey :execrows
-UPDATE commodore.stream_keys
-SET is_active = false, updated_at = NOW()
-WHERE id = $1 AND stream_id = $2 AND user_id = $3 AND tenant_id = $4;
+-- name: SetCreatedStreamTranscodeLadder :exec
+UPDATE commodore.streams SET transcode_ladder=sqlc.arg(transcode_ladder), updated_at=NOW()
+WHERE id=sqlc.arg(stream_id)::uuid AND tenant_id=sqlc.arg(tenant_id)::uuid;

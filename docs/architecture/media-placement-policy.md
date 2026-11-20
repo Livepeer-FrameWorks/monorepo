@@ -294,7 +294,7 @@ discovery, reservations, billing, or source preparation. Input candidates must c
 verified capacity/authority observations, never from user-supplied preview facts.
 
 Candidates include node and cluster identity, tenant-relative ownership/class, allowed
-verbs, region, telemetry timestamps, node health/capacity, native bandwidth limits,
+verbs, region, telemetry timestamps, node health/capacity, operator-owned directional bandwidth budgets,
 stream presence/source feasibility, and optionally fresh comparable pricing. Policy does
 not grant access to an unsubscribed marketplace cluster or replace capacity-owner consent.
 An active ingest cluster is a hard fence; preference cannot move an active claim.
@@ -1460,7 +1460,7 @@ spill retains feasible preferred capacity rather than treating it as unavailable
 
 Default ordering ranks a group's ready nodes in this order:
 
-1. **Load bound.** A node inside the bound (bandwidth used ≤ 80% after pending-viewer
+1. **Load bound.** A node inside the bound (bandwidth used ≤ 70% after shared admission
    reservations, CPU ≤ 80%, RAM used ≤ 85%) can serve another viewer well and ranks before
    every node outside it.
 2. **Locality.** With client coordinates, nodes within 250 km of the nearest node are local
@@ -1472,6 +1472,11 @@ Default ordering ranks a group's ready nodes in this order:
    500 × CPU headroom + 500 × RAM headroom + 1000 × bandwidth headroom.
 5. Exact relative bandwidth (128-bit cross products, each node's own limit), CPU, memory,
    presence, then stable cluster/node identity break score ties.
+
+Bandwidth admission is capped at 85% of each directional budget by `pkg/capacity`;
+all admission paths include shared reservations in that check. See
+[node bandwidth budgets](viewer-routing.md#node-bandwidth-budgets) for ownership, measurement,
+and the distinction between configured and applied revisions.
 
 The bounds and weights are fixed constants. A local node leaves the ranking head only when
 no local node is inside the bound, so a viewer changes cell only when its own cell cannot

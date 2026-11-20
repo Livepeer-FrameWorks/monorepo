@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
-  import { MediaRetentionPolicyStore, SetMediaRetentionPolicyStore } from "$houdini";
+  import {
+    MediaRetentionPolicyStore,
+    SetMediaRetentionPolicyStore,
+    SetVodOriginalPolicyStore,
+  } from "$houdini";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
@@ -14,6 +18,24 @@
   // tiers; Free's cap clamps it at write time on the server.
 
   const policyStore = new MediaRetentionPolicyStore();
+  const setOriginalPolicy = new SetVodOriginalPolicyStore();
+  let savingOriginal = $state(false);
+  async function saveOriginal(keep: boolean) {
+    savingOriginal = true;
+    try {
+      const result = await setOriginalPolicy.mutate({ keepVodOriginals: keep });
+      const data = result.data?.setVodOriginalPolicy;
+      if (data && "effectiveKeepVodOriginals" in data) {
+        await policyStore.fetch({ policy: "NetworkOnly" });
+        toast.success("Original upload policy updated");
+      } else if (data && "message" in data) toast.error(String(data.message));
+    } catch (error) {
+      toast.error(`Save failed: ${(error as Error).message}`);
+    } finally {
+      savingOriginal = false;
+    }
+  }
+
   const setPolicyMutation = new SetMediaRetentionPolicyStore();
 
   type ClassKey = "VOD" | "DVR" | "CLIP";
@@ -137,6 +159,24 @@
     </div>
   </div>
   <div class="slab-body--padded">
+    <div class="space-y-2 mb-6">
+      <Label for="keep-vod-originals">Keep original uploads</Label>
+      <div class="flex items-center gap-2">
+        <input
+          id="keep-vod-originals"
+          type="checkbox"
+          checked={policy?.effectiveKeepVodOriginals ?? true}
+          disabled={!policy || savingOriginal}
+          onchange={(event) => saveOriginal(event.currentTarget.checked)}
+        />
+        <span class="text-sm">Keep the original file alongside the processed video</span>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        Applies to future uploads. Originals count toward storage usage and your cap. Each upload
+        can override this setting.
+      </p>
+    </div>
+
     <p class="text-sm text-muted-foreground mb-4">
       How long new artifacts stay around before automatic deletion. VOD uploads default to keep
       forever; DVR and clips default to 30 days. Per-asset overrides happen in

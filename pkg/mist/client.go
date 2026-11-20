@@ -708,7 +708,7 @@ func (c *Client) GetClientsContext(ctx context.Context) (map[string]interface{},
 			"fields": []string{
 				"stream", "protocol", "host", "conntime", "position",
 				"down", "up", "downbps", "upbps", "sessid",
-				"pktcount", "pktlost", "pktretransmit",
+				"pktcount", "pktlost", "pktretransmit", "tags",
 			},
 		},
 	}
@@ -854,12 +854,9 @@ func (c *Client) SetBandwidthLimit(bytesPerSec uint64) error {
 	return nil
 }
 
-// CountEveryConnection is the bandwidth exception list that matches no
-// address. Mist leaves a connection from an excepted address out of the
-// server's and its stream's byte totals, and refills an empty list with its
-// loopback and private-range defaults, so one empty entry is how every
-// connection is counted.
-var CountEveryConnection = []string{""}
+// ExcludeInternalConnections excludes Mist's file/pipe (::) and input (::1)
+// sessions while counting real network peers, including LAN viewers.
+var ExcludeInternalConnections = []string{"::/127"}
 
 // SetBandwidthExceptions sets Mist's bandwidth exception list through the
 // top-level bandwidth command; Mist keeps its limit when only the list is sent.

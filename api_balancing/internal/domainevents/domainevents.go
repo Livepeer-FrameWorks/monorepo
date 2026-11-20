@@ -42,39 +42,51 @@ func Enqueue(ctx context.Context, exec outbox.Execer, tenantID, aggregateID stri
 }
 
 // StreamConnected records a new ingest session for the stream.
-func StreamConnected(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string, protocol publicv1.IngestProtocol) error {
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamConnected{StreamId: streamID, PlaybackId: playbackID, Protocol: protocol})
+func StreamConnected(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string, protocol publicv1.IngestProtocol, sessionID string) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamConnected{StreamId: streamID, PlaybackId: playbackID, Protocol: protocol, SessionId: sessionID})
 	return err
 }
 
 // StreamLive records that the stream's active session became playable.
-func StreamLive(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string) error {
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamLive{StreamId: streamID, PlaybackId: playbackID})
+func StreamLive(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID, sessionID string) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamLive{StreamId: streamID, PlaybackId: playbackID, SessionId: sessionID})
 	return err
 }
 
 // StreamIdle records that an ingest session of the stream ended. A session
 // admitted without a public stream ID emits nothing, matching its absent
 // stream.connected.
-func StreamIdle(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string) error {
+func StreamIdle(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID, sessionID string) error {
 	if streamID == "" {
 		return nil
 	}
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamIdle{StreamId: streamID, PlaybackId: playbackID})
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamIdle{StreamId: streamID, PlaybackId: playbackID, SessionId: sessionID})
 	return err
 }
 
-// IngestProtocol maps the protocol Foghorn detects from a push URL to the
-// public enum.
+// IngestProtocol maps the canonical attested connector protocol to the public enum.
 func IngestProtocol(protocol string) publicv1.IngestProtocol {
 	switch protocol {
 	case "rtmp":
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP
 	case "srt":
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_SRT
+	case "pull":
+		return publicv1.IngestProtocol_INGEST_PROTOCOL_PULL
 	case "whip":
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_WHIP
 	default:
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED
 	}
+}
+
+// StreamEnded records that the latest session's origin buffer unloaded.
+func StreamEnded(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID, sessionID string) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamEnded{StreamId: streamID, PlaybackId: playbackID, SessionId: sessionID})
+	return err
+}
+
+func StreamIngestDisconnected(ctx context.Context, exec outbox.Execer, tenantID, streamID, sessionID, reason string) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamIngestDisconnected{StreamId: streamID, SessionId: sessionID, Reason: reason})
+	return err
 }

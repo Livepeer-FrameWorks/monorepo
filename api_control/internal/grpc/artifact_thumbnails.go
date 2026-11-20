@@ -12,6 +12,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // artifactAssetTable maps the proto enum to the registry table, its hash column, and the tombstone
@@ -64,6 +65,16 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	_, _, kind, err := artifactAssetTable(req.GetAssetType())
 	if err != nil {
 		return nil, err
+	}
+	if req.GetRecordingTimesPresent() {
+		for _, timestamp := range []*timestamppb.Timestamp{req.StartedAt, req.EndedAt} {
+			if timestamp != nil && timestamp.CheckValid() != nil {
+				return nil, status.Error(codes.InvalidArgument, "invalid recording capture time")
+			}
+		}
+		if req.StartedAt != nil && req.EndedAt != nil && req.EndedAt.AsTime().Before(req.StartedAt.AsTime()) {
+			return nil, status.Error(codes.InvalidArgument, "recording end precedes start")
+		}
 	}
 	lockKey := tenantID + ":" + kind + ":" + assetKey
 
@@ -187,7 +198,7 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 				}
 				if marker.DeletionRevision >= req.GetSourceRevision() {
 					reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: marker.DeletionRevision}
-					return nil
+					return projectDVRRecordingCaptureTimes(ctx, queries, req, reviveResp)
 				}
 				if dErr := queries.ClearArtifactCatalogTombstone(ctx, commodoredb.ClearArtifactCatalogTombstoneParams{TenantID: tenantID, Kind: kind, AssetKey: assetKey}); dErr != nil {
 					return txStatus(status.Errorf(codes.Internal, "catalog snapshot clear marker: %v", dErr), dErr)
@@ -217,10 +228,10 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 			//
 			// Source authority is assigned AND enforced in this one guarded write:
 			//   - origin_cluster_id IS NULL  → the artifact is unattributed; the writer CLAIMS ownership
-			//     (`origin_cluster_id = COALESCE(origin_cluster_id, $16)`), so a wrong first writer can no
+			//     (`origin_cluster_id = COALESCE(origin_cluster_id, supplied_origin)`), so a wrong first writer can no
 			//     longer leave the row perpetually clobberable.
-			//   - origin_cluster_id = $16    → the origin cluster; allowed.
-			//   - origin_cluster_id <> $16   → a non-origin cluster; the WHERE matches 0 rows and the
+			//   - origin_cluster_id = supplied_origin    → the origin cluster; allowed.
+			//   - origin_cluster_id <> supplied_origin   → a non-origin cluster; the WHERE matches 0 rows and the
 			//     read-back below distinguishes this (PermissionDenied) from a mere revision-behind.
 			params := commodoredb.ApplyClipCatalogSnapshotParams{
 				SizeBytes: nullableInt64(req.SizeBytes), DurationMs: nullableInt64(req.DurationMs),
@@ -232,12 +243,12 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 				ErrorMessage: nullableString(req.ErrorMessage), ThumbnailServingClusterID: nullableString(req.ThumbnailServingClusterId),
 				SourceRevision: req.GetSourceRevision(), TenantID: tenantID, AssetKey: assetKey,
 			}
-			newRevision, appliedServingCluster, execErr := applyArtifactCatalogSnapshot(ctx, queries, req.GetAssetType(), params)
+			newRevision, appliedServingCluster, execErr := applyArtifactCatalogSnapshot(ctx, queries, req.GetAssetType(), params, nullableInt64(req.OriginalSizeBytes))
 			if execErr == nil {
 				// Applied: the row's revision is now source_revision.
 				// Echo the STORED serving cluster so the caller can confirm a NEW Commodore applied field 21 (mixed-version ack).
 				reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: newRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(appliedServingCluster)}
-				return nil
+				return projectDVRRecordingCaptureTimes(ctx, queries, req, reviveResp)
 			}
 			if !errors.Is(execErr, sql.ErrNoRows) {
 				s.logger.WithError(execErr).WithFields(logging.Fields{
@@ -277,7 +288,7 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 			// Echo the stored serving cluster here too, so a caller that is revision-behind (its projection already superseded)
 			// can still confirm the field is stored and advance without re-projecting forever.
 			reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: stored.catalogRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(stored.servingCluster)}
-			return nil
+			return projectDVRRecordingCaptureTimes(ctx, queries, req, reviveResp)
 		})
 	if reviveErr != nil {
 		return nil, reviveErr
@@ -321,7 +332,7 @@ func deleteArtifactCatalogBusinessRow(ctx context.Context, queries *commodoredb.
 	}
 }
 
-func applyArtifactCatalogSnapshot(ctx context.Context, queries *commodoredb.Queries, assetType commodorepb.ArtifactAssetType, params commodoredb.ApplyClipCatalogSnapshotParams) (sql.NullInt64, sql.NullString, error) {
+func applyArtifactCatalogSnapshot(ctx context.Context, queries *commodoredb.Queries, assetType commodorepb.ArtifactAssetType, params commodoredb.ApplyClipCatalogSnapshotParams, originalSize sql.NullInt64) (sql.NullInt64, sql.NullString, error) {
 	switch assetType {
 	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP:
 		row, err := queries.ApplyClipCatalogSnapshot(ctx, params)
@@ -330,7 +341,7 @@ func applyArtifactCatalogSnapshot(ctx context.Context, queries *commodoredb.Quer
 		row, err := queries.ApplyDVRCatalogSnapshot(ctx, commodoredb.ApplyDVRCatalogSnapshotParams(params))
 		return row.CatalogRevision, row.ThumbnailServingClusterID, err
 	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD:
-		row, err := queries.ApplyVODCatalogSnapshot(ctx, commodoredb.ApplyVODCatalogSnapshotParams(params))
+		row, err := queries.ApplyVODCatalogSnapshot(ctx, commodoredb.ApplyVODCatalogSnapshotParams{SizeBytes: params.SizeBytes, DurationMs: params.DurationMs, TracksPresent: params.TracksPresent, Tracks: params.Tracks, SyncStatus: params.SyncStatus, IsSynced: params.IsSynced, IsFinalized: params.IsFinalized, StorageLocation: params.StorageLocation, StorageClusterID: params.StorageClusterID, HasThumbnails: params.HasThumbnails, LifecycleStatus: params.LifecycleStatus, OriginClusterID: params.OriginClusterID, RetentionUntilUnix: params.RetentionUntilUnix, ErrorMessage: params.ErrorMessage, ThumbnailServingClusterID: params.ThumbnailServingClusterID, SourceRevision: params.SourceRevision, TenantID: params.TenantID, AssetKey: params.AssetKey, OriginalSizeBytes: originalSize})
 		return row.CatalogRevision, row.ThumbnailServingClusterID, err
 	default:
 		return sql.NullInt64{}, sql.NullString{}, status.Errorf(codes.InvalidArgument, "unsupported asset_type: %s", assetType.String())
@@ -381,4 +392,42 @@ func nullStringToPtr(v sql.NullString) *string {
 	}
 	s := v.String
 	return &s
+}
+
+// Equal-revision repair covers a new producer reaching an older consumer before its upgrade.
+func projectDVRRecordingCaptureTimes(ctx context.Context, queries *commodoredb.Queries, req *commodorepb.UpdateArtifactCatalogSnapshotRequest, response *commodorepb.UpdateArtifactCatalogSnapshotResponse) error {
+	if !req.GetRecordingTimesPresent() || req.GetAssetType() != commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR || !response.GetFound() {
+		return nil
+	}
+	if response.GetCurrentRevision() == req.GetSourceRevision() {
+		timestamp := func(value *timestamppb.Timestamp) sql.NullTime {
+			if value == nil {
+				return sql.NullTime{}
+			}
+			return sql.NullTime{Time: value.AsTime(), Valid: true}
+		}
+		affected, err := queries.UpdateDVRRecordingCaptureTimes(ctx, commodoredb.UpdateDVRRecordingCaptureTimesParams{TenantID: req.GetTenantId(), ArtifactHash: req.GetAssetKey(), SourceRevision: req.GetSourceRevision(), SourceClusterID: req.GetSourceClusterId(), StartedAt: timestamp(req.StartedAt), EndedAt: timestamp(req.EndedAt)})
+		if err != nil {
+			return txStatus(status.Error(codes.Internal, "recording capture time projection failed"), err)
+		}
+		// A covering tombstone has no row to update. Its authoritative deletion covers these times too.
+		if affected == 0 {
+			marker, markerErr := queries.GetArtifactCatalogTombstoneForUpdate(ctx, commodoredb.GetArtifactCatalogTombstoneForUpdateParams{TenantID: req.GetTenantId(), Kind: "dvr", AssetKey: req.GetAssetKey()})
+			if markerErr != nil || marker.OriginClusterID != req.GetSourceClusterId() || marker.DeletionRevision < req.GetSourceRevision() {
+				return status.Error(codes.Internal, "recording capture time revision was not covered")
+			}
+		}
+	}
+	stored, err := queries.GetDVRRecordingCaptureTimes(ctx, commodoredb.GetDVRRecordingCaptureTimesParams{TenantID: req.GetTenantId(), ArtifactHash: req.GetAssetKey()})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return txStatus(status.Error(codes.Internal, "recording capture time readback failed"), err)
+	}
+	if stored.StartedAt.Valid {
+		response.StartedAt = timestamppb.New(stored.StartedAt.Time)
+	}
+	if stored.EndedAt.Valid {
+		response.EndedAt = timestamppb.New(stored.EndedAt.Time)
+	}
+	response.RecordingTimesPresent = true
+	return nil
 }

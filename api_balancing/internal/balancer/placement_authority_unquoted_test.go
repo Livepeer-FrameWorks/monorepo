@@ -45,7 +45,7 @@ func TestPlacementAuthorityWithoutQuotesPreservesLeaseAndUnknownFacts(t *testing
 				decision, err := placement.Evaluate(placement.Request{TenantID: authority.TenantID, Verb: verb, Now: now, Policy: authority.Policy, Complete: true,
 					Candidates: []placement.Candidate{{TenantID: authority.TenantID, ClusterID: "us", NodeID: "us-edge", Official: facts.Official, OwnerTenantID: facts.OwnerTenantID,
 						AllowedVerbs: facts.AllowedVerbs, Charging: facts.Charging, ChargingUntil: facts.ChargingUntil, ObservedAt: now, ExpiresAt: until,
-						Capacity: placement.CapacityAvailable, Presence: placement.Present, SourceFeasible: true, BWAvailable: 100, BWLimit: 1000, RAMUsed: 1, RAMMax: 100}}})
+						Capacity: placement.CapacityAvailable, Presence: placement.Present, SourceFeasible: true, BWAvailable: 900, BWLimit: 1000, RAMUsed: 1, RAMMax: 100}}})
 				if err != nil {
 					t.Fatal(err)
 				}

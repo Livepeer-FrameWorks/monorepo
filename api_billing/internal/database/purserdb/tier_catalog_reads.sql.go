@@ -31,35 +31,39 @@ SELECT id, tier_name, display_name, COALESCE(description, '') AS description,
        COALESCE(processes_dvr, '[]'::jsonb) AS processes_dvr,
        COALESCE(processes_clip, '[]'::jsonb) AS processes_clip,
        COALESCE(processes_dvr_finalize, '[]'::jsonb) AS processes_dvr_finalize,
-       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod
+       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod,
+       transcode_ladders,
+       default_transcode_ladder
 FROM purser.billing_tiers
 WHERE id = $1::text::uuid
 `
 
 type GetBillingTierByIDRow struct {
-	ID                   uuid.UUID       `db:"id" json:"id"`
-	TierName             string          `db:"tier_name" json:"tier_name"`
-	DisplayName          string          `db:"display_name" json:"display_name"`
-	Description          string          `db:"description" json:"description"`
-	BasePrice            float64         `db:"base_price" json:"base_price"`
-	Currency             string          `db:"currency" json:"currency"`
-	BillingPeriod        string          `db:"billing_period" json:"billing_period"`
-	Features             json.RawMessage `db:"features" json:"features"`
-	SupportLevel         string          `db:"support_level" json:"support_level"`
-	SlaLevel             string          `db:"sla_level" json:"sla_level"`
-	MeteringEnabled      bool            `db:"metering_enabled" json:"metering_enabled"`
-	IsActive             bool            `db:"is_active" json:"is_active"`
-	TierLevel            int32           `db:"tier_level" json:"tier_level"`
-	IsEnterprise         bool            `db:"is_enterprise" json:"is_enterprise"`
-	CreatedAt            sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt            sql.NullTime    `db:"updated_at" json:"updated_at"`
-	IsDefaultPrepaid     bool            `db:"is_default_prepaid" json:"is_default_prepaid"`
-	IsDefaultPostpaid    bool            `db:"is_default_postpaid" json:"is_default_postpaid"`
-	ProcessesLive        json.RawMessage `db:"processes_live" json:"processes_live"`
-	ProcessesDvr         json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
-	ProcessesClip        json.RawMessage `db:"processes_clip" json:"processes_clip"`
-	ProcessesDvrFinalize json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
-	ProcessesVod         json.RawMessage `db:"processes_vod" json:"processes_vod"`
+	ID                     uuid.UUID       `db:"id" json:"id"`
+	TierName               string          `db:"tier_name" json:"tier_name"`
+	DisplayName            string          `db:"display_name" json:"display_name"`
+	Description            string          `db:"description" json:"description"`
+	BasePrice              float64         `db:"base_price" json:"base_price"`
+	Currency               string          `db:"currency" json:"currency"`
+	BillingPeriod          string          `db:"billing_period" json:"billing_period"`
+	Features               json.RawMessage `db:"features" json:"features"`
+	SupportLevel           string          `db:"support_level" json:"support_level"`
+	SlaLevel               string          `db:"sla_level" json:"sla_level"`
+	MeteringEnabled        bool            `db:"metering_enabled" json:"metering_enabled"`
+	IsActive               bool            `db:"is_active" json:"is_active"`
+	TierLevel              int32           `db:"tier_level" json:"tier_level"`
+	IsEnterprise           bool            `db:"is_enterprise" json:"is_enterprise"`
+	CreatedAt              sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt              sql.NullTime    `db:"updated_at" json:"updated_at"`
+	IsDefaultPrepaid       bool            `db:"is_default_prepaid" json:"is_default_prepaid"`
+	IsDefaultPostpaid      bool            `db:"is_default_postpaid" json:"is_default_postpaid"`
+	ProcessesLive          json.RawMessage `db:"processes_live" json:"processes_live"`
+	ProcessesDvr           json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
+	ProcessesClip          json.RawMessage `db:"processes_clip" json:"processes_clip"`
+	ProcessesDvrFinalize   json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
+	ProcessesVod           json.RawMessage `db:"processes_vod" json:"processes_vod"`
+	TranscodeLadders       json.RawMessage `db:"transcode_ladders" json:"transcode_ladders"`
+	DefaultTranscodeLadder string          `db:"default_transcode_ladder" json:"default_transcode_ladder"`
 }
 
 func (q *Queries) GetBillingTierByID(ctx context.Context, id string) (GetBillingTierByIDRow, error) {
@@ -89,6 +93,8 @@ func (q *Queries) GetBillingTierByID(ctx context.Context, id string) (GetBilling
 		&i.ProcessesClip,
 		&i.ProcessesDvrFinalize,
 		&i.ProcessesVod,
+		&i.TranscodeLadders,
+		&i.DefaultTranscodeLadder,
 	)
 	return i, err
 }
@@ -156,7 +162,9 @@ SELECT id, tier_name, display_name, COALESCE(description, '') AS description,
        COALESCE(processes_dvr, '[]'::jsonb) AS processes_dvr,
        COALESCE(processes_clip, '[]'::jsonb) AS processes_clip,
        COALESCE(processes_dvr_finalize, '[]'::jsonb) AS processes_dvr_finalize,
-       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod
+       COALESCE(processes_vod, '[]'::jsonb) AS processes_vod,
+       transcode_ladders,
+       default_transcode_ladder
 FROM purser.billing_tiers
 WHERE ($1::boolean OR COALESCE(is_active, true))
   AND (
@@ -182,29 +190,31 @@ type ListBillingTiersParams struct {
 }
 
 type ListBillingTiersRow struct {
-	ID                   uuid.UUID       `db:"id" json:"id"`
-	TierName             string          `db:"tier_name" json:"tier_name"`
-	DisplayName          string          `db:"display_name" json:"display_name"`
-	Description          string          `db:"description" json:"description"`
-	BasePrice            float64         `db:"base_price" json:"base_price"`
-	Currency             string          `db:"currency" json:"currency"`
-	BillingPeriod        string          `db:"billing_period" json:"billing_period"`
-	Features             json.RawMessage `db:"features" json:"features"`
-	SupportLevel         string          `db:"support_level" json:"support_level"`
-	SlaLevel             string          `db:"sla_level" json:"sla_level"`
-	MeteringEnabled      bool            `db:"metering_enabled" json:"metering_enabled"`
-	IsActive             bool            `db:"is_active" json:"is_active"`
-	TierLevel            int32           `db:"tier_level" json:"tier_level"`
-	IsEnterprise         bool            `db:"is_enterprise" json:"is_enterprise"`
-	CreatedAt            sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt            sql.NullTime    `db:"updated_at" json:"updated_at"`
-	IsDefaultPrepaid     bool            `db:"is_default_prepaid" json:"is_default_prepaid"`
-	IsDefaultPostpaid    bool            `db:"is_default_postpaid" json:"is_default_postpaid"`
-	ProcessesLive        json.RawMessage `db:"processes_live" json:"processes_live"`
-	ProcessesDvr         json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
-	ProcessesClip        json.RawMessage `db:"processes_clip" json:"processes_clip"`
-	ProcessesDvrFinalize json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
-	ProcessesVod         json.RawMessage `db:"processes_vod" json:"processes_vod"`
+	ID                     uuid.UUID       `db:"id" json:"id"`
+	TierName               string          `db:"tier_name" json:"tier_name"`
+	DisplayName            string          `db:"display_name" json:"display_name"`
+	Description            string          `db:"description" json:"description"`
+	BasePrice              float64         `db:"base_price" json:"base_price"`
+	Currency               string          `db:"currency" json:"currency"`
+	BillingPeriod          string          `db:"billing_period" json:"billing_period"`
+	Features               json.RawMessage `db:"features" json:"features"`
+	SupportLevel           string          `db:"support_level" json:"support_level"`
+	SlaLevel               string          `db:"sla_level" json:"sla_level"`
+	MeteringEnabled        bool            `db:"metering_enabled" json:"metering_enabled"`
+	IsActive               bool            `db:"is_active" json:"is_active"`
+	TierLevel              int32           `db:"tier_level" json:"tier_level"`
+	IsEnterprise           bool            `db:"is_enterprise" json:"is_enterprise"`
+	CreatedAt              sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt              sql.NullTime    `db:"updated_at" json:"updated_at"`
+	IsDefaultPrepaid       bool            `db:"is_default_prepaid" json:"is_default_prepaid"`
+	IsDefaultPostpaid      bool            `db:"is_default_postpaid" json:"is_default_postpaid"`
+	ProcessesLive          json.RawMessage `db:"processes_live" json:"processes_live"`
+	ProcessesDvr           json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
+	ProcessesClip          json.RawMessage `db:"processes_clip" json:"processes_clip"`
+	ProcessesDvrFinalize   json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
+	ProcessesVod           json.RawMessage `db:"processes_vod" json:"processes_vod"`
+	TranscodeLadders       json.RawMessage `db:"transcode_ladders" json:"transcode_ladders"`
+	DefaultTranscodeLadder string          `db:"default_transcode_ladder" json:"default_transcode_ladder"`
 }
 
 func (q *Queries) ListBillingTiers(ctx context.Context, arg ListBillingTiersParams) ([]ListBillingTiersRow, error) {
@@ -247,6 +257,8 @@ func (q *Queries) ListBillingTiers(ctx context.Context, arg ListBillingTiersPara
 			&i.ProcessesClip,
 			&i.ProcessesDvrFinalize,
 			&i.ProcessesVod,
+			&i.TranscodeLadders,
+			&i.DefaultTranscodeLadder,
 		); err != nil {
 			return nil, err
 		}

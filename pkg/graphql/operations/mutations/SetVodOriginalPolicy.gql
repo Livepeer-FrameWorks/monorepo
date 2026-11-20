@@ -1,0 +1,28 @@
+mutation SetVodOriginalPolicy($keepVodOriginals: Boolean) {
+  setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+    ... on MediaRetentionPolicy {
+      keepVodOriginals
+      effectiveKeepVodOriginals
+      defaultVodRetentionDays
+      defaultDvrRetentionDays
+      defaultClipRetentionDays
+      effectiveVodRetentionDays
+      effectiveDvrRetentionDays
+      effectiveClipRetentionDays
+      bounds {
+        maxRecordingRetentionDays
+      }
+      updatedBy
+      updatedAt
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

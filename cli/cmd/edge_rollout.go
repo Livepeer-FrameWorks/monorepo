@@ -51,9 +51,10 @@ type edgeRolloutOps interface {
 // finish. A fresh node has no sessions to protect and is applied
 // unconditionally.
 type edgeRolloutNode struct {
-	Name string
-	Live bool
-	Ops  edgeRolloutOps
+	Name           string
+	Live           bool
+	Ops            edgeRolloutOps
+	CommitCapacity func(context.Context) error
 }
 
 type edgeRolloutAction string
@@ -229,6 +230,21 @@ func runEdgeRolloutWith(ctx context.Context, w io.Writer, nodes []edgeRolloutNod
 		}
 		results[i].PendingRestarts = pending
 	}
+	for i, node := range nodes {
+		if results[i].Err != nil || node.CommitCapacity == nil {
+			continue
+		}
+		if results[i].Action == edgeActionSkip {
+			if err := node.Ops.AwaitControlConnected(ctx); err != nil {
+				results[i].Err = fmt.Errorf("capacity not written: %w", err)
+				continue
+			}
+		}
+		if err := node.CommitCapacity(ctx); err != nil {
+			results[i].Err = fmt.Errorf("edge provisioned, but capacity was not written: %w", err)
+		}
+	}
+
 	return results
 }
 

@@ -751,6 +751,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if signalmanErr != nil {
 		return signalmanErr
 	}
+	bosunTasks, bosunErr := p.taskNamesForDeploy("bosun")
+	if bosunErr != nil {
+		return bosunErr
+	}
 	periscopeIngestTasks, ingestErr := p.taskNamesForDeploy("periscope-ingest")
 	if ingestErr != nil {
 		return ingestErr
@@ -802,6 +806,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 				task.DependsOn = append(task.DependsOn, signalmanTasks...)
 			}
 			if deploy == "foghorn" {
+				// Every consumer replica must accept the public lifecycle events
+				// before Foghorn produces them, including mirrored regional events.
+				task.DependsOn = append(task.DependsOn, signalmanTasks...)
+				task.DependsOn = append(task.DependsOn, bosunTasks...)
 				task.DependsOn = append(task.DependsOn, commodoreTasks...)
 				// Foghorn obtains the certificates for its external gRPC listener
 				// from Navigator during startup. Existing clusters usually have a

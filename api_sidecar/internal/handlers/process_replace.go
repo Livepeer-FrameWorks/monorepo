@@ -149,15 +149,34 @@ func HandleProcessReplace(c *gin.Context) {
 		return
 	}
 
+	RouteProcessReplace(evt)
+	if evt.ProcessType == "Livepeer" && evt.ShortReason == "SOURCE_ROTATED" {
+		incMistWebhook("PROCESS_REPLACE", "routed")
+		fields["routing"] = "source_rotated"
+		logger.WithFields(fields).Info("PROCESS_REPLACE: local MistProcAV renders the rotated source upright")
+		c.String(http.StatusOK, replacement)
+		return
+	}
+	if expectedSourceCodecRoute(evt.ProcessType, evt.ShortReason, evt.Reason) {
+		incMistWebhook("PROCESS_REPLACE", "routed")
+		fields["routing"] = "source_codec_unsupported"
+		logger.WithFields(fields).Info("PROCESS_REPLACE: local MistProcAV decodes the source codec")
+		c.String(http.StatusOK, replacement)
+		return
+	}
 	incMistWebhook("PROCESS_REPLACE", "replaced")
 	logger.WithFields(fields).Warn("PROCESS_REPLACE: replacing failed Livepeer transcode with local MistProcAV renditions")
-	RouteProcessReplace(evt)
 	go func(evt ProcessReplaceEvent) {
 		if err := reportStreamTranscodeDegraded(evt); err != nil {
 			logger.WithError(err).WithField("stream", evt.StreamName).Warn("Failed to report transcode degradation to Foghorn")
 		}
 	}(evt)
 	c.String(http.StatusOK, replacement)
+}
+
+func expectedSourceCodecRoute(process, shortReason, reason string) bool {
+	return process == "Livepeer" && shortReason == "FORMAT_SPECIFIC" &&
+		strings.HasPrefix(reason, "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry ")
 }
 
 var (

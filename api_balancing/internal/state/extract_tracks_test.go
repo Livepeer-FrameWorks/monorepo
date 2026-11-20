@@ -137,3 +137,10 @@ func TestDetailString(t *testing.T) {
 		t.Fatalf("wrong-type must warn once, got %d", len(hook.Entries))
 	}
 }
+
+func TestExtractUpstreamEAC3Track(t *testing.T) {
+	tracks := extractTracksFromDetails(map[string]any{"audio_eac3": map[string]any{"codec": "EAC-3"}})
+	if len(tracks) != 1 || tracks[0].Type != "audio" || tracks[0].Codec != "EAC3" {
+		t.Fatalf("upstream EAC-3 not mapped to platform audio: %+v", tracks)
+	}
+}

@@ -804,3 +804,23 @@ func TestRegistrationCrossingShutdownIsHandedOff(t *testing.T) {
 		t.Fatal("the handed-off registration kept this instance as the node's connection owner")
 	}
 }
+
+func TestLegacyDrainAcknowledgementStillSettlesAdmission(t *testing.T) {
+	previousRegistry, previousDB := registry, db
+	mockConn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry = &Registry{conns: map[string]*conn{"node-1": {rawNodeID: "node-1", fence: 12}}, log: logging.NewLogger()}
+	db = mockConn
+	t.Cleanup(func() { registry = previousRegistry; db = previousDB; mockConn.Close() })
+	mock.ExpectExec("UPDATE foghorn.ingest_admission_effects").WithArgs("generation", "node-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT tenant_id::text AS tenant_id").WithArgs("node-1", "generation").WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}))
+	accepted := processDrainStreamResponse(&ipcpb.DrainStreamResponse{RuntimeName: "live+stream", SourceGeneration: "generation"}, NodeSession{RawNodeID: "node-1", Fence: 12}, logging.NewLogger())
+	if !accepted {
+		t.Error("legacy drain acknowledgement stopped settling the existing admission lane")
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

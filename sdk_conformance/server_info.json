@@ -1,5 +1,5 @@
 {
-  "description": "The serverInfo gate. Each case builds one client (minimum server v0.3.11 unless minServer is set) on a scripted transport that answers each operation name from its own queue, and makes the listed calls in order; a calls entry {advanceMs} moves the client's clock forward instead of making a call. A stable server version vMAJOR.MINOR.PATCH below the minimum is ServerTooOldError; so is a server whose schema lacks serverInfo. Any other version string (dev, git describe, release candidates) is unverified and passes every check. A network failure of the probe is not too old: the call proceeds and the next call probes again. A probe answer is cached for the client's URL for five minutes (300000 ms), then probed again. A cached answer that would fail a call as too old is probed again first, and an operation that fails with a schema validation error probes again at once: when the fresh answer fails the check the call fails with that verdict, otherwise with the schema error. An HTTP 402 answer to serverInfo (a v0.3.10 gateway answers an anonymous serverInfo with its x402 payment challenge, because the field is not on its public allowlist) is not a verdict: calls proceed unchecked, and the 402 is cached like an answer so the gateway is not probed again for five minutes. Cases with scope client exercise the client's operation path and do not apply to a probe alone. An operation whose since is above a verified server version is UnsupportedOperationError; operationSince overrides the manifest for the case. Mutations and operations whose since is above the minimum are never sent before the probe settles; other queries may be sent alongside the probe, but a failed check still fails the call. Retries are off. expect.calls gives, per call, ok or the error; expect.sent counts the requests per operation name.",
+  "description": "The serverInfo gate. Each case builds one client (minimum server v0.3.16 unless minServer is set) on a scripted transport that answers each operation name from its own queue, and makes the listed calls in order; a calls entry {advanceMs} moves the client's clock forward instead of making a call. A stable server version vMAJOR.MINOR.PATCH below the minimum is ServerTooOldError; so is a server whose schema lacks serverInfo. Any other version string (dev, git describe, release candidates) is unverified and passes every check. A network failure of the probe is not too old: the call proceeds and the next call probes again. A probe answer is cached for the client's URL for five minutes (300000 ms), then probed again. A cached answer that would fail a call as too old is probed again first, and an operation that fails with a schema validation error probes again at once: when the fresh answer fails the check the call fails with that verdict, otherwise with the schema error. An HTTP 402 answer to serverInfo (a v0.3.10 gateway answers an anonymous serverInfo with its x402 payment challenge, because the field is not on its public allowlist) is not a verdict: calls proceed unchecked, and the 402 is cached like an answer so the gateway is not probed again for five minutes. Cases with scope client exercise the client's operation path and do not apply to a probe alone. An operation whose since is above a verified server version is UnsupportedOperationError; operationSince overrides the manifest for the case. Mutations and operations whose since is above the minimum are never sent before the probe settles; other queries may be sent alongside the probe, but a failed check still fails the call. Retries are off. expect.calls gives, per call, ok or the error; expect.sent counts the requests per operation name.",
   "cases": [
     {
       "name": "a stable server at the minimum passes and is probed once",
@@ -7,7 +7,7 @@
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           }
         ],
         "GetStream": [
@@ -19,7 +19,7 @@
       "expect": {
         "calls": [{ "ok": true }, { "ok": true }],
         "sent": { "ServerInfo": 1, "GetStream": 2 },
-        "serverVersion": "v0.3.11",
+        "serverVersion": "v0.3.16",
         "verified": true
       }
     },
@@ -59,7 +59,7 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": "v0.3.10",
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           }
         ],
@@ -84,7 +84,7 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": "v0.3.9",
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           }
         ]
@@ -116,7 +116,7 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": null,
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           }
         ],
@@ -178,7 +178,7 @@
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11-rc1", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16-rc1", "features": [] } } }
           }
         ],
         "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
@@ -193,7 +193,7 @@
           { "networkError": true },
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           }
         ],
         "GetStream": [
@@ -219,12 +219,12 @@
     },
     {
       "name": "an operation newer than a verified server is unsupported and not sent",
-      "operationSince": { "GetStream": "v0.3.12" },
+      "operationSince": { "GetStream": "v0.3.17" },
       "responses": {
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           }
         ],
         "GetStream": []
@@ -236,8 +236,8 @@
             "error": {
               "kind": "UnsupportedOperationError",
               "operation": "GetStream",
-              "since": "v0.3.12",
-              "serverVersion": "v0.3.11"
+              "since": "v0.3.17",
+              "serverVersion": "v0.3.16"
             }
           }
         ],
@@ -246,7 +246,7 @@
     },
     {
       "name": "an operation newer than an unverified server is sent",
-      "operationSince": { "GetStream": "v0.3.12" },
+      "operationSince": { "GetStream": "v0.3.17" },
       "responses": {
         "ServerInfo": [
           {
@@ -265,11 +265,11 @@
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           },
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.12", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.17", "features": [] } } }
           }
         ],
         "GetStream": [
@@ -288,7 +288,7 @@
       "expect": {
         "calls": [{ "ok": true }, { "ok": true }, { "ok": true }],
         "sent": { "ServerInfo": 2, "GetStream": 3 },
-        "serverVersion": "v0.3.12",
+        "serverVersion": "v0.3.17",
         "verified": true
       }
     },
@@ -302,7 +302,7 @@
           },
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           }
         ],
         "DeleteStream": [
@@ -328,13 +328,13 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": "v0.3.10",
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           },
           { "ok": true }
         ],
         "sent": { "ServerInfo": 2, "DeleteStream": 1 },
-        "serverVersion": "v0.3.11",
+        "serverVersion": "v0.3.16",
         "verified": true
       }
     },
@@ -345,7 +345,7 @@
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           },
           {
             "status": 200,
@@ -374,7 +374,7 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": "v0.3.10",
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           }
         ],
@@ -388,11 +388,11 @@
         "ServerInfo": [
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           },
           {
             "status": 200,
-            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+            "body": { "data": { "serverInfo": { "version": "v0.3.16", "features": [] } } }
           }
         ],
         "GetStream": [
@@ -490,7 +490,7 @@
             "error": {
               "kind": "ServerTooOldError",
               "serverVersion": "v0.3.10",
-              "minimumVersion": "v0.3.11"
+              "minimumVersion": "v0.3.16"
             }
           }
         ],

@@ -28,7 +28,8 @@ func (*ClusterInvite) IsCreateClusterInviteResult() {}
 func (*ClusterSubscription) IsClusterSubscriptionResult() {}
 
 // InfrastructureNode (GraphQL type: InfrastructureNode) implements union interfaces
-func (*InfrastructureNode) IsSetNodeModeResult() {}
+func (*InfrastructureNode) IsSetNodeModeResult()     {}
+func (*InfrastructureNode) IsSetNodeCapacityResult() {}
 
 // MarshalGQL implements the graphql.Marshaler interface for ClusterVisibility
 func (e ClusterVisibility) MarshalGQL(w io.Writer) {

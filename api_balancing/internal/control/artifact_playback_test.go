@@ -10,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -139,6 +140,12 @@ func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	}
 	if resp.GetPrimary().GetUrl() == "" {
 		t.Fatal("primary endpoint url must be populated")
+	}
+	if n := sm.GetNodeState("n1"); n.AddBandwidth == 0 {
+		t.Error("warm VOD playback did not reserve egress")
+	}
+	if mist.ViewerSessionID(resp.GetPrimary().GetUrl()) == "" {
+		t.Error("reserved playback has no session correlation")
 	}
 }
 

@@ -29,7 +29,8 @@
             "createStream",
             "updateStream",
             "deleteStream",
-            "refreshStreamKey"
+            "refreshStreamKey",
+            "disconnectIngest"
           ],
           "queries": [
             "stream",
@@ -40,6 +41,9 @@
             "liveStreamEvents",
             "liveTrackListUpdates",
             "tenantEvents"
+          ],
+          "fields": [
+            "Stream.ingest"
           ]
         },
         "mcp": {
@@ -47,12 +51,15 @@
             "create_stream",
             "update_stream",
             "delete_stream",
-            "refresh_stream_key"
+            "refresh_stream_key",
+            "disconnect_ingest",
+            "get_stream_ingest"
           ]
         },
         "cli": {},
         "webapp": {
           "routes": [
+            "/",
             "/streams",
             "/streams/:id"
           ]
@@ -96,20 +103,14 @@
           "surfaces": {
             "graphql": {
               "mutations": [
-                "createStreamKey",
-                "deleteStreamKey",
                 "refreshStreamKey"
               ],
               "queries": [
-                "streamKeysConnection",
                 "validateStreamKey"
               ]
             },
             "mcp": {
               "tools": [
-                "list_stream_keys",
-                "create_stream_key",
-                "delete_stream_key",
                 "refresh_stream_key",
                 "validate_stream_key"
               ]
@@ -916,23 +917,31 @@
             "deleteDVR"
           ],
           "queries": [
-            "storageArtifactsConnection"
+            "storageArtifactsConnection",
+            "dvrRecording"
           ],
           "subscriptions": [
             "tenantEvents"
+          ],
+          "fields": [
+            "Stream.recordings"
           ]
         },
         "mcp": {
           "tools": [
             "start_dvr",
             "stop_dvr",
-            "delete_dvr"
+            "delete_dvr",
+            "list_stream_recordings",
+            "get_dvr_recording"
           ]
         },
         "cli": {},
         "webapp": {
           "routes": [
-            "/library"
+            "/library",
+            "/library/:hash",
+            "/streams/:id"
           ]
         },
         "docs": {
@@ -985,6 +994,9 @@
               "queries": [
                 "dvrChapter",
                 "dvrChapters"
+              ],
+              "fields": [
+                "DVRRequest.chapters"
               ]
             },
             "mcp": {
@@ -1227,6 +1239,76 @@
             "mcp": false,
             "webapp": false
           }
+        },
+        {
+          "slug": "vod-original-retention",
+          "name": "Original upload retention",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "Keep a byte-identical original alongside processed video by default, with account and upload opt-outs, attachment download, and original-only deletion.",
+          "status": "shipped",
+          "horizon": "now",
+          "note": "Originals count toward normal storage usage and the plan cap. URL imports and failed uploads retain no original.",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": true
+            },
+            "webapp": {
+              "required": true
+            }
+          },
+          "surfaces": {
+            "graphql": {
+              "mutations": [
+                "createVodUpload",
+                "setVodOriginalPolicy",
+                "createVodOriginalDownload",
+                "deleteVodOriginal"
+              ],
+              "queries": [
+                "mediaRetentionPolicy",
+                "storageArtifactsConnection"
+              ]
+            },
+            "mcp": {
+              "tools": [
+                "create_vod_upload",
+                "get_vod_original_download",
+                "delete_vod_original"
+              ]
+            },
+            "cli": {},
+            "webapp": {
+              "routes": [
+                "/library",
+                "/account/storage"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/recordings.mdx",
+                "builders/storage-and-retention.mdx",
+                "operators/media-storage.mdx"
+              ]
+            }
+          },
+          "depends_on": [
+            "vod"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": true,
+            "graphql": true,
+            "mcp": true,
+            "webapp": true
+          }
         }
       ],
       "actual_surfaces": {
@@ -1238,6 +1320,7 @@
       },
       "enables": [
         "scheduled-vod-streams",
+        "vod-original-retention",
         "vod-upload-validation"
       ],
       "family_surfaces": {
@@ -1283,18 +1366,23 @@
           ],
           "subscriptions": [
             "tenantEvents"
+          ],
+          "fields": [
+            "Stream.clips"
           ]
         },
         "mcp": {
           "tools": [
             "create_clip",
-            "delete_clip"
+            "delete_clip",
+            "list_stream_clips"
           ]
         },
         "cli": {},
         "webapp": {
           "routes": [
-            "/library"
+            "/library",
+            "/streams/:id"
           ]
         },
         "docs": {
@@ -1303,7 +1391,62 @@
           ]
         }
       },
+      "subitems": [
+        {
+          "slug": "frame-accurate-clips",
+          "name": "Frame-accurate clip trimming",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "An optional clip flag that re-encodes the clip's first and last GOP so it starts and ends on the requested frame.",
+          "status": "roadmap",
+          "gap_reason": "Not shipped. Clips cut on keyframes, so a clip starts and ends on the nearest GOP boundary. Needed: a clip\noption that routes the edge GOPs through the processing pipeline, billed as processing, on createClip, the\nMCP tool, and the library clip dialog. Clips without the option stay GOP-aligned and need no re-encode.\n",
+          "horizon": "later",
+          "roadmap": "frame-accurate-clip-trimming",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": true
+            },
+            "webapp": {
+              "required": true
+            }
+          },
+          "surfaces": {
+            "graphql": {},
+            "mcp": {},
+            "cli": {},
+            "webapp": {},
+            "docs": {}
+          },
+          "depends_on": [
+            "clips"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": false,
+            "graphql": false,
+            "mcp": false,
+            "webapp": false
+          }
+        }
+      ],
       "actual_surfaces": {
+        "cli": false,
+        "docs": true,
+        "graphql": true,
+        "mcp": true,
+        "webapp": true
+      },
+      "enables": [
+        "frame-accurate-clips"
+      ],
+      "family_surfaces": {
         "cli": false,
         "docs": true,
         "graphql": true,
@@ -1519,6 +1662,80 @@
       ],
       "subitems": [
         {
+          "slug": "transcode-ladders",
+          "name": "Named transcode ladders",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides.",
+          "status": "shipped",
+          "horizon": "now",
+          "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": true
+            },
+            "webapp": {
+              "required": true
+            }
+          },
+          "surfaces": {
+            "graphql": {
+              "mutations": [
+                "setTranscodeLadderPolicy",
+                "createStream",
+                "updateStream",
+                "createVodUpload",
+                "importVodAsset"
+              ],
+              "queries": [
+                "transcodeLadderPolicy"
+              ]
+            },
+            "mcp": {
+              "tools": [
+                "get_transcode_ladder_policy",
+                "set_transcode_ladder_policy",
+                "create_stream",
+                "update_stream",
+                "create_vod_upload",
+                "import_vod_asset"
+              ]
+            },
+            "cli": {},
+            "webapp": {
+              "routes": [
+                "/streams",
+                "/streams/[id]",
+                "/library"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/encoder-setup.mdx",
+                "builders/streams.mdx",
+                "builders/recordings.mdx"
+              ]
+            }
+          },
+          "depends_on": [
+            "processing"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": true,
+            "graphql": true,
+            "mcp": true,
+            "webapp": true
+          }
+        },
+        {
           "slug": "gateway-backed-transcoding",
           "name": "Gateway-backed transcoding",
           "area": "",
@@ -1526,9 +1743,9 @@
           "audience": "product",
           "description": "Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.",
           "status": "partial",
-          "gap_reason": "The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.\nWhat is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,\nand agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.\n",
+          "gap_reason": "The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.\nNamed ladders, account defaults, stream/upload overrides, and agent/dashboard controls are available.\nA custom profile editor and per-session Gateway placement controls remain outside the named-ladder surface.\n",
           "horizon": "now",
-          "note": "Renditions follow your plan's processing policy, and a stream can turn its live ladder off. Choosing the ladder per stream is not there yet.",
+          "note": "Choose a named ladder within your plan, or turn live video ABR off for a stream.",
           "roadmap": "gateway-backed-transcoding",
           "required_surfaces": {
             "docs": {
@@ -1689,13 +1906,14 @@
         "composition",
         "gateway-backed-transcoding",
         "live-ai",
+        "transcode-ladders",
         "workload-cost-model"
       ],
       "family_surfaces": {
         "cli": false,
         "docs": true,
         "graphql": true,
-        "mcp": false,
+        "mcp": true,
         "webapp": true
       }
     },
@@ -2056,7 +2274,8 @@
         "graphql": {
           "mutations": [
             "createEdgeCluster",
-            "bootstrapEdge"
+            "bootstrapEdge",
+            "setNodeCapacity"
           ],
           "queries": [
             "cluster",
@@ -2065,20 +2284,24 @@
         },
         "mcp": {
           "tools": [
-            "create_edge_cluster"
+            "create_edge_cluster",
+            "set_node_capacity"
           ]
         },
         "cli": {
           "commands": [
             "edge deploy",
             "edge diagnose",
-            "edge drift"
+            "edge drift",
+            "edge capacity show",
+            "edge capacity set"
           ]
         },
         "webapp": {
           "routes": [
             "/infrastructure/clusters",
-            "/infrastructure/:clusterId"
+            "/infrastructure/:clusterId",
+            "/nodes/:id"
           ]
         },
         "docs": {

@@ -26,6 +26,7 @@ const maxSweepDepth = 3
 // deliberately conservative; the broader sweep below executes every field for
 // coverage, but only these carry a hard success assertion.
 var mustSucceedQueries = []string{
+	"dvrRecording",
 	"streamsConnection",
 	"stream",
 	"billingTiers",
@@ -60,6 +61,7 @@ var mustSucceedQueries = []string{
 // mustSucceedMutations are mutation fields whose demo path returns synthesized
 // data without a backend client. Same contract as mustSucceedQueries.
 var mustSucceedMutations = []string{
+	"disconnectIngest",
 	"createStream",
 	"updateStream",
 	"deleteStream",

@@ -174,7 +174,8 @@ Operational tool usage
 - Stream management: "create a stream" → create_stream; "go live" → create_stream then provide ingest URLs, and for "go live from my browser" point to Go Live in the dashboard with the stream's ID; "delete this stream" → confirm first, then delete_stream.
 - Recording: "start recording" / "enable DVR" → start_dvr; "stop recording" → stop_dvr.
 - Clips: "clip the last N seconds" → create_clip with mode CLIP_NOW and duration; "save that moment" → same.
-- Keys: "refresh my stream key" → refresh_stream_key, warn encoder must reconnect.
+- Keys: "refresh my stream key" → refresh_stream_key. Existing publishers continue unless end_active_session=true. To rotate and end the current publisher, set end_active_session=true; its next connection needs the new key.
+- Ingest: "disconnect the encoder" → disconnect_ingest after confirmation. It stops the current push session; the encoder can reconnect with the same key. For pull streams, use update_stream with pull_source.enabled=false.
 - Billing: "what's my balance?" → account/billing resource reads or execute_query.
 - Schema: "show me the API" / "what fields does Stream have?" → introspect_schema or generate_query.
 - For any destructive action (delete, stop, refresh key), confirm with the user before executing.

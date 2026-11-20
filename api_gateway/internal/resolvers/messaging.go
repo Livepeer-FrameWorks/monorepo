@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
+	gatewaymiddleware "frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
@@ -17,6 +18,9 @@ import (
 
 // ConversationsConnection returns paginated conversations for the current tenant
 func (r *Resolver) ConversationsConnection(ctx context.Context, page *model.ConnectionInput) (*model.ConversationsConnection, error) {
+	if err := gatewaymiddleware.RequirePermission(ctx, "support:read"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Deckhand == nil {
 		return nil, fmt.Errorf("messaging not configured")
 	}
@@ -60,6 +64,9 @@ func (r *Resolver) ConversationsConnection(ctx context.Context, page *model.Conn
 
 // Conversation returns a single conversation by ID
 func (r *Resolver) Conversation(ctx context.Context, id string) (*model.Conversation, error) {
+	if err := gatewaymiddleware.RequirePermission(ctx, "support:read"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Deckhand == nil {
 		return nil, fmt.Errorf("messaging not configured")
 	}
@@ -83,6 +90,9 @@ func (r *Resolver) Conversation(ctx context.Context, id string) (*model.Conversa
 
 // MessagesConnection returns paginated messages for a conversation
 func (r *Resolver) MessagesConnection(ctx context.Context, conversationID string, page *model.ConnectionInput) (*model.MessagesConnection, error) {
+	if err := gatewaymiddleware.RequirePermission(ctx, "support:read"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Deckhand == nil {
 		return nil, fmt.Errorf("messaging not configured")
 	}
@@ -166,6 +176,9 @@ func (r *Resolver) MessageByID(ctx context.Context, conversationID string, messa
 
 // CreateConversation creates a new support conversation
 func (r *Resolver) CreateConversation(ctx context.Context, input model.CreateConversationInput) (model.CreateConversationResult, error) {
+	if err := gatewaymiddleware.RequirePermission(ctx, "support:write"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Deckhand == nil {
 		return &model.ValidationError{
 			Message: "Messaging not configured",
@@ -197,6 +210,9 @@ func (r *Resolver) CreateConversation(ctx context.Context, input model.CreateCon
 
 // SendMessage sends a message in a conversation
 func (r *Resolver) SendMessage(ctx context.Context, input model.SendMessageInput) (model.SendMessageResult, error) {
+	if err := gatewaymiddleware.RequirePermission(ctx, "support:write"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Deckhand == nil {
 		return &model.ValidationError{
 			Message: "Messaging not configured",

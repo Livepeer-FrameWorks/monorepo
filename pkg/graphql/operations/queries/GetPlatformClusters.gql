@@ -16,7 +16,10 @@ query GetPlatformClusters {
         uploadBytesPerSec
         downloadBytesPerSec
         activeNodes
-        egressCapacityBps
+        egressBudgetBytesPerSec
+        egressUsableBytesPerSec
+        egressObservedBytesPerSec
+        defaultBudgetNodes
       }
       tenants {
         id

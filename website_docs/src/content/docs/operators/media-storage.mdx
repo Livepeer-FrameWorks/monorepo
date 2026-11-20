@@ -168,7 +168,7 @@ as canonical `.mkv` VOD artifacts:
 
 ### Processing job input
 
-- Wrapper-safe containers (mp4, mov, mkv, webm, ts) read directly from
+- Wrapper-safe containers (mp4, mov, mkv, webm, ts, m2ts, mts) read directly from
   the relay's upload path. Admission forces memory-only — the relay
   pass-through streams from S3 to Mist's process input without writing
   to edge disk. A multi-GB upload contributes 0 bytes to edge disk
@@ -328,3 +328,20 @@ has not synced yet is read from the origin node's Helmsman over the
 relay grant, so that first pass does cross clusters. For repeated cross-cluster playback of the
 same artifact, the requesting edge's block cache absorbs it after the
 first cold pass.
+
+## Retained original uploads
+
+Foghorn snapshots `keep_original` at upload creation and records the source key and HEAD-verified
+size in the processing-completion transaction before replacing processed size. The original stays
+durable while the processed file is local. Cold usage bills the original once in that interval,
+then both files after processed sync. Sync cleanup skips the retained key. Full deletion and
+purge free both keys; original-only deletion clears its metadata and queues cleanup atomically.
+
+Upgrades keep original retention disabled until the v0.3.16 Foghorn postdeploy migration activates
+it. `frameworks cluster release apply` upgrades services and retires stale placements before running
+postdeploy. Both upload creation and original stamping require this durable activation; the live
+heartbeat window alone cannot enable retention. Upload creation also requires every live Foghorn
+replica to report authority feature level 2. Fresh baseline installs start activated. The release
+catalog prohibits rollback to cleanup code that does not preserve originals. Older Commodore requests that omit
+`keep_original` continue without original retention. A source download is signed only on its
+recorded local backend after a size check and does not create playback usage.

@@ -1,6 +1,6 @@
 # Regenerate a new stream key for a stream
-mutation RefreshStreamKey($id: ID!) {
-  refreshStreamKey(id: $id) {
+mutation RefreshStreamKey($id: ID!, $endActiveSession: Boolean = false) {
+  refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
     __typename
     ... on Stream {
       id
@@ -11,12 +11,14 @@ mutation RefreshStreamKey($id: ID!) {
       record
       createdAt
       updatedAt
-      metrics {
-        status
+      ingest {
+        state
         isLive
-        currentViewers
-        startedAt
-        updatedAt
+        sessionId
+        connectedAt
+        liveSince
+        endedAt
+        resumableUntil
       }
     }
     ... on ValidationError {

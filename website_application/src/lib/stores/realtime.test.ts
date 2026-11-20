@@ -52,13 +52,34 @@ function clipEvent(id: string, type: string, artifactId: string, extra: Record<s
   };
 }
 
+const ingestFetch = vi.fn();
+
 async function loadRealtime() {
   vi.resetModules();
   FakeTenantEventsStore.instances = [];
+  ingestFetch.mockReset().mockResolvedValue({
+    data: {
+      stream: {
+        id: btoa("Stream:stream-1"),
+        streamId: "stream-1",
+        name: "Broadcast",
+        ingest: { state: "LIVE", isLive: true, sessionId: "other-cell-session" },
+      },
+    },
+  });
   vi.stubGlobal("window", { addEventListener: vi.fn() });
   vi.doMock("$app/environment", () => ({ browser: true }));
   vi.doMock("$houdini", () => ({
-    StreamEventsStore: class {},
+    StreamEventsStore: class {
+      listen() {}
+      unlisten() {}
+      subscribe() {
+        return () => {};
+      }
+    },
+    GetStreamIngestStore: class {
+      fetch = ingestFetch;
+    },
     ViewerMetricsStreamStore: class {},
     SystemHealthStore: class {},
     TrackListUpdatesStore: class {},
@@ -122,6 +143,7 @@ describe("realtime artifact events", () => {
         "recording.ready",
         "recording.failed",
         "recording.chapter_failed",
+        "recording.chapter_ready",
       ],
       streamId: "stream-1",
     });
@@ -178,5 +200,43 @@ describe("realtime artifact events", () => {
     realtime.subscribeToRecordingEvents("stream-2");
     realtime.disconnectWebSocket();
     expect(FakeTenantEventsStore.instances.map((s) => s.unlistened)).toEqual([1, 1]);
+  });
+});
+
+describe("realtime ingest state", () => {
+  it("refetches the aggregate state after one cell idles and keeps another cell live", async () => {
+    const realtime = await loadRealtime();
+    realtime.initializeWebSocket();
+    const subscription = FakeTenantEventsStore.instances.find((store) =>
+      (store.listened[0]?.types as string[] | undefined)?.includes("stream.idle")
+    );
+    expect(subscription, "live badges need a streams:read lifecycle subscription").toBeDefined();
+    subscription?.emit({
+      data: {
+        tenantEvents: {
+          id: "e-idle",
+          type: "stream.idle",
+          data: { __typename: "StreamIdle", streamId: "stream-1", sessionId: "ended-cell-session" },
+        },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(ingestFetch).toHaveBeenCalledWith({
+        variables: { id: btoa("Stream:stream-1") },
+        policy: "NetworkOnly",
+      })
+    );
+    await vi.waitFor(() => expect(get(realtime.realtimeStreams)[0]?.ingest?.isLive).toBe(true));
+    realtime.disconnectWebSocket();
+    const calls = ingestFetch.mock.calls.length;
+    subscription?.emit({
+      data: {
+        tenantEvents: {
+          type: "stream.ended",
+          data: { __typename: "StreamEnded", streamId: "stream-1" },
+        },
+      },
+    });
+    expect(ingestFetch).toHaveBeenCalledTimes(calls);
   });
 });

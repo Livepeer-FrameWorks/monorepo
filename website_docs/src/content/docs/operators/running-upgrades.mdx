@@ -557,6 +557,45 @@ it in every cell, using each cell's Foghorn service name from the manifest:
 frameworks cluster data-migrate status foghorn-eu.<id>
 ```
 
+## v0.3.16 ingest and node capacity
+
+The CLI release/provision planner orders every enabled Signalman, Bosun, and Periscope Ingest
+replica before Foghorn, including aliased services across regions. When upgrading services
+individually, deploy those public-event consumers before the new Foghorn producer. Upgrade Helmsman
+before enabling explicit ingest disconnects: control protocol 12
+persists an exact-generation admission rejection and confirms the node effect. Foghorn keeps a
+stop pending on older edges rather than accepting an unsafe fallback. Upgrade the remaining
+v0.3.16 services before moving applications to SDK line 0.6. SDK lines 0.3–0.5 remain frozen and
+supported; deprecated fields used by those lines remain in the schema.
+
+Apply this release's migrations from each database's `v0.3.16/` directory through the normal CLI
+expand/postdeploy flow. The release catalog blocks rollback of Commodore and Quartermaster
+past this version because the extra stream-key table and cluster/tenant bandwidth columns are
+removed. Its Foghorn/Helmsman restrictions also protect the isolated-runtime and writer
+transitions. Follow the catalog's service-specific rollback gate rather than a blanket binary
+rollback.
+
+Every node starts with visible 1 Gbit/s ingress and egress defaults until its operator supplies
+budgets. After the capacity services have upgraded, set the measured budget of each production
+edge and check that its applied revision catches up:
+
+```bash
+frameworks edge capacity set "$NODE_ID" \
+  --egress-mbps "$EGRESS_MBPS" --ingress-mbps "$INGRESS_MBPS"
+frameworks edge capacity show "$NODE_ID"
+```
+
+These are decimal Mbit/s values. A platform operator may also set them. A manifest's
+`bandwidth_mbps` is written through the authenticated API on provision; token-only enrollment
+prints the authenticated follow-up command. Capacity changes are delivered live without
+re-provisioning or restarting Mist. An explicit `default` clears a directional override.
+
+Recording capture timestamps use an acknowledgement watermark, so mixed old/new replicas keep
+repairing the catalog until a timestamp-aware Commodore confirms the current revision. Public
+`recording.chapter_ready` consumers tolerate legacy internal records during the consumer-first
+rollout. Publish SDK 0.6 only after a v0.3.16 server is available; it uses ingest session IDs,
+saved-media connections, chapter pages, and durable disconnect operations.
+
 ## Rollback behavior
 
 When a service fails its readiness check after an upgrade, `cluster upgrade` and `release apply`

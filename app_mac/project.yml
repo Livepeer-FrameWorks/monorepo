@@ -57,6 +57,8 @@ targets:
       - Sources/Gateway/GeneratedQueries.swift
       - Sources/Gateway/KeychainHelper.swift
       - Sources/Gateway/ServerInfoService.swift
+      - Sources/Gateway/NodeCapacityService.swift
+      - Sources/Gateway/Models.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.livepeer.frameworks.desktop.tests

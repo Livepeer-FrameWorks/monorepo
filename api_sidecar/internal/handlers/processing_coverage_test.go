@@ -152,7 +152,7 @@ func TestProcessingRecordingEndDropsSelectedButUnwrittenTracks(t *testing.T) {
 	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720},{"name":"480p","height":480},{"name":"360p","height":360}]}]`
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
-	if livepeerRenditionsCompleteFromTracks(logrus.NewEntry(log), processes, evt.Tracks, mist.SourceMediaInfo{Width: 1280, Height: 720}, 9966) {
+	if renditionsComplete(logrus.NewEntry(log), processes, evt.Tracks, mist.SourceMediaInfo{Width: 1280, Height: 720}, 9966, 0, 30000) {
 		t.Fatal("unwritten renditions were counted as present")
 	}
 

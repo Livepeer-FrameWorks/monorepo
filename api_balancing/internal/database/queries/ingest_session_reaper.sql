@@ -8,10 +8,11 @@ WHERE node_id = sqlc.arg(node_id) AND ended_at IS NULL AND projection_state = 'a
   AND started_at < sqlc.arg(started_before)::timestamptz;
 
 -- name: ListOpenProjectedIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
-FROM foghorn.ingest_sessions
-WHERE ended_at IS NULL AND projection_state = 'active'
-ORDER BY node_id, started_at;
+SELECT id::text AS session_id,tenant_id::text AS tenant_id,node_id,stream_internal_name,FALSE AS is_pull
+FROM foghorn.ingest_sessions WHERE ended_at IS NULL AND projection_state='active'
+UNION ALL
+SELECT id::text AS session_id,tenant_id::text AS tenant_id,node_id,stream_internal_name,TRUE AS is_pull
+FROM foghorn.pull_ingest_sessions WHERE ended_at IS NULL AND admission_state='active';
 
 -- name: ListNodeIngestGenerations :many
 SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
@@ -46,7 +47,8 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND start_trigger_uuid = sqlc.arg(claim_token) AND ended_at IS NULL
-RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id;
+RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id,
+          COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name)::text AS runtime_name;
 
 -- name: IngestClaimOwnerEnded :one
 SELECT COALESCE(

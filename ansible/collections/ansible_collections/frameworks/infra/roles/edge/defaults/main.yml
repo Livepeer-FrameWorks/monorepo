@@ -52,9 +52,8 @@ edge_telemetry_token: ""
 edge_telemetry_address: ""
 edge_telemetry_hostname: ""
 
-# Optional node capacity and capability controls. Capabilities default to
+# Optional processing/storage limits and node capabilities. Capabilities default to
 # Helmsman's built-in all-enabled behavior when left empty.
-edge_bandwidth_limit_bytes_per_sec: 0
 edge_max_transcodes: 0
 edge_storage_capacity_bytes: 0
 edge_cap_ingest: ""

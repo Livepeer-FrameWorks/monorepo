@@ -19,6 +19,9 @@ import (
 // through `lb`, which projects from state.DefaultManager().
 func withSeededBalancer(t *testing.T) *state.StreamStateManager {
 	t.Helper()
+	previousAdmission := admitPullUpstreamFn
+	admitPullUpstreamFn = func(context.Context, string, string, string, string, string, int32) (bool, error) { return true, nil }
+	t.Cleanup(func() { admitPullUpstreamFn = previousAdmission })
 	gin.SetMode(gin.TestMode)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
@@ -71,7 +74,10 @@ func seedNodeWithStream(t *testing.T, sm *state.StreamStateManager, n seedNode, 
 	if stream != "" {
 		sm.UpdateNodeStats(stream, n.nodeID, viewers, 1, bytesUp, bytesDown, false)
 		if viewers > 0 {
-			sm.UpdateUserConnection(stream, n.nodeID, "tenant-1", viewers)
+			sm.EnsureViewerStreamIdentity(stream, n.nodeID, "tenant-1")
+			if err := sm.SetNodeStreamCounts(context.Background(), state.NodeStreamCountsSnapshot{NodeID: n.nodeID, Fence: 1, Seq: 1, Streams: map[string]uint32{stream: uint32(viewers)}}); err != nil {
+				panic(err)
+			}
 		}
 	}
 }
@@ -151,13 +157,13 @@ func TestHandleStreamStatsAbsentStreamEmpty(t *testing.T) {
 }
 
 // handleHostStatus emits a per-host status map; the geo and tags sub-objects
-// appear only when set, and CPU/RAM are rescaled to percentages.
+// appear only when set, and CPU and RAM use percentages.
 func TestHandleHostStatusSingleHost(t *testing.T) {
 	sm := withSeededBalancer(t)
 	seedNodeWithStream(t, sm, seedNode{
 		nodeID: "a", host: "a.example", active: true,
 		lat: 52.1, lon: 4.3, tags: []string{"edge", "eu"},
-		ramMax: 100, ramCur: 50, cpu: 200,
+		ramMax: 100, ramCur: 50, cpu: 20,
 	}, "live+demo", 4, 0, 0)
 
 	c, w := newGinTestContext()
@@ -171,8 +177,16 @@ func TestHandleHostStatusSingleHost(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing host key in %v", result)
 	}
-	if host["cpu"].(float64) != 20 { // 200/10
+	if host["cpu"].(float64) != 20 {
 		t.Fatalf("cpu = %v, want 20", host["cpu"])
+	}
+	if host["bwlimit"].(float64) != 1000000 {
+		t.Errorf("bwlimit=%v, want budget 1000000", host["bwlimit"])
+	}
+	if scores, ok := host["score"].(map[string]any); ok {
+		if scores["bw"].(float64) > 1000 {
+			t.Errorf("bandwidth score overflow: %v", scores)
+		}
 	}
 	if host["ram"].(float64) != 50 { // 50*100/100
 		t.Fatalf("ram = %v, want 50", host["ram"])

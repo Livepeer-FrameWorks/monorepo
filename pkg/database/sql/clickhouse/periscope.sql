@@ -622,8 +622,8 @@ CREATE TABLE IF NOT EXISTS client_qoe_samples (
     connection_time Float32,
     position Nullable(Float32),
 
-    bandwidth_in UInt64,
-    bandwidth_out UInt64,
+    bandwidth_in UInt64, -- Bytes/s sent to the viewer (Mist upbps).
+    bandwidth_out UInt64, -- Bytes/s received from the viewer (Mist downbps).
     bytes_downloaded UInt64,
     bytes_uploaded UInt64,
 
@@ -1123,6 +1123,9 @@ CREATE TABLE IF NOT EXISTS node_state_current (
     up_speed UInt64,
     down_speed UInt64,
     bw_limit UInt64 DEFAULT 0,
+    egress_budget UInt64 DEFAULT 0,
+    budget_source LowCardinality(String) DEFAULT '',
+    viewers UInt32 DEFAULT 0,
 
     active_streams UInt32,
     is_healthy UInt8,

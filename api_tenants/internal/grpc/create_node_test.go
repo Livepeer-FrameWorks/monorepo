@@ -81,6 +81,7 @@ func TestCreateNode_Success(t *testing.T) {
 			nil, "runtime_enrolled", nil, "active", now, now,
 			"tenant-1",
 			nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
@@ -186,6 +187,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 				nil, "gitops_seed", nil, "active", now, now,
 				"tenant-1",
 				nil, nil, nil, nil, nil, nil, nil,
+				nil, nil, nil, nil, nil,
 			}...))
 
 		resp, callErr := server.CreateNode(serviceCtx(), req)
@@ -241,6 +243,7 @@ func TestCreateNode_StampsRuntimeEnrolled(t *testing.T) {
 			nil, "runtime_enrolled", nil, "active", now, now,
 			"tenant-1",
 			nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
@@ -302,6 +305,7 @@ func TestCreateNode_PreservesExistingOrigin(t *testing.T) {
 					nil, origin, nil, "active", now, now,
 					"tenant-1",
 					nil, nil, nil, nil, nil, nil, nil,
+					nil, nil, nil, nil, nil,
 				}...))
 
 			resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{

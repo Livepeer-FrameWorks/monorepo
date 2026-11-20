@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients"
@@ -21,6 +20,28 @@ import (
 
 // RegisterStreamTools registers stream-related MCP tools.
 func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
+	registerStreamMediaTools(server, resolver)
+
+	addTool(server, &mcp.Tool{Name: "get_stream_ingest", Description: "Read a stream's current ingest session: idle, connected or live, with its session ID and timestamps."},
+		func(ctx context.Context, req *mcp.CallToolRequest, args GetStreamIngestInput) (*mcp.CallToolResult, any, error) {
+			id, err := decodeStreamID(args.StreamID)
+			if err != nil {
+				return toolError(err.Error())
+			}
+			stream, err := resolver.DoGetStream(ctx, id)
+			if err != nil {
+				return nil, nil, err
+			}
+			view, err := resolver.DoStreamIngest(ctx, stream)
+			if err != nil {
+				return nil, nil, err
+			}
+			return toolSuccess(view)
+		})
+	addTool(server, &mcp.Tool{Name: "disconnect_ingest", Description: "End the currently claimed push publisher. Pull streams are stopped by setting pull_source.enabled=false. Requires confirm='DISCONNECT INGEST'."}, func(ctx context.Context, _ *mcp.CallToolRequest, args DisconnectIngestInput) (*mcp.CallToolResult, any, error) {
+		return handleDisconnectIngest(ctx, args, clients)
+	})
+
 	// create_stream - Create a new stream (requires balance)
 	addTool(server,
 		&mcp.Tool{
@@ -67,36 +88,6 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 
 	addTool(server,
 		&mcp.Tool{
-			Name:        "list_stream_keys",
-			Description: "List ingest keys for a push stream, including active state and last-used timestamps. Pull and managed streams reject this operation.",
-		},
-		func(ctx context.Context, req *mcp.CallToolRequest, args ListStreamKeysInput) (*mcp.CallToolResult, any, error) {
-			return handleListStreamKeys(ctx, args, clients, logger)
-		},
-	)
-
-	addTool(server,
-		&mcp.Tool{
-			Name:        "create_stream_key",
-			Description: "Create an additional ingest key for a push stream. Pull and managed streams reject this operation. The key value is returned in the response. Requires confirm=\"CREATE STREAM KEY\".",
-		},
-		func(ctx context.Context, req *mcp.CallToolRequest, args CreateStreamKeyInput) (*mcp.CallToolResult, any, error) {
-			return handleCreateStreamKey(ctx, args, clients, logger)
-		},
-	)
-
-	addTool(server,
-		&mcp.Tool{
-			Name:        "delete_stream_key",
-			Description: "Deactivate a push stream's ingest key. Active encoders using it will fail ingest. Pull and managed streams reject this operation. Requires confirm=\"DELETE STREAM KEY\".",
-		},
-		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteStreamKeyInput) (*mcp.CallToolResult, any, error) {
-			return handleDeleteStreamKey(ctx, args, clients, logger)
-		},
-	)
-
-	addTool(server,
-		&mcp.Tool{
 			Name:        "validate_stream_key",
 			Description: "Validate an ingest stream key and return whether it can authenticate an ingest session.",
 		},
@@ -108,13 +99,14 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 
 // CreateStreamInput represents input for create_stream tool.
 type CreateStreamInput struct {
-	Name         string               `json:"name" jsonschema:"Stream display name"`
-	Description  string               `json:"description,omitempty" jsonschema:"Stream description"`
-	Record       bool                 `json:"record,omitempty" jsonschema:"Enable DVR recording"`
-	LiveVideoABR string               `json:"live_video_abr,omitempty" jsonschema:"INHERIT (default) or OFF for live video renditions"`
-	Public       bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
-	IngestMode   string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
-	PullSource   *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
+	TranscodeLadder string               `json:"transcode_ladder,omitempty" jsonschema:"Allowed ladder name; omit to inherit"`
+	Name            string               `json:"name" jsonschema:"Stream display name"`
+	Description     string               `json:"description,omitempty" jsonschema:"Stream description"`
+	Record          bool                 `json:"record,omitempty" jsonschema:"Enable DVR recording"`
+	LiveVideoABR    string               `json:"live_video_abr,omitempty" jsonschema:"INHERIT (default) or OFF for live video renditions"`
+	Public          bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
+	IngestMode      string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
+	PullSource      *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
 	// Private and multicast pull sources need a restricted location.
 	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Where the source may be ingested. Omit for any cluster FrameWorks chooses; required as restricted for private (LAN) or multicast pull sources."`
 }
@@ -181,14 +173,15 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 
 	// Call Commodore to create stream (tenantID is in context metadata)
 	resp, err := clients.Commodore.CreateStream(ctx, &commodorepb.CreateStreamRequest{
-		Title:          args.Name,
-		Description:    args.Description,
-		IsPublic:       args.Public,
-		IsRecording:    args.Record,
-		LiveVideoAbr:   args.LiveVideoABR,
-		IngestMode:     args.IngestMode,
-		PullSource:     toProtoPullSource(args.PullSource),
-		SourceLocation: location,
+		Title:           args.Name,
+		Description:     args.Description,
+		IsPublic:        args.Public,
+		IsRecording:     args.Record,
+		LiveVideoAbr:    args.LiveVideoABR,
+		TranscodeLadder: args.TranscodeLadder,
+		IngestMode:      args.IngestMode,
+		PullSource:      toProtoPullSource(args.PullSource),
+		SourceLocation:  location,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create stream")
@@ -218,13 +211,14 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 
 // UpdateStreamInput represents input for update_stream tool.
 type UpdateStreamInput struct {
-	StreamID     string               `json:"stream_id" jsonschema:"Relay ID or stream_id to update"`
-	Name         *string              `json:"name,omitempty" jsonschema:"New stream name"`
-	Description  *string              `json:"description,omitempty" jsonschema:"New description"`
-	Record       *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
-	LiveVideoABR *string              `json:"live_video_abr,omitempty" jsonschema:"INHERIT or OFF; omit to keep the current setting"`
-	IngestMode   *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
-	PullSource   *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
+	TranscodeLadder *string              `json:"transcode_ladder,omitempty" jsonschema:"Ladder name; empty inherits; omit to keep current"`
+	StreamID        string               `json:"stream_id" jsonschema:"Relay ID or stream_id to update"`
+	Name            *string              `json:"name,omitempty" jsonschema:"New stream name"`
+	Description     *string              `json:"description,omitempty" jsonschema:"New description"`
+	Record          *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
+	LiveVideoABR    *string              `json:"live_video_abr,omitempty" jsonschema:"INHERIT or OFF; omit to keep the current setting"`
+	IngestMode      *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
+	PullSource      *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
 	// Omitted keeps the current location.
 	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Replacement source location. Omit to keep the current one. Custom placement rules are edited with the media placement tools."`
 }
@@ -261,14 +255,15 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 
 	// Call Commodore to update stream
 	stream, err := clients.Commodore.UpdateStream(ctx, &commodorepb.UpdateStreamRequest{
-		StreamId:       streamID,
-		Name:           args.Name,
-		Description:    args.Description,
-		Record:         args.Record,
-		LiveVideoAbr:   args.LiveVideoABR,
-		IngestMode:     args.IngestMode,
-		PullSource:     toProtoPullSource(args.PullSource),
-		SourceLocation: location,
+		StreamId:        streamID,
+		Name:            args.Name,
+		Description:     args.Description,
+		Record:          args.Record,
+		LiveVideoAbr:    args.LiveVideoABR,
+		TranscodeLadder: args.TranscodeLadder,
+		IngestMode:      args.IngestMode,
+		PullSource:      toProtoPullSource(args.PullSource),
+		SourceLocation:  location,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to update stream")
@@ -409,8 +404,9 @@ func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *cl
 
 // RefreshStreamKeyInput represents input for refresh_stream_key tool.
 type RefreshStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to refresh key for"`
-	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'ROTATE STREAM KEY'."`
+	EndActiveSession bool   `json:"end_active_session,omitempty" jsonschema:"Also end the publisher active when the key is rotated"`
+	StreamID         string `json:"stream_id" jsonschema:"Relay ID or stream_id to refresh key for"`
+	Confirm          string `json:"confirm" jsonschema:"Must be exactly 'ROTATE STREAM KEY'."`
 }
 
 // RefreshStreamKeyResult represents the result of refreshing a stream key.
@@ -438,7 +434,12 @@ func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, cli
 	}
 
 	// Call Commodore to refresh stream key
-	resp, err := clients.Commodore.RefreshStreamKey(ctx, streamID)
+	var resp *commodorepb.RefreshStreamKeyResponse
+	if args.EndActiveSession {
+		resp, err = clients.Commodore.RefreshStreamKeyAndEndIngest(ctx, streamID)
+	} else {
+		resp, err = clients.Commodore.RefreshStreamKey(ctx, streamID)
+	}
 	if err != nil {
 		logger.WithError(err).Warn("Failed to refresh stream key")
 		return toolError(fmt.Sprintf("Failed to refresh stream key: %v", err))
@@ -454,117 +455,13 @@ func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, cli
 	return toolSuccess(result)
 }
 
-type ListStreamKeysInput struct {
-	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to list keys for"`
-}
-
-type CreateStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id to create a key for"`
-	Name     string `json:"name" jsonschema:"Human-readable key name"`
-	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'CREATE STREAM KEY'."`
-}
-
-type DeleteStreamKeyInput struct {
-	StreamID string `json:"stream_id" jsonschema:"Relay ID or stream_id that owns the key"`
-	KeyID    string `json:"key_id" jsonschema:"Stream key UUID"`
-	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'DELETE STREAM KEY'."`
-}
-
 type ValidateStreamKeyInput struct {
 	StreamKey string `json:"stream_key" jsonschema:"Raw ingest stream key to validate"`
-}
-
-type StreamKeyToolResult struct {
-	ID         string `json:"id"`
-	StreamID   string `json:"stream_id"`
-	KeyValue   string `json:"key_value,omitempty"`
-	KeyName    string `json:"key_name,omitempty"`
-	IsActive   bool   `json:"is_active"`
-	LastUsedAt string `json:"last_used_at,omitempty"`
-	CreatedAt  string `json:"created_at,omitempty"`
-}
-
-type ListStreamKeysResult struct {
-	Keys []StreamKeyToolResult `json:"keys"`
-}
-
-type CreateStreamKeyResult struct {
-	Key     StreamKeyToolResult `json:"key"`
-	Warning string              `json:"warning"`
 }
 
 type ValidateStreamKeyResult struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
-}
-
-func handleListStreamKeys(ctx context.Context, args ListStreamKeysInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, mcperrors.AuthRequired()
-	}
-	if args.StreamID == "" {
-		return toolError("stream_id is required")
-	}
-	streamID, err := decodeStreamID(args.StreamID)
-	if err != nil {
-		return toolError(err.Error())
-	}
-	resp, err := clients.Commodore.ListStreamKeys(ctx, streamID, nil)
-	if err != nil {
-		logger.WithError(err).Warn("Failed to list stream keys")
-		return toolError(fmt.Sprintf("Failed to list stream keys: %v", err))
-	}
-	out := ListStreamKeysResult{Keys: make([]StreamKeyToolResult, 0, len(resp.GetStreamKeys()))}
-	for _, k := range resp.GetStreamKeys() {
-		out.Keys = append(out.Keys, streamKeyToToolResult(k, false))
-	}
-	return toolSuccess(out)
-}
-
-func handleCreateStreamKey(ctx context.Context, args CreateStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, mcperrors.AuthRequired()
-	}
-	if result, meta, err := requireConfirmation(args.Confirm, "CREATE STREAM KEY"); result != nil || meta != nil || err != nil {
-		return result, meta, err
-	}
-	if args.StreamID == "" || args.Name == "" {
-		return toolError("stream_id and name are required")
-	}
-	streamID, err := decodeStreamID(args.StreamID)
-	if err != nil {
-		return toolError(err.Error())
-	}
-	resp, err := clients.Commodore.CreateStreamKey(ctx, streamID, args.Name)
-	if err != nil {
-		logger.WithError(err).Warn("Failed to create stream key")
-		return toolError(fmt.Sprintf("Failed to create stream key: %v", err))
-	}
-	return toolSuccess(CreateStreamKeyResult{
-		Key:     streamKeyToToolResult(resp.GetStreamKey(), true),
-		Warning: "STREAM KEY IS RETURNED IN THIS RESPONSE. Store it in your encoder or secret manager before discarding the response.",
-	})
-}
-
-func handleDeleteStreamKey(ctx context.Context, args DeleteStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, mcperrors.AuthRequired()
-	}
-	if result, meta, err := requireConfirmation(args.Confirm, "DELETE STREAM KEY"); result != nil || meta != nil || err != nil {
-		return result, meta, err
-	}
-	if args.StreamID == "" || args.KeyID == "" {
-		return toolError("stream_id and key_id are required")
-	}
-	streamID, err := decodeStreamID(args.StreamID)
-	if err != nil {
-		return toolError(err.Error())
-	}
-	if err := clients.Commodore.DeactivateStreamKey(ctx, streamID, args.KeyID); err != nil {
-		logger.WithError(err).Warn("Failed to delete stream key")
-		return toolError(fmt.Sprintf("Failed to delete stream key: %v", err))
-	}
-	return toolSuccess(map[string]any{"stream_id": streamID, "key_id": args.KeyID, "deleted": true})
 }
 
 func handleValidateStreamKey(ctx context.Context, args ValidateStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -585,24 +482,29 @@ func handleValidateStreamKey(ctx context.Context, args ValidateStreamKeyInput, c
 	return toolSuccess(ValidateStreamKeyResult{Status: "VALID"})
 }
 
-func streamKeyToToolResult(k *commodorepb.StreamKey, includeSecret bool) StreamKeyToolResult {
-	if k == nil {
-		return StreamKeyToolResult{}
+type GetStreamIngestInput struct {
+	StreamID string `json:"stream_id" jsonschema:"Stream relay ID or stream UUID"`
+}
+
+type DisconnectIngestInput struct {
+	StreamID string `json:"stream_id" jsonschema:"Stream UUID or GraphQL ID"`
+	Confirm  string `json:"confirm" jsonschema:"Must be exactly 'DISCONNECT INGEST'."`
+}
+
+func handleDisconnectIngest(ctx context.Context, args DisconnectIngestInput, clients *clients.ServiceClients) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
 	}
-	out := StreamKeyToolResult{
-		ID:       k.GetId(),
-		StreamID: k.GetStreamId(),
-		KeyName:  k.GetKeyName(),
-		IsActive: k.GetIsActive(),
+	if result, metadata, err := requireConfirmation(args.Confirm, "DISCONNECT INGEST"); result != nil || metadata != nil || err != nil {
+		return result, metadata, err
 	}
-	if includeSecret {
-		out.KeyValue = k.GetKeyValue()
+	id, err := decodeStreamID(args.StreamID)
+	if err != nil {
+		return toolError(err.Error())
 	}
-	if ts := k.GetLastUsedAt(); ts != nil {
-		out.LastUsedAt = ts.AsTime().Format(time.RFC3339)
+	response, err := clients.Commodore.DisconnectIngest(ctx, id)
+	if err != nil {
+		return toolError(err.Error())
 	}
-	if ts := k.GetCreatedAt(); ts != nil {
-		out.CreatedAt = ts.AsTime().Format(time.RFC3339)
-	}
-	return out
+	return toolSuccess(response)
 }

@@ -1,14 +1,24 @@
 -- name: GetStreamProcessingOverrides :one
-SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
-FROM commodore.stream_processing_config
-WHERE stream_id = $1;
+SELECT COALESCE(processing.processes_live::text, '')::text AS processes_live,
+       COALESCE(processing.processes_dvr::text, '')::text AS processes_dvr,
+       COALESCE(processing.processes_clip::text, '')::text AS processes_clip,
+       COALESCE(processing.processes_dvr_finalize::text, '')::text AS processes_dvr_finalize,
+       COALESCE(processing.processes_vod::text, '')::text AS processes_vod
+FROM commodore.stream_processing_config processing
+JOIN commodore.streams stream ON stream.id = processing.stream_id
+WHERE processing.stream_id = sqlc.arg(stream_id)::uuid
+  AND stream.tenant_id = sqlc.arg(tenant_id)::uuid;
 
 -- name: GetStreamLiveVideoABR :one
 SELECT live_video_abr FROM commodore.streams
 WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
 
 -- name: GetTenantProcessingOverrides :one
-SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
+SELECT COALESCE(processes_live::text, '')::text AS processes_live,
+       COALESCE(processes_dvr::text, '')::text AS processes_dvr,
+       COALESCE(processes_clip::text, '')::text AS processes_clip,
+       COALESCE(processes_dvr_finalize::text, '')::text AS processes_dvr_finalize,
+       COALESCE(processes_vod::text, '')::text AS processes_vod
 FROM commodore.tenant_processing_config
 WHERE tenant_id = $1;
 
@@ -59,3 +69,17 @@ FROM (
     WHERE lower(cp.playback_id::text) = lower($1::text)
 ) resolved
 LIMIT 1;
+
+-- name: GetStreamProcessingChoices :one
+SELECT live_video_abr, transcode_ladder FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
+
+-- name: GetTenantTranscodeLadder :one
+SELECT transcode_ladder FROM commodore.tenant_processing_config
+WHERE tenant_id = $1;
+
+-- name: SetTenantTranscodeLadder :exec
+INSERT INTO commodore.tenant_processing_config (tenant_id, transcode_ladder, updated_at)
+VALUES (sqlc.arg(tenant_id), sqlc.narg(transcode_ladder), NOW())
+ON CONFLICT (tenant_id) DO UPDATE
+SET transcode_ladder = EXCLUDED.transcode_ladder, updated_at = NOW();

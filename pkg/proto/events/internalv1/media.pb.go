@@ -8,7 +8,6 @@ package internalv1
 
 import (
 	_ "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
-	v1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -78,84 +77,6 @@ func (NodeCopyTransition) EnumDescriptor() ([]byte, []int) {
 	return file_events_internal_v1_media_proto_rawDescGZIP(), []int{0}
 }
 
-// RecordingChapterReady reports that one chapter of a recording became
-// playable.
-type RecordingChapterReady struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Artifact      *v1.Artifact           `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
-	ChapterId     string                 `protobuf:"bytes,2,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
-	StartMs       int64                  `protobuf:"varint,3,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
-	EndMs         int64                  `protobuf:"varint,4,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
-	SizeBytes     int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RecordingChapterReady) Reset() {
-	*x = RecordingChapterReady{}
-	mi := &file_events_internal_v1_media_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RecordingChapterReady) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RecordingChapterReady) ProtoMessage() {}
-
-func (x *RecordingChapterReady) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_media_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RecordingChapterReady.ProtoReflect.Descriptor instead.
-func (*RecordingChapterReady) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_media_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *RecordingChapterReady) GetArtifact() *v1.Artifact {
-	if x != nil {
-		return x.Artifact
-	}
-	return nil
-}
-
-func (x *RecordingChapterReady) GetChapterId() string {
-	if x != nil {
-		return x.ChapterId
-	}
-	return ""
-}
-
-func (x *RecordingChapterReady) GetStartMs() int64 {
-	if x != nil {
-		return x.StartMs
-	}
-	return 0
-}
-
-func (x *RecordingChapterReady) GetEndMs() int64 {
-	if x != nil {
-		return x.EndMs
-	}
-	return 0
-}
-
-func (x *RecordingChapterReady) GetSizeBytes() int64 {
-	if x != nil {
-		return x.SizeBytes
-	}
-	return 0
-}
-
 // ArtifactNodeCopyChanged reports a transition of a node's transient local
 // copy of an artifact. The durable object-storage copy is tracked separately.
 type ArtifactNodeCopyChanged struct {
@@ -174,7 +95,7 @@ type ArtifactNodeCopyChanged struct {
 
 func (x *ArtifactNodeCopyChanged) Reset() {
 	*x = ArtifactNodeCopyChanged{}
-	mi := &file_events_internal_v1_media_proto_msgTypes[1]
+	mi := &file_events_internal_v1_media_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -186,7 +107,7 @@ func (x *ArtifactNodeCopyChanged) String() string {
 func (*ArtifactNodeCopyChanged) ProtoMessage() {}
 
 func (x *ArtifactNodeCopyChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_media_proto_msgTypes[1]
+	mi := &file_events_internal_v1_media_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -199,7 +120,7 @@ func (x *ArtifactNodeCopyChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactNodeCopyChanged.ProtoReflect.Descriptor instead.
 func (*ArtifactNodeCopyChanged) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_media_proto_rawDescGZIP(), []int{1}
+	return file_events_internal_v1_media_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ArtifactNodeCopyChanged) GetArtifactHash() string {
@@ -248,16 +169,7 @@ var File_events_internal_v1_media_proto protoreflect.FileDescriptor
 
 const file_events_internal_v1_media_proto_rawDesc = "" +
 	"\n" +
-	"\x1eevents/internal/v1/media.proto\x12\x1dframeworks.events.internal.v1\x1a\x14events/options.proto\x1a\x1devents/public/v1/common.proto\"\xf8\x01\n" +
-	"\x15RecordingChapterReady\x12A\n" +
-	"\bartifact\x18\x01 \x01(\v2%.frameworks.events.public.v1.ArtifactR\bartifact\x12\x1d\n" +
-	"\n" +
-	"chapter_id\x18\x02 \x01(\tR\tchapterId\x12\x19\n" +
-	"\bstart_ms\x18\x03 \x01(\x03R\astartMs\x12\x15\n" +
-	"\x06end_ms\x18\x04 \x01(\x03R\x05endMs\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes:,\xc2\xf3\x18(\n" +
-	"\x17recording.chapter_ready\x10\x02\x18\x01\"\tartifacts\"\xaf\x02\n" +
+	"\x1eevents/internal/v1/media.proto\x12\x1dframeworks.events.internal.v1\x1a\x14events/options.proto\"\xaf\x02\n" +
 	"\x17ArtifactNodeCopyChanged\x12#\n" +
 	"\rartifact_hash\x18\x01 \x01(\tR\fartifactHash\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
@@ -289,21 +201,18 @@ func file_events_internal_v1_media_proto_rawDescGZIP() []byte {
 }
 
 var file_events_internal_v1_media_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_events_internal_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_events_internal_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_events_internal_v1_media_proto_goTypes = []any{
 	(NodeCopyTransition)(0),         // 0: frameworks.events.internal.v1.NodeCopyTransition
-	(*RecordingChapterReady)(nil),   // 1: frameworks.events.internal.v1.RecordingChapterReady
-	(*ArtifactNodeCopyChanged)(nil), // 2: frameworks.events.internal.v1.ArtifactNodeCopyChanged
-	(*v1.Artifact)(nil),             // 3: frameworks.events.public.v1.Artifact
+	(*ArtifactNodeCopyChanged)(nil), // 1: frameworks.events.internal.v1.ArtifactNodeCopyChanged
 }
 var file_events_internal_v1_media_proto_depIdxs = []int32{
-	3, // 0: frameworks.events.internal.v1.RecordingChapterReady.artifact:type_name -> frameworks.events.public.v1.Artifact
-	0, // 1: frameworks.events.internal.v1.ArtifactNodeCopyChanged.transition:type_name -> frameworks.events.internal.v1.NodeCopyTransition
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 0: frameworks.events.internal.v1.ArtifactNodeCopyChanged.transition:type_name -> frameworks.events.internal.v1.NodeCopyTransition
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_events_internal_v1_media_proto_init() }
@@ -317,7 +226,7 @@ func file_events_internal_v1_media_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_internal_v1_media_proto_rawDesc), len(file_events_internal_v1_media_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   2,
+			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

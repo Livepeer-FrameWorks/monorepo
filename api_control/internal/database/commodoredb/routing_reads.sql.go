@@ -8,7 +8,6 @@ package commodoredb
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 )
 
 const getArtifactRouteByContent = `-- name: GetArtifactRouteByContent :one
@@ -91,22 +90,55 @@ func (q *Queries) GetStreamLiveVideoABR(ctx context.Context, arg GetStreamLiveVi
 	return live_video_abr, err
 }
 
-const getStreamProcessingOverrides = `-- name: GetStreamProcessingOverrides :one
-SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
-FROM commodore.stream_processing_config
-WHERE stream_id = $1
+const getStreamProcessingChoices = `-- name: GetStreamProcessingChoices :one
+SELECT live_video_abr, transcode_ladder FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 `
 
-type GetStreamProcessingOverridesRow struct {
-	ProcessesLive        json.RawMessage `db:"processes_live" json:"processes_live"`
-	ProcessesDvr         json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
-	ProcessesClip        json.RawMessage `db:"processes_clip" json:"processes_clip"`
-	ProcessesDvrFinalize json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
-	ProcessesVod         json.RawMessage `db:"processes_vod" json:"processes_vod"`
+type GetStreamProcessingChoicesParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) GetStreamProcessingOverrides(ctx context.Context, streamID string) (GetStreamProcessingOverridesRow, error) {
-	row := q.db.QueryRowContext(ctx, getStreamProcessingOverrides, streamID)
+type GetStreamProcessingChoicesRow struct {
+	LiveVideoAbr    string `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder string `db:"transcode_ladder" json:"transcode_ladder"`
+}
+
+func (q *Queries) GetStreamProcessingChoices(ctx context.Context, arg GetStreamProcessingChoicesParams) (GetStreamProcessingChoicesRow, error) {
+	row := q.db.QueryRowContext(ctx, getStreamProcessingChoices, arg.ID, arg.TenantID)
+	var i GetStreamProcessingChoicesRow
+	err := row.Scan(&i.LiveVideoAbr, &i.TranscodeLadder)
+	return i, err
+}
+
+const getStreamProcessingOverrides = `-- name: GetStreamProcessingOverrides :one
+SELECT COALESCE(processing.processes_live::text, '')::text AS processes_live,
+       COALESCE(processing.processes_dvr::text, '')::text AS processes_dvr,
+       COALESCE(processing.processes_clip::text, '')::text AS processes_clip,
+       COALESCE(processing.processes_dvr_finalize::text, '')::text AS processes_dvr_finalize,
+       COALESCE(processing.processes_vod::text, '')::text AS processes_vod
+FROM commodore.stream_processing_config processing
+JOIN commodore.streams stream ON stream.id = processing.stream_id
+WHERE processing.stream_id = $1::uuid
+  AND stream.tenant_id = $2::uuid
+`
+
+type GetStreamProcessingOverridesParams struct {
+	StreamID string `db:"stream_id" json:"stream_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetStreamProcessingOverridesRow struct {
+	ProcessesLive        string `db:"processes_live" json:"processes_live"`
+	ProcessesDvr         string `db:"processes_dvr" json:"processes_dvr"`
+	ProcessesClip        string `db:"processes_clip" json:"processes_clip"`
+	ProcessesDvrFinalize string `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
+	ProcessesVod         string `db:"processes_vod" json:"processes_vod"`
+}
+
+func (q *Queries) GetStreamProcessingOverrides(ctx context.Context, arg GetStreamProcessingOverridesParams) (GetStreamProcessingOverridesRow, error) {
+	row := q.db.QueryRowContext(ctx, getStreamProcessingOverrides, arg.StreamID, arg.TenantID)
 	var i GetStreamProcessingOverridesRow
 	err := row.Scan(
 		&i.ProcessesLive,
@@ -180,17 +212,21 @@ func (q *Queries) GetStreamRouteByPlaybackID(ctx context.Context, dollar_1 strin
 }
 
 const getTenantProcessingOverrides = `-- name: GetTenantProcessingOverrides :one
-SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
+SELECT COALESCE(processes_live::text, '')::text AS processes_live,
+       COALESCE(processes_dvr::text, '')::text AS processes_dvr,
+       COALESCE(processes_clip::text, '')::text AS processes_clip,
+       COALESCE(processes_dvr_finalize::text, '')::text AS processes_dvr_finalize,
+       COALESCE(processes_vod::text, '')::text AS processes_vod
 FROM commodore.tenant_processing_config
 WHERE tenant_id = $1
 `
 
 type GetTenantProcessingOverridesRow struct {
-	ProcessesLive        json.RawMessage `db:"processes_live" json:"processes_live"`
-	ProcessesDvr         json.RawMessage `db:"processes_dvr" json:"processes_dvr"`
-	ProcessesClip        json.RawMessage `db:"processes_clip" json:"processes_clip"`
-	ProcessesDvrFinalize json.RawMessage `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
-	ProcessesVod         json.RawMessage `db:"processes_vod" json:"processes_vod"`
+	ProcessesLive        string `db:"processes_live" json:"processes_live"`
+	ProcessesDvr         string `db:"processes_dvr" json:"processes_dvr"`
+	ProcessesClip        string `db:"processes_clip" json:"processes_clip"`
+	ProcessesDvrFinalize string `db:"processes_dvr_finalize" json:"processes_dvr_finalize"`
+	ProcessesVod         string `db:"processes_vod" json:"processes_vod"`
 }
 
 func (q *Queries) GetTenantProcessingOverrides(ctx context.Context, tenantID string) (GetTenantProcessingOverridesRow, error) {
@@ -204,4 +240,33 @@ func (q *Queries) GetTenantProcessingOverrides(ctx context.Context, tenantID str
 		&i.ProcessesVod,
 	)
 	return i, err
+}
+
+const getTenantTranscodeLadder = `-- name: GetTenantTranscodeLadder :one
+SELECT transcode_ladder FROM commodore.tenant_processing_config
+WHERE tenant_id = $1
+`
+
+func (q *Queries) GetTenantTranscodeLadder(ctx context.Context, tenantID string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getTenantTranscodeLadder, tenantID)
+	var transcode_ladder sql.NullString
+	err := row.Scan(&transcode_ladder)
+	return transcode_ladder, err
+}
+
+const setTenantTranscodeLadder = `-- name: SetTenantTranscodeLadder :exec
+INSERT INTO commodore.tenant_processing_config (tenant_id, transcode_ladder, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (tenant_id) DO UPDATE
+SET transcode_ladder = EXCLUDED.transcode_ladder, updated_at = NOW()
+`
+
+type SetTenantTranscodeLadderParams struct {
+	TenantID        string         `db:"tenant_id" json:"tenant_id"`
+	TranscodeLadder sql.NullString `db:"transcode_ladder" json:"transcode_ladder"`
+}
+
+func (q *Queries) SetTenantTranscodeLadder(ctx context.Context, arg SetTenantTranscodeLadderParams) error {
+	_, err := q.db.ExecContext(ctx, setTenantTranscodeLadder, arg.TenantID, arg.TranscodeLadder)
+	return err
 }

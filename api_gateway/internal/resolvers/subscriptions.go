@@ -58,6 +58,10 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		return nil, fmt.Errorf("authentication required for stream subscriptions: %w", err)
 	}
 
+	if scopeErr := middleware.RequirePermission(ctx, "streams:read"); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	jwtToken := ""
 	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		jwtToken = token
@@ -120,6 +124,10 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 	}
 
 	// Extract JWT token from context
+	if scopeErr := middleware.RequirePermission(ctx, "analytics:read"); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	jwtToken := ""
 	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		jwtToken = token
@@ -185,6 +193,10 @@ func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-
 		return nil, fmt.Errorf("authentication required for connection subscriptions: %w", err)
 	}
 
+	if scopeErr := middleware.RequirePermission(ctx, "analytics:read"); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	jwtToken := ""
 	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		jwtToken = token
@@ -240,6 +252,10 @@ func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-cha
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("authentication required for storage subscriptions: %w", err)
+	}
+
+	if scopeErr := middleware.RequirePermission(ctx, "streams:read"); scopeErr != nil {
+		return nil, scopeErr
 	}
 
 	jwtToken := ""
@@ -299,6 +315,10 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 		return nil, fmt.Errorf("authentication required for processing subscriptions: %w", err)
 	}
 
+	if scopeErr := middleware.RequirePermission(ctx, "streams:read"); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	jwtToken := ""
 	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		jwtToken = token
@@ -326,6 +346,9 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 
 // DoSystemUpdates handles real-time system updates via WebSocket
 func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *ipcpb.NodeLifecycleUpdate, error) {
+	if err := middleware.RequirePermission(ctx, "infrastructure:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo system health subscription")
 		ch := make(chan *ipcpb.NodeLifecycleUpdate, 10)
@@ -405,6 +428,10 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 		return nil, fmt.Errorf("authentication required for track list subscriptions: %w", err)
 	}
 
+	if scopeErr := middleware.RequirePermission(ctx, "streams:read"); scopeErr != nil {
+		return nil, scopeErr
+	}
+
 	jwtToken := ""
 	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		jwtToken = token
@@ -417,6 +444,9 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 // DoMessageUpdates handles real-time message updates via WebSocket
 // Returns model.Message (mapped from MessageLifecycleData)
 func (r *Resolver) DoMessageUpdates(ctx context.Context, conversationID string) (<-chan *model.Message, error) {
+	if err := middleware.RequirePermission(ctx, "support:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo message subscription")
 		rawConversationID := conversationID
@@ -473,6 +503,9 @@ func (r *Resolver) DoMessageUpdates(ctx context.Context, conversationID string) 
 // DoConversationUpdates handles real-time conversation lifecycle updates via WebSocket
 // Returns model.Conversation (mapped from MessageLifecycleData)
 func (r *Resolver) DoConversationUpdates(ctx context.Context, conversationID *string) (<-chan *model.Conversation, error) {
+	if err := middleware.RequirePermission(ctx, "support:read"); err != nil {
+		return nil, err
+	}
 	rawConversationID := ""
 	if conversationID != nil {
 		rawConversationID = *conversationID

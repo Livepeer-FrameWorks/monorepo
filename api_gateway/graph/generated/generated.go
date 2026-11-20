@@ -702,6 +702,7 @@ type ComplexityRoot struct {
 		Description        func(childComplexity int) int
 		Duration           func(childComplexity int) int
 		EffectiveRetention func(childComplexity int) int
+		ErrorMessage       func(childComplexity int) int
 		ExpiresAt          func(childComplexity int) int
 		HasLocalCopy       func(childComplexity int) int
 		ID                 func(childComplexity int) int
@@ -745,6 +746,7 @@ type ComplexityRoot struct {
 
 	Cluster struct {
 		BaseUrl              func(childComplexity int) int
+		Capacity             func(childComplexity int) int
 		ClusterId            func(childComplexity int) int
 		ClusterName          func(childComplexity int) int
 		ClusterType          func(childComplexity int) int
@@ -811,6 +813,14 @@ type ComplexityRoot struct {
 		Role        func(childComplexity int) int
 	}
 
+	ClusterCapacity struct {
+		DefaultBudgetNodes       func(childComplexity int) int
+		EgressBudgetBytesPerSec  func(childComplexity int) int
+		EgressUsableBytesPerSec  func(childComplexity int) int
+		IngressBudgetBytesPerSec func(childComplexity int) int
+		IngressUsableBytesPerSec func(childComplexity int) int
+	}
+
 	ClusterEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
@@ -845,13 +855,17 @@ type ComplexityRoot struct {
 	}
 
 	ClusterLiveStats struct {
-		ActiveNodes         func(childComplexity int) int
-		ActiveStreams       func(childComplexity int) int
-		ClusterID           func(childComplexity int) int
-		CurrentViewers      func(childComplexity int) int
-		DownloadBytesPerSec func(childComplexity int) int
-		EgressCapacityBps   func(childComplexity int) int
-		UploadBytesPerSec   func(childComplexity int) int
+		ActiveNodes               func(childComplexity int) int
+		ActiveStreams             func(childComplexity int) int
+		ClusterID                 func(childComplexity int) int
+		CurrentViewers            func(childComplexity int) int
+		DefaultBudgetNodes        func(childComplexity int) int
+		DownloadBytesPerSec       func(childComplexity int) int
+		EgressBudgetBytesPerSec   func(childComplexity int) int
+		EgressCapacityBps         func(childComplexity int) int
+		EgressObservedBytesPerSec func(childComplexity int) int
+		EgressUsableBytesPerSec   func(childComplexity int) int
+		UploadBytesPerSec         func(childComplexity int) int
 	}
 
 	ClusterMediaCapabilities struct {
@@ -1118,6 +1132,18 @@ type ComplexityRoot struct {
 		WallClockStartUnixMs func(childComplexity int) int
 	}
 
+	DVRChapterConnection struct {
+		Edges      func(childComplexity int) int
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
+	DVRChapterEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
 	DVRChapterRef struct {
 		ChapterID         func(childComplexity int) int
 		EndMs             func(childComplexity int) int
@@ -1138,6 +1164,7 @@ type ComplexityRoot struct {
 	}
 
 	DVRRequest struct {
+		Chapters           func(childComplexity int, page *model.ConnectionInput, rangeStartMs *float64, rangeEndMs *float64) int
 		CreatedAt          func(childComplexity int) int
 		DurationSeconds    func(childComplexity int) int
 		DvrHash            func(childComplexity int) int
@@ -1379,6 +1406,7 @@ type ComplexityRoot struct {
 
 	InfrastructureNode struct {
 		AvailabilityZone     func(childComplexity int) int
+		Capacity             func(childComplexity int) int
 		ClusterId            func(childComplexity int) int
 		CpuCores             func(childComplexity int) int
 		CreatedAt            func(childComplexity int) int
@@ -1404,6 +1432,11 @@ type ComplexityRoot struct {
 		UpdatedAt            func(childComplexity int) int
 		WireguardIP          func(childComplexity int) int
 		WireguardPublicKey   func(childComplexity int) int
+	}
+
+	IngestDisconnectSuccess struct {
+		StopRequested func(childComplexity int) int
+		StreamID      func(childComplexity int) int
 	}
 
 	IngestEndpoint struct {
@@ -1880,7 +1913,9 @@ type ComplexityRoot struct {
 		DefaultVodRetentionDays    func(childComplexity int) int
 		EffectiveClipRetentionDays func(childComplexity int) int
 		EffectiveDvrRetentionDays  func(childComplexity int) int
+		EffectiveKeepVodOriginals  func(childComplexity int) int
 		EffectiveVodRetentionDays  func(childComplexity int) int
+		KeepVodOriginals           func(childComplexity int) int
 		UpdatedAt                  func(childComplexity int) int
 		UpdatedBy                  func(childComplexity int) int
 	}
@@ -1970,6 +2005,7 @@ type ComplexityRoot struct {
 		CreateStreamKey                func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
 		CreateStripeBillingPortal      func(childComplexity int, returnURL string) int
 		CreateStripeCheckout           func(childComplexity int, tierID string, billingPeriod string, successURL string, cancelURL string) int
+		CreateVodOriginalDownload      func(childComplexity int, id string) int
 		CreateVodUpload                func(childComplexity int, input model.CreateVodUploadInput) int
 		CreateWebhookEndpoint          func(childComplexity int, input model.CreateWebhookEndpointInput) int
 		CryptoTopupStatus              func(childComplexity int, topupID string) int
@@ -1980,8 +2016,10 @@ type ComplexityRoot struct {
 		DeleteStream                   func(childComplexity int, id string) int
 		DeleteStreamKey                func(childComplexity int, streamID string, keyID string) int
 		DeleteVodAsset                 func(childComplexity int, id string) int
+		DeleteVodOriginal              func(childComplexity int, id string) int
 		DeleteWebhookEndpoint          func(childComplexity int, id string) int
 		DisableWebhookEndpoint         func(childComplexity int, id string) int
+		DisconnectIngest               func(childComplexity int, streamID string) int
 		EnableWebhookEndpoint          func(childComplexity int, id string) int
 		ImportVodAsset                 func(childComplexity int, input model.ImportVodAssetInput) int
 		LinkEmail                      func(childComplexity int, input model.LinkEmailInput) int
@@ -1989,7 +2027,7 @@ type ComplexityRoot struct {
 		MarkSkipperReportsRead         func(childComplexity int, ids []string) int
 		OpenMistAdminSession           func(childComplexity int, input model.OpenMistAdminSessionInput) int
 		PromoteToPaid                  func(childComplexity int, tierID string) int
-		RefreshStreamKey               func(childComplexity int, id string) int
+		RefreshStreamKey               func(childComplexity int, id string, endActiveSession *bool) int
 		RejectClusterSubscription      func(childComplexity int, subscriptionID string, reason *string) int
 		RenameAuthSession              func(childComplexity int, id string, label string) int
 		ReplayWebhookDeliveries        func(childComplexity int, endpointID string, createdAfter time.Time, createdBefore time.Time) int
@@ -2006,10 +2044,13 @@ type ComplexityRoot struct {
 		RotateWebhookEndpointSecret    func(childComplexity int, id string, revokePrevious *bool) int
 		SendMessage                    func(childComplexity int, input model.SendMessageInput) int
 		SetMediaRetentionPolicy        func(childComplexity int, input model.SetMediaRetentionPolicyInput) int
+		SetNodeCapacity                func(childComplexity int, input model.SetNodeCapacityInput) int
 		SetNodeMode                    func(childComplexity int, input model.SetNodeModeInput) int
 		SetPlaybackPolicy              func(childComplexity int, input model.SetPlaybackPolicyInput) int
 		SetPreferredCluster            func(childComplexity int, clusterID string) int
 		SetStreamRetentionOverrides    func(childComplexity int, input model.SetStreamRetentionOverridesInput) int
+		SetTranscodeLadderPolicy       func(childComplexity int, input model.SetTranscodeLadderPolicyInput) int
+		SetVodOriginalPolicy           func(childComplexity int, keepVodOriginals *bool) int
 		StartDvr                       func(childComplexity int, streamID string) int
 		StopDvr                        func(childComplexity int, dvrHash string) int
 		SubmitX402Payment              func(childComplexity int, payment string, resource *string) int
@@ -2047,8 +2088,10 @@ type ComplexityRoot struct {
 		ClusterType        func(childComplexity int) int
 		CurrentStreams     func(childComplexity int) int
 		CurrentViewers     func(childComplexity int) int
+		DefaultBudgetNodes func(childComplexity int) int
 		EgressCapacityMbps func(childComplexity int) int
 		EgressMbps         func(childComplexity int) int
+		EgressUsableMbps   func(childComplexity int) int
 		HealthyNodeCount   func(childComplexity int) int
 		IngressMbps        func(childComplexity int) int
 		Latitude           func(childComplexity int) int
@@ -2096,6 +2139,16 @@ type ComplexityRoot struct {
 		ServiceInstances func(childComplexity int) int
 		TotalNodes       func(childComplexity int) int
 		UpdatedAt        func(childComplexity int) int
+	}
+
+	NodeCapacity struct {
+		AppliedRevision          func(childComplexity int) int
+		EgressBudgetBytesPerSec  func(childComplexity int) int
+		EgressSource             func(childComplexity int) int
+		IngressBudgetBytesPerSec func(childComplexity int) int
+		IngressSource            func(childComplexity int) int
+		Revision                 func(childComplexity int) int
+		UpdatedAt                func(childComplexity int) int
 	}
 
 	NodeEdge struct {
@@ -2717,6 +2770,7 @@ type ComplexityRoot struct {
 		DiscoverServicesConnection      func(childComplexity int, page *model.ConnectionInput, typeArg string, clusterID *string) int
 		DvrChapter                      func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) int
 		DvrChapters                     func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) int
+		DvrRecording                    func(childComplexity int, id string) int
 		Incident                        func(childComplexity int, id string) int
 		IncidentsConnection             func(childComplexity int, page *model.ConnectionInput, filter *model.IncidentFilterInput) int
 		Invoice                         func(childComplexity int, id string) int
@@ -2770,6 +2824,7 @@ type ComplexityRoot struct {
 		StreamsConnection               func(childComplexity int, page *model.ConnectionInput, search *string) int
 		Tenant                          func(childComplexity int) int
 		TenantUsage                     func(childComplexity int, timeRange *model.TimeRangeInput) int
+		TranscodeLadderPolicy           func(childComplexity int) int
 		UsageAggregates                 func(childComplexity int, timeRange model.TimeRangeInput, granularity *string, usageTypes []string) int
 		UsageRecordsConnection          func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput) int
 		ValidateStreamKey               func(childComplexity int, streamKey string) int
@@ -2816,6 +2871,14 @@ type ComplexityRoot struct {
 		ChapterId func(childComplexity int) int
 		EndMs     func(childComplexity int) int
 		Reason    func(childComplexity int) int
+		StartMs   func(childComplexity int) int
+	}
+
+	RecordingChapterReady struct {
+		Artifact  func(childComplexity int) int
+		ChapterId func(childComplexity int) int
+		EndMs     func(childComplexity int) int
+		SizeBytes func(childComplexity int) int
 		StartMs   func(childComplexity int) int
 	}
 
@@ -3151,6 +3214,9 @@ type ComplexityRoot struct {
 		IsSynced           func(childComplexity int) int
 		Key                func(childComplexity int) int
 		Kind               func(childComplexity int) int
+		OriginType         func(childComplexity int) int
+		OriginalFile       func(childComplexity int) int
+		ParentRecordingID  func(childComplexity int) int
 		PlaybackID         func(childComplexity int) int
 		RetentionID        func(childComplexity int) int
 		SecondaryLabel     func(childComplexity int) int
@@ -3266,11 +3332,13 @@ type ComplexityRoot struct {
 	}
 
 	Stream struct {
+		Clips                     func(childComplexity int, page *model.ConnectionInput) int
 		CreatedAt                 func(childComplexity int) int
 		Description               func(childComplexity int) int
 		DvrChapterIntervalSeconds func(childComplexity int) int
 		DvrChapterMode            func(childComplexity int) int
 		ID                        func(childComplexity int) int
+		Ingest                    func(childComplexity int) int
 		IngestMode                func(childComplexity int) int
 		LiveVideoAbr              func(childComplexity int) int
 		ManagedSource             func(childComplexity int) int
@@ -3283,11 +3351,13 @@ type ComplexityRoot struct {
 		PushTargets               func(childComplexity int) int
 		RecentPullSourceEvents    func(childComplexity int, limit *int) int
 		Record                    func(childComplexity int) int
+		Recordings                func(childComplexity int, page *model.ConnectionInput) int
 		RetentionOverrides        func(childComplexity int) int
 		SourceLocation            func(childComplexity int) int
 		StreamId                  func(childComplexity int) int
 		StreamKey                 func(childComplexity int) int
 		ThumbnailAssets           func(childComplexity int) int
+		TranscodeLadder           func(childComplexity int) int
 		UpdatedAt                 func(childComplexity int) int
 	}
 
@@ -3355,9 +3425,22 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	StreamArtifactEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	StreamArtifactsConnection struct {
+		Edges      func(childComplexity int) int
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
 	StreamConnected struct {
 		PlaybackId func(childComplexity int) int
 		Protocol   func(childComplexity int) int
+		SessionId  func(childComplexity int) int
 		StreamId   func(childComplexity int) int
 	}
 
@@ -3396,6 +3479,12 @@ type ComplexityRoot struct {
 	StreamEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	StreamEnded struct {
+		PlaybackId func(childComplexity int) int
+		SessionId  func(childComplexity int) int
+		StreamId   func(childComplexity int) int
 	}
 
 	StreamEvent struct {
@@ -3537,7 +3626,24 @@ type ComplexityRoot struct {
 
 	StreamIdle struct {
 		PlaybackId func(childComplexity int) int
+		SessionId  func(childComplexity int) int
 		StreamId   func(childComplexity int) int
+	}
+
+	StreamIngest struct {
+		ConnectedAt    func(childComplexity int) int
+		EndedAt        func(childComplexity int) int
+		IsLive         func(childComplexity int) int
+		LiveSince      func(childComplexity int) int
+		ResumableUntil func(childComplexity int) int
+		SessionID      func(childComplexity int) int
+		State          func(childComplexity int) int
+	}
+
+	StreamIngestDisconnected struct {
+		Reason    func(childComplexity int) int
+		SessionId func(childComplexity int) int
+		StreamId  func(childComplexity int) int
 	}
 
 	StreamKey struct {
@@ -3569,6 +3675,7 @@ type ComplexityRoot struct {
 
 	StreamLive struct {
 		PlaybackId func(childComplexity int) int
+		SessionId  func(childComplexity int) int
 		StreamId   func(childComplexity int) int
 	}
 
@@ -3951,6 +4058,20 @@ type ComplexityRoot struct {
 		VideoTrackCount        func(childComplexity int) int
 	}
 
+	TranscodeLadder struct {
+		Description    func(childComplexity int) int
+		DisplayName    func(childComplexity int) int
+		Name           func(childComplexity int) int
+		RenditionNames func(childComplexity int) int
+	}
+
+	TranscodeLadderPolicy struct {
+		EffectiveLadder func(childComplexity int) int
+		Ladders         func(childComplexity int) int
+		PlanDefault     func(childComplexity int) int
+		TenantLadder    func(childComplexity int) int
+	}
+
 	UploadAborted struct {
 		Artifact func(childComplexity int) int
 	}
@@ -4218,6 +4339,7 @@ type ComplexityRoot struct {
 		IsSynced           func(childComplexity int) int
 		OriginID           func(childComplexity int) int
 		OriginType         func(childComplexity int) int
+		OriginalFile       func(childComplexity int) int
 		PlaybackID         func(childComplexity int) int
 		PlaybackPolicy     func(childComplexity int) int
 		Resolution         func(childComplexity int) int
@@ -4231,6 +4353,17 @@ type ComplexityRoot struct {
 		Title              func(childComplexity int) int
 		UpdatedAt          func(childComplexity int) int
 		VideoCodec         func(childComplexity int) int
+	}
+
+	VodOriginalDownload struct {
+		ExpiresAt func(childComplexity int) int
+		Filename  func(childComplexity int) int
+		SizeBytes func(childComplexity int) int
+		URL       func(childComplexity int) int
+	}
+
+	VodOriginalFile struct {
+		SizeBytes func(childComplexity int) int
 	}
 
 	VodRetention struct {
@@ -4277,6 +4410,7 @@ type ComplexityRoot struct {
 		ArtifactID   func(childComplexity int) int
 		ExpiresAt    func(childComplexity int) int
 		ID           func(childComplexity int) int
+		KeepOriginal func(childComplexity int) int
 		PartSize     func(childComplexity int) int
 		Parts        func(childComplexity int) int
 		PlaybackID   func(childComplexity int) int
@@ -4606,11 +4740,14 @@ type ClipResolver interface {
 	StoragePath(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error)
 	SizeBytes(ctx context.Context, obj *sharedpb.ClipInfo) (*float64, error)
 	Status(ctx context.Context, obj *sharedpb.ClipInfo) (string, error)
+
 	CreatedAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
 
 	RequestedParams(ctx context.Context, obj *sharedpb.ClipInfo) (interface{}, error)
 	StorageLocation(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error)
+
+	HasLocalCopy(ctx context.Context, obj *sharedpb.ClipInfo) (*bool, error)
 
 	ExpiresAt(ctx context.Context, obj *sharedpb.ClipInfo) (*time.Time, error)
 	IsExpired(ctx context.Context, obj *sharedpb.ClipInfo) (bool, error)
@@ -4621,6 +4758,9 @@ type ClipResolver interface {
 }
 type ClusterResolver interface {
 	ID(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (string, error)
+
+	MaxBandwidthMbps(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (int, error)
+	Capacity(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (*model.ClusterCapacity, error)
 
 	IsSubscribed(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (bool, error)
 	CreatedAt(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (*time.Time, error)
@@ -4669,6 +4809,8 @@ type CountryMetricResolver interface {
 	Percentage(ctx context.Context, obj *periscopepb.CountryMetric) (float64, error)
 }
 type DVRRequestResolver interface {
+	Chapters(ctx context.Context, obj *sharedpb.DVRInfo, page *model.ConnectionInput, rangeStartMs *float64, rangeEndMs *float64) (*model.DVRChapterConnection, error)
+
 	StreamID(ctx context.Context, obj *sharedpb.DVRInfo) (string, error)
 	SourceStreamID(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error)
 	Stream(ctx context.Context, obj *sharedpb.DVRInfo) (*commodorepb.Stream, error)
@@ -4688,6 +4830,8 @@ type DVRRequestResolver interface {
 	ManifestPath(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error)
 	ErrorMessage(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error)
 	StorageLocation(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error)
+
+	HasLocalCopy(ctx context.Context, obj *sharedpb.DVRInfo) (*bool, error)
 
 	FrozenAt(ctx context.Context, obj *sharedpb.DVRInfo) (*time.Time, error)
 	S3Url(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error)
@@ -4746,6 +4890,7 @@ type InfrastructureNodeResolver interface {
 	LiveState(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*periscopepb.LiveNode, error)
 	EffectiveMode(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (model.NodeOperationalMode, error)
 	RoutingImpactPreview(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*model.RoutingImpactPreview, error)
+	Capacity(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*model.NodeCapacity, error)
 }
 type IngestMetadataResolver interface {
 	StreamID(ctx context.Context, obj *sharedpb.IngestMetadata) (string, error)
@@ -4828,7 +4973,8 @@ type MutationResolver interface {
 	CreateStream(ctx context.Context, input model.CreateStreamInput) (model.CreateStreamResult, error)
 	UpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (model.UpdateStreamResult, error)
 	DeleteStream(ctx context.Context, id string) (model.DeleteStreamResult, error)
-	RefreshStreamKey(ctx context.Context, id string) (model.UpdateStreamResult, error)
+	RefreshStreamKey(ctx context.Context, id string, endActiveSession *bool) (model.UpdateStreamResult, error)
+	DisconnectIngest(ctx context.Context, streamID string) (model.DisconnectIngestResult, error)
 	CreateClip(ctx context.Context, input model.CreateClipInput) (model.CreateClipResult, error)
 	DeleteClip(ctx context.Context, id string) (model.DeleteClipResult, error)
 	StartDvr(ctx context.Context, streamID string) (model.StartDVRResult, error)
@@ -4897,9 +5043,14 @@ type MutationResolver interface {
 	CreateConversation(ctx context.Context, input model.CreateConversationInput) (model.CreateConversationResult, error)
 	SendMessage(ctx context.Context, input model.SendMessageInput) (model.SendMessageResult, error)
 	SetNodeMode(ctx context.Context, input model.SetNodeModeInput) (model.SetNodeModeResult, error)
+	SetNodeCapacity(ctx context.Context, input model.SetNodeCapacityInput) (model.SetNodeCapacityResult, error)
 	OpenMistAdminSession(ctx context.Context, input model.OpenMistAdminSessionInput) (model.OpenMistAdminSessionResult, error)
 	TestPlaybackAccess(ctx context.Context, input model.TestPlaybackAccessInput) (model.TestPlaybackAccessResult, error)
 	SetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error)
+	SetTranscodeLadderPolicy(ctx context.Context, input model.SetTranscodeLadderPolicyInput) (model.SetTranscodeLadderPolicyResult, error)
+	SetVodOriginalPolicy(ctx context.Context, keepVodOriginals *bool) (model.SetMediaRetentionPolicyResult, error)
+	CreateVodOriginalDownload(ctx context.Context, id string) (model.CreateVodOriginalDownloadResult, error)
+	DeleteVodOriginal(ctx context.Context, id string) (model.DeleteVodOriginalResult, error)
 	ApplyMediaPlacementChange(ctx context.Context, input model.ApplyMediaPlacementChangeInput) (model.MediaPlacementChangeResult, error)
 	ApplyClusterMediaConsentChange(ctx context.Context, input model.ApplyMediaCapacityConsentInput) (model.MediaCapacityConsentChangeResult, error)
 	AcknowledgeIncident(ctx context.Context, id string) (model.IncidentMutationResult, error)
@@ -5188,6 +5339,7 @@ type QueryResolver interface {
 	BootstrapTokensConnection(ctx context.Context, page *model.ConnectionInput, kind *string) (*model.BootstrapTokenConnection, error)
 	DvrChapter(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) (*model.DVRChapter, error)
 	DvrChapters(ctx context.Context, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) (*model.DVRChaptersPage, error)
+	DvrRecording(ctx context.Context, id string) (*sharedpb.DVRInfo, error)
 	VodAsset(ctx context.Context, id string) (*model.VodAsset, error)
 	StorageArtifactsConnection(ctx context.Context, input *model.StorageArtifactsInput) (*model.StorageArtifactsConnection, error)
 	VodUploadStatus(ctx context.Context, uploadID string) (model.VodUploadStatusResult, error)
@@ -5202,6 +5354,7 @@ type QueryResolver interface {
 	Conversation(ctx context.Context, id string) (*model.Conversation, error)
 	MessagesConnection(ctx context.Context, conversationID string, page *model.ConnectionInput) (*model.MessagesConnection, error)
 	MediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error)
+	TranscodeLadderPolicy(ctx context.Context) (*model.TranscodeLadderPolicy, error)
 	MediaPlacementPolicy(ctx context.Context, scope model.MediaPlacementScopeInput) (model.MediaPlacementPolicyResult, error)
 	MediaPlacementOptions(ctx context.Context, scope model.MediaPlacementScopeInput, filter *model.MediaPlacementOptionsFilter, after *string, first *int) (model.MediaPlacementOptionsResult, error)
 	PreviewMediaPlacement(ctx context.Context, input model.PreviewMediaPlacementInput) (model.MediaPlacementPreviewResult, error)
@@ -5301,7 +5454,10 @@ type StreamResolver interface {
 	SourceLocation(ctx context.Context, obj *commodorepb.Stream) (*model.SourceLocation, error)
 	CreatedAt(ctx context.Context, obj *commodorepb.Stream) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *commodorepb.Stream) (*time.Time, error)
+	Ingest(ctx context.Context, obj *commodorepb.Stream) (*model.StreamIngest, error)
 	Metrics(ctx context.Context, obj *commodorepb.Stream) (*periscopepb.StreamStatusResponse, error)
+	Recordings(ctx context.Context, obj *commodorepb.Stream, page *model.ConnectionInput) (*model.StreamArtifactsConnection, error)
+	Clips(ctx context.Context, obj *commodorepb.Stream, page *model.ConnectionInput) (*model.StreamArtifactsConnection, error)
 	PushTargets(ctx context.Context, obj *commodorepb.Stream) ([]*commodorepb.PushTarget, error)
 	PlaybackPolicy(ctx context.Context, obj *commodorepb.Stream) (*model.PlaybackPolicy, error)
 	DvrChapterMode(ctx context.Context, obj *commodorepb.Stream) (*model.DVRChapterMode, error)
@@ -8041,6 +8197,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Clip.EffectiveRetention(childComplexity), true
+	case "Clip.errorMessage":
+		if e.ComplexityRoot.Clip.ErrorMessage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Clip.ErrorMessage(childComplexity), true
 	case "Clip.expiresAt":
 		if e.ComplexityRoot.Clip.ExpiresAt == nil {
 			break
@@ -8231,6 +8393,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Cluster.BaseUrl(childComplexity), true
+	case "Cluster.capacity":
+		if e.ComplexityRoot.Cluster.Capacity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Cluster.Capacity(childComplexity), true
 	case "Cluster.clusterId":
 		if e.ComplexityRoot.Cluster.ClusterId == nil {
 			break
@@ -8536,6 +8704,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ClusterCapabilities.Role(childComplexity), true
 
+	case "ClusterCapacity.defaultBudgetNodes":
+		if e.ComplexityRoot.ClusterCapacity.DefaultBudgetNodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterCapacity.DefaultBudgetNodes(childComplexity), true
+	case "ClusterCapacity.egressBudgetBytesPerSec":
+		if e.ComplexityRoot.ClusterCapacity.EgressBudgetBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterCapacity.EgressBudgetBytesPerSec(childComplexity), true
+	case "ClusterCapacity.egressUsableBytesPerSec":
+		if e.ComplexityRoot.ClusterCapacity.EgressUsableBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterCapacity.EgressUsableBytesPerSec(childComplexity), true
+	case "ClusterCapacity.ingressBudgetBytesPerSec":
+		if e.ComplexityRoot.ClusterCapacity.IngressBudgetBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterCapacity.IngressBudgetBytesPerSec(childComplexity), true
+	case "ClusterCapacity.ingressUsableBytesPerSec":
+		if e.ComplexityRoot.ClusterCapacity.IngressUsableBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterCapacity.IngressUsableBytesPerSec(childComplexity), true
+
 	case "ClusterEdge.cursor":
 		if e.ComplexityRoot.ClusterEdge.Cursor == nil {
 			break
@@ -8690,18 +8889,42 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ClusterLiveStats.CurrentViewers(childComplexity), true
+	case "ClusterLiveStats.defaultBudgetNodes":
+		if e.ComplexityRoot.ClusterLiveStats.DefaultBudgetNodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterLiveStats.DefaultBudgetNodes(childComplexity), true
 	case "ClusterLiveStats.downloadBytesPerSec":
 		if e.ComplexityRoot.ClusterLiveStats.DownloadBytesPerSec == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ClusterLiveStats.DownloadBytesPerSec(childComplexity), true
+	case "ClusterLiveStats.egressBudgetBytesPerSec":
+		if e.ComplexityRoot.ClusterLiveStats.EgressBudgetBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterLiveStats.EgressBudgetBytesPerSec(childComplexity), true
 	case "ClusterLiveStats.egressCapacityBps":
 		if e.ComplexityRoot.ClusterLiveStats.EgressCapacityBps == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ClusterLiveStats.EgressCapacityBps(childComplexity), true
+	case "ClusterLiveStats.egressObservedBytesPerSec":
+		if e.ComplexityRoot.ClusterLiveStats.EgressObservedBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterLiveStats.EgressObservedBytesPerSec(childComplexity), true
+	case "ClusterLiveStats.egressUsableBytesPerSec":
+		if e.ComplexityRoot.ClusterLiveStats.EgressUsableBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterLiveStats.EgressUsableBytesPerSec(childComplexity), true
 	case "ClusterLiveStats.uploadBytesPerSec":
 		if e.ComplexityRoot.ClusterLiveStats.UploadBytesPerSec == nil {
 			break
@@ -9800,6 +10023,44 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DVRChapter.WallClockStartUnixMs(childComplexity), true
 
+	case "DVRChapterConnection.edges":
+		if e.ComplexityRoot.DVRChapterConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterConnection.Edges(childComplexity), true
+	case "DVRChapterConnection.nodes":
+		if e.ComplexityRoot.DVRChapterConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterConnection.Nodes(childComplexity), true
+	case "DVRChapterConnection.pageInfo":
+		if e.ComplexityRoot.DVRChapterConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterConnection.PageInfo(childComplexity), true
+	case "DVRChapterConnection.totalCount":
+		if e.ComplexityRoot.DVRChapterConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterConnection.TotalCount(childComplexity), true
+
+	case "DVRChapterEdge.cursor":
+		if e.ComplexityRoot.DVRChapterEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterEdge.Cursor(childComplexity), true
+	case "DVRChapterEdge.node":
+		if e.ComplexityRoot.DVRChapterEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DVRChapterEdge.Node(childComplexity), true
+
 	case "DVRChapterRef.chapterId":
 		if e.ComplexityRoot.DVRChapterRef.ChapterID == nil {
 			break
@@ -9880,6 +10141,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DVRChaptersPage.NextPageToken(childComplexity), true
 
+	case "DVRRequest.chapters":
+		if e.ComplexityRoot.DVRRequest.Chapters == nil {
+			break
+		}
+
+		args, err := ec.field_DVRRequest_chapters_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.DVRRequest.Chapters(childComplexity, args["page"].(*model.ConnectionInput), args["rangeStartMs"].(*float64), args["rangeEndMs"].(*float64)), true
 	case "DVRRequest.createdAt":
 		if e.ComplexityRoot.DVRRequest.CreatedAt == nil {
 			break
@@ -10901,6 +11173,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.InfrastructureNode.AvailabilityZone(childComplexity), true
+	case "InfrastructureNode.capacity":
+		if e.ComplexityRoot.InfrastructureNode.Capacity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.InfrastructureNode.Capacity(childComplexity), true
 	case "InfrastructureNode.clusterId":
 		if e.ComplexityRoot.InfrastructureNode.ClusterId == nil {
 			break
@@ -11061,6 +11339,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.InfrastructureNode.WireguardPublicKey(childComplexity), true
+
+	case "IngestDisconnectSuccess.stopRequested":
+		if e.ComplexityRoot.IngestDisconnectSuccess.StopRequested == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngestDisconnectSuccess.StopRequested(childComplexity), true
+	case "IngestDisconnectSuccess.streamId":
+		if e.ComplexityRoot.IngestDisconnectSuccess.StreamID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngestDisconnectSuccess.StreamID(childComplexity), true
 
 	case "IngestEndpoint.baseUrl":
 		if e.ComplexityRoot.IngestEndpoint.BaseUrl == nil {
@@ -13067,12 +13358,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.MediaRetentionPolicy.EffectiveDvrRetentionDays(childComplexity), true
+	case "MediaRetentionPolicy.effectiveKeepVodOriginals":
+		if e.ComplexityRoot.MediaRetentionPolicy.EffectiveKeepVodOriginals == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaRetentionPolicy.EffectiveKeepVodOriginals(childComplexity), true
 	case "MediaRetentionPolicy.effectiveVodRetentionDays":
 		if e.ComplexityRoot.MediaRetentionPolicy.EffectiveVodRetentionDays == nil {
 			break
 		}
 
 		return e.ComplexityRoot.MediaRetentionPolicy.EffectiveVodRetentionDays(childComplexity), true
+	case "MediaRetentionPolicy.keepVodOriginals":
+		if e.ComplexityRoot.MediaRetentionPolicy.KeepVodOriginals == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaRetentionPolicy.KeepVodOriginals(childComplexity), true
 	case "MediaRetentionPolicy.updatedAt":
 		if e.ComplexityRoot.MediaRetentionPolicy.UpdatedAt == nil {
 			break
@@ -13604,6 +13907,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateStripeCheckout(childComplexity, args["tierId"].(string), args["billingPeriod"].(string), args["successUrl"].(string), args["cancelUrl"].(string)), true
+	case "Mutation.createVodOriginalDownload":
+		if e.ComplexityRoot.Mutation.CreateVodOriginalDownload == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createVodOriginalDownload_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateVodOriginalDownload(childComplexity, args["id"].(string)), true
 	case "Mutation.createVodUpload":
 		if e.ComplexityRoot.Mutation.CreateVodUpload == nil {
 			break
@@ -13714,6 +14028,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteVodAsset(childComplexity, args["id"].(string)), true
+	case "Mutation.deleteVodOriginal":
+		if e.ComplexityRoot.Mutation.DeleteVodOriginal == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteVodOriginal_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteVodOriginal(childComplexity, args["id"].(string)), true
 	case "Mutation.deleteWebhookEndpoint":
 		if e.ComplexityRoot.Mutation.DeleteWebhookEndpoint == nil {
 			break
@@ -13736,6 +14061,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DisableWebhookEndpoint(childComplexity, args["id"].(string)), true
+	case "Mutation.disconnectIngest":
+		if e.ComplexityRoot.Mutation.DisconnectIngest == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_disconnectIngest_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DisconnectIngest(childComplexity, args["streamId"].(string)), true
 	case "Mutation.enableWebhookEndpoint":
 		if e.ComplexityRoot.Mutation.EnableWebhookEndpoint == nil {
 			break
@@ -13823,7 +14159,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.RefreshStreamKey(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Mutation.RefreshStreamKey(childComplexity, args["id"].(string), args["endActiveSession"].(*bool)), true
 	case "Mutation.rejectClusterSubscription":
 		if e.ComplexityRoot.Mutation.RejectClusterSubscription == nil {
 			break
@@ -13995,6 +14331,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SetMediaRetentionPolicy(childComplexity, args["input"].(model.SetMediaRetentionPolicyInput)), true
+	case "Mutation.setNodeCapacity":
+		if e.ComplexityRoot.Mutation.SetNodeCapacity == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setNodeCapacity_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetNodeCapacity(childComplexity, args["input"].(model.SetNodeCapacityInput)), true
 	case "Mutation.setNodeMode":
 		if e.ComplexityRoot.Mutation.SetNodeMode == nil {
 			break
@@ -14039,6 +14386,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SetStreamRetentionOverrides(childComplexity, args["input"].(model.SetStreamRetentionOverridesInput)), true
+	case "Mutation.setTranscodeLadderPolicy":
+		if e.ComplexityRoot.Mutation.SetTranscodeLadderPolicy == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setTranscodeLadderPolicy_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetTranscodeLadderPolicy(childComplexity, args["input"].(model.SetTranscodeLadderPolicyInput)), true
+	case "Mutation.setVodOriginalPolicy":
+		if e.ComplexityRoot.Mutation.SetVodOriginalPolicy == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setVodOriginalPolicy_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetVodOriginalPolicy(childComplexity, args["keepVodOriginals"].(*bool)), true
 	case "Mutation.startDVR":
 		if e.ComplexityRoot.Mutation.StartDvr == nil {
 			break
@@ -14300,6 +14669,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NetworkClusterStatus.CurrentViewers(childComplexity), true
+	case "NetworkClusterStatus.defaultBudgetNodes":
+		if e.ComplexityRoot.NetworkClusterStatus.DefaultBudgetNodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NetworkClusterStatus.DefaultBudgetNodes(childComplexity), true
 	case "NetworkClusterStatus.egressCapacityMbps":
 		if e.ComplexityRoot.NetworkClusterStatus.EgressCapacityMbps == nil {
 			break
@@ -14312,6 +14687,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NetworkClusterStatus.EgressMbps(childComplexity), true
+	case "NetworkClusterStatus.egressUsableMbps":
+		if e.ComplexityRoot.NetworkClusterStatus.EgressUsableMbps == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NetworkClusterStatus.EgressUsableMbps(childComplexity), true
 	case "NetworkClusterStatus.healthyNodeCount":
 		if e.ComplexityRoot.NetworkClusterStatus.HealthyNodeCount == nil {
 			break
@@ -14526,6 +14907,49 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NetworkStatus.UpdatedAt(childComplexity), true
+
+	case "NodeCapacity.appliedRevision":
+		if e.ComplexityRoot.NodeCapacity.AppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.AppliedRevision(childComplexity), true
+	case "NodeCapacity.egressBudgetBytesPerSec":
+		if e.ComplexityRoot.NodeCapacity.EgressBudgetBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.EgressBudgetBytesPerSec(childComplexity), true
+	case "NodeCapacity.egressSource":
+		if e.ComplexityRoot.NodeCapacity.EgressSource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.EgressSource(childComplexity), true
+	case "NodeCapacity.ingressBudgetBytesPerSec":
+		if e.ComplexityRoot.NodeCapacity.IngressBudgetBytesPerSec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.IngressBudgetBytesPerSec(childComplexity), true
+	case "NodeCapacity.ingressSource":
+		if e.ComplexityRoot.NodeCapacity.IngressSource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.IngressSource(childComplexity), true
+	case "NodeCapacity.revision":
+		if e.ComplexityRoot.NodeCapacity.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.Revision(childComplexity), true
+	case "NodeCapacity.updatedAt":
+		if e.ComplexityRoot.NodeCapacity.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NodeCapacity.UpdatedAt(childComplexity), true
 
 	case "NodeEdge.cursor":
 		if e.ComplexityRoot.NodeEdge.Cursor == nil {
@@ -17459,6 +17883,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.DvrChapters(childComplexity, args["dvrId"].(string), args["mode"].(*model.DVRChapterMode), args["intervalSeconds"].(*int), args["rangeStartMs"].(*float64), args["rangeEndMs"].(*float64), args["pageSize"].(*int), args["pageToken"].(*string)), true
+	case "Query.dvrRecording":
+		if e.ComplexityRoot.Query.DvrRecording == nil {
+			break
+		}
+
+		args, err := ec.field_Query_dvrRecording_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.DvrRecording(childComplexity, args["id"].(string)), true
 	case "Query.incident":
 		if e.ComplexityRoot.Query.Incident == nil {
 			break
@@ -17993,6 +18428,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.TenantUsage(childComplexity, args["timeRange"].(*model.TimeRangeInput)), true
+	case "Query.transcodeLadderPolicy":
+		if e.ComplexityRoot.Query.TranscodeLadderPolicy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.TranscodeLadderPolicy(childComplexity), true
 	case "Query.usageAggregates":
 		if e.ComplexityRoot.Query.UsageAggregates == nil {
 			break
@@ -18235,6 +18676,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RecordingChapterFailed.StartMs(childComplexity), true
+
+	case "RecordingChapterReady.artifact":
+		if e.ComplexityRoot.RecordingChapterReady.Artifact == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterReady.Artifact(childComplexity), true
+	case "RecordingChapterReady.chapterId":
+		if e.ComplexityRoot.RecordingChapterReady.ChapterId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterReady.ChapterId(childComplexity), true
+	case "RecordingChapterReady.endMs":
+		if e.ComplexityRoot.RecordingChapterReady.EndMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterReady.EndMs(childComplexity), true
+	case "RecordingChapterReady.sizeBytes":
+		if e.ComplexityRoot.RecordingChapterReady.SizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterReady.SizeBytes(childComplexity), true
+	case "RecordingChapterReady.startMs":
+		if e.ComplexityRoot.RecordingChapterReady.StartMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterReady.StartMs(childComplexity), true
 
 	case "RecordingFailed.artifact":
 		if e.ComplexityRoot.RecordingFailed.Artifact == nil {
@@ -19491,6 +19963,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StorageArtifact.Kind(childComplexity), true
+	case "StorageArtifact.originType":
+		if e.ComplexityRoot.StorageArtifact.OriginType == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageArtifact.OriginType(childComplexity), true
+	case "StorageArtifact.originalFile":
+		if e.ComplexityRoot.StorageArtifact.OriginalFile == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageArtifact.OriginalFile(childComplexity), true
+	case "StorageArtifact.parentRecordingId":
+		if e.ComplexityRoot.StorageArtifact.ParentRecordingID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageArtifact.ParentRecordingID(childComplexity), true
 	case "StorageArtifact.playbackId":
 		if e.ComplexityRoot.StorageArtifact.PlaybackID == nil {
 			break
@@ -19982,6 +20472,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StorageUsageRecord.VodBytes(childComplexity), true
 
+	case "Stream.clips":
+		if e.ComplexityRoot.Stream.Clips == nil {
+			break
+		}
+
+		args, err := ec.field_Stream_clips_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Stream.Clips(childComplexity, args["page"].(*model.ConnectionInput)), true
 	case "Stream.createdAt":
 		if e.ComplexityRoot.Stream.CreatedAt == nil {
 			break
@@ -20012,6 +20513,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.ID(childComplexity), true
+	case "Stream.ingest":
+		if e.ComplexityRoot.Stream.Ingest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Stream.Ingest(childComplexity), true
 	case "Stream.ingestMode":
 		if e.ComplexityRoot.Stream.IngestMode == nil {
 			break
@@ -20089,6 +20596,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.Record(childComplexity), true
+	case "Stream.recordings":
+		if e.ComplexityRoot.Stream.Recordings == nil {
+			break
+		}
+
+		args, err := ec.field_Stream_recordings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Stream.Recordings(childComplexity, args["page"].(*model.ConnectionInput)), true
 	case "Stream.retentionOverrides":
 		if e.ComplexityRoot.Stream.RetentionOverrides == nil {
 			break
@@ -20119,6 +20637,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.ThumbnailAssets(childComplexity), true
+	case "Stream.transcodeLadder":
+		if e.ComplexityRoot.Stream.TranscodeLadder == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Stream.TranscodeLadder(childComplexity), true
 	case "Stream.updatedAt":
 		if e.ComplexityRoot.Stream.UpdatedAt == nil {
 			break
@@ -20408,6 +20932,44 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StreamAnalyticsSummaryEdge.Node(childComplexity), true
 
+	case "StreamArtifactEdge.cursor":
+		if e.ComplexityRoot.StreamArtifactEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactEdge.Cursor(childComplexity), true
+	case "StreamArtifactEdge.node":
+		if e.ComplexityRoot.StreamArtifactEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactEdge.Node(childComplexity), true
+
+	case "StreamArtifactsConnection.edges":
+		if e.ComplexityRoot.StreamArtifactsConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactsConnection.Edges(childComplexity), true
+	case "StreamArtifactsConnection.nodes":
+		if e.ComplexityRoot.StreamArtifactsConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactsConnection.Nodes(childComplexity), true
+	case "StreamArtifactsConnection.pageInfo":
+		if e.ComplexityRoot.StreamArtifactsConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactsConnection.PageInfo(childComplexity), true
+	case "StreamArtifactsConnection.totalCount":
+		if e.ComplexityRoot.StreamArtifactsConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamArtifactsConnection.TotalCount(childComplexity), true
+
 	case "StreamConnected.playbackId":
 		if e.ComplexityRoot.StreamConnected.PlaybackId == nil {
 			break
@@ -20420,6 +20982,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamConnected.Protocol(childComplexity), true
+	case "StreamConnected.sessionId":
+		if e.ComplexityRoot.StreamConnected.SessionId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamConnected.SessionId(childComplexity), true
 	case "StreamConnected.streamId":
 		if e.ComplexityRoot.StreamConnected.StreamId == nil {
 			break
@@ -20546,6 +21114,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamEdge.Node(childComplexity), true
+
+	case "StreamEnded.playbackId":
+		if e.ComplexityRoot.StreamEnded.PlaybackId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamEnded.PlaybackId(childComplexity), true
+	case "StreamEnded.sessionId":
+		if e.ComplexityRoot.StreamEnded.SessionId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamEnded.SessionId(childComplexity), true
+	case "StreamEnded.streamId":
+		if e.ComplexityRoot.StreamEnded.StreamId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamEnded.StreamId(childComplexity), true
 
 	case "StreamEvent.bufferState":
 		if e.ComplexityRoot.StreamEvent.BufferState == nil {
@@ -21205,12 +21792,80 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamIdle.PlaybackId(childComplexity), true
+	case "StreamIdle.sessionId":
+		if e.ComplexityRoot.StreamIdle.SessionId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIdle.SessionId(childComplexity), true
 	case "StreamIdle.streamId":
 		if e.ComplexityRoot.StreamIdle.StreamId == nil {
 			break
 		}
 
 		return e.ComplexityRoot.StreamIdle.StreamId(childComplexity), true
+
+	case "StreamIngest.connectedAt":
+		if e.ComplexityRoot.StreamIngest.ConnectedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.ConnectedAt(childComplexity), true
+	case "StreamIngest.endedAt":
+		if e.ComplexityRoot.StreamIngest.EndedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.EndedAt(childComplexity), true
+	case "StreamIngest.isLive":
+		if e.ComplexityRoot.StreamIngest.IsLive == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.IsLive(childComplexity), true
+	case "StreamIngest.liveSince":
+		if e.ComplexityRoot.StreamIngest.LiveSince == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.LiveSince(childComplexity), true
+	case "StreamIngest.resumableUntil":
+		if e.ComplexityRoot.StreamIngest.ResumableUntil == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.ResumableUntil(childComplexity), true
+	case "StreamIngest.sessionId":
+		if e.ComplexityRoot.StreamIngest.SessionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.SessionID(childComplexity), true
+	case "StreamIngest.state":
+		if e.ComplexityRoot.StreamIngest.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngest.State(childComplexity), true
+
+	case "StreamIngestDisconnected.reason":
+		if e.ComplexityRoot.StreamIngestDisconnected.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngestDisconnected.Reason(childComplexity), true
+	case "StreamIngestDisconnected.sessionId":
+		if e.ComplexityRoot.StreamIngestDisconnected.SessionId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngestDisconnected.SessionId(childComplexity), true
+	case "StreamIngestDisconnected.streamId":
+		if e.ComplexityRoot.StreamIngestDisconnected.StreamId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIngestDisconnected.StreamId(childComplexity), true
 
 	case "StreamKey.createdAt":
 		if e.ComplexityRoot.StreamKey.CreatedAt == nil {
@@ -21312,6 +21967,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamLive.PlaybackId(childComplexity), true
+	case "StreamLive.sessionId":
+		if e.ComplexityRoot.StreamLive.SessionId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamLive.SessionId(childComplexity), true
 	case "StreamLive.streamId":
 		if e.ComplexityRoot.StreamLive.StreamId == nil {
 			break
@@ -23128,6 +23789,56 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TrackListUpdate.VideoTrackCount(childComplexity), true
 
+	case "TranscodeLadder.description":
+		if e.ComplexityRoot.TranscodeLadder.Description == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadder.Description(childComplexity), true
+	case "TranscodeLadder.displayName":
+		if e.ComplexityRoot.TranscodeLadder.DisplayName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadder.DisplayName(childComplexity), true
+	case "TranscodeLadder.name":
+		if e.ComplexityRoot.TranscodeLadder.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadder.Name(childComplexity), true
+	case "TranscodeLadder.renditionNames":
+		if e.ComplexityRoot.TranscodeLadder.RenditionNames == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadder.RenditionNames(childComplexity), true
+
+	case "TranscodeLadderPolicy.effectiveLadder":
+		if e.ComplexityRoot.TranscodeLadderPolicy.EffectiveLadder == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadderPolicy.EffectiveLadder(childComplexity), true
+	case "TranscodeLadderPolicy.ladders":
+		if e.ComplexityRoot.TranscodeLadderPolicy.Ladders == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadderPolicy.Ladders(childComplexity), true
+	case "TranscodeLadderPolicy.planDefault":
+		if e.ComplexityRoot.TranscodeLadderPolicy.PlanDefault == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadderPolicy.PlanDefault(childComplexity), true
+	case "TranscodeLadderPolicy.tenantLadder":
+		if e.ComplexityRoot.TranscodeLadderPolicy.TenantLadder == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranscodeLadderPolicy.TenantLadder(childComplexity), true
+
 	case "UploadAborted.artifact":
 		if e.ComplexityRoot.UploadAborted.Artifact == nil {
 			break
@@ -24214,6 +24925,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.VodAsset.OriginType(childComplexity), true
+	case "VodAsset.originalFile":
+		if e.ComplexityRoot.VodAsset.OriginalFile == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodAsset.OriginalFile(childComplexity), true
 	case "VodAsset.playbackId":
 		if e.ComplexityRoot.VodAsset.PlaybackID == nil {
 			break
@@ -24292,6 +25009,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.VodAsset.VideoCodec(childComplexity), true
+
+	case "VodOriginalDownload.expiresAt":
+		if e.ComplexityRoot.VodOriginalDownload.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodOriginalDownload.ExpiresAt(childComplexity), true
+	case "VodOriginalDownload.filename":
+		if e.ComplexityRoot.VodOriginalDownload.Filename == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodOriginalDownload.Filename(childComplexity), true
+	case "VodOriginalDownload.sizeBytes":
+		if e.ComplexityRoot.VodOriginalDownload.SizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodOriginalDownload.SizeBytes(childComplexity), true
+	case "VodOriginalDownload.url":
+		if e.ComplexityRoot.VodOriginalDownload.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodOriginalDownload.URL(childComplexity), true
+
+	case "VodOriginalFile.sizeBytes":
+		if e.ComplexityRoot.VodOriginalFile.SizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodOriginalFile.SizeBytes(childComplexity), true
 
 	case "VodRetention.assetDurationS":
 		if e.ComplexityRoot.VodRetention.AssetDurationS == nil {
@@ -24449,6 +25198,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.VodUploadSession.ID(childComplexity), true
+	case "VodUploadSession.keepOriginal":
+		if e.ComplexityRoot.VodUploadSession.KeepOriginal == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodUploadSession.KeepOriginal(childComplexity), true
 	case "VodUploadSession.partSize":
 		if e.ComplexityRoot.VodUploadSession.PartSize == nil {
 			break
@@ -25045,9 +25800,11 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputReviewMediaPlacementChangeInput,
 		ec.unmarshalInputSendMessageInput,
 		ec.unmarshalInputSetMediaRetentionPolicyInput,
+		ec.unmarshalInputSetNodeCapacityInput,
 		ec.unmarshalInputSetNodeModeInput,
 		ec.unmarshalInputSetPlaybackPolicyInput,
 		ec.unmarshalInputSetStreamRetentionOverridesInput,
+		ec.unmarshalInputSetTranscodeLadderPolicyInput,
 		ec.unmarshalInputSkipperChatInput,
 		ec.unmarshalInputSourceLocationClusterInput,
 		ec.unmarshalInputSourceLocationInput,
@@ -25172,7 +25929,8 @@ and real-time subscriptions.
 ## Authentication
 Most queries require a valid JWT or API token in the Authorization header.
 The dashboard may also authenticate via httpOnly cookies.
-Public allowlist (no auth required): ` + "`" + `resolveViewerEndpoint` + "`" + `, ` + "`" + `resolveIngestEndpoint` + "`" + `, ` + "`" + `networkStatus` + "`" + `, and public orchestrator topology fields.
+Public allowlist (no auth required): ` + "`" + `resolveViewerEndpoint` + "`" + `, ` + "`" + `resolveIngestEndpoint` + "`" + `, ` + "`" + `networkStatus` + "`" + `, ` + "`" + `serverInfo` + "`" + `, and public orchestrator topology fields.
+` + "`" + `bootstrapEdge` + "`" + ` and ` + "`" + `walletLogin` + "`" + ` authenticate with a per-call credential in their input.
 Tenant isolation is enforced - you can only access your own data.
 """
 schema {
@@ -25354,7 +26112,7 @@ type Query {
   ): StreamValidation
 
   """
-  List all stream keys for a specific stream.
+  Deprecated compatibility view of the current primary key for a stream.
   Stream keys are publishing credentials, so an API token needs the
   streams:write scope.
   """
@@ -25368,6 +26126,9 @@ type Query {
     """
     streamId: ID!
   ): StreamKeysConnection!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   """
   Fetch a single clip by its global ID.
@@ -25899,6 +26660,9 @@ type Query {
     pageToken: String
   ): DVRChaptersPage
 
+  "A recording from the tenant catalog, readable with streams:read."
+  dvrRecording(id: ID!): DVRRequest
+
   """
   Fetch a single VOD asset by ID.
   """
@@ -26026,6 +26790,8 @@ type Query {
   panel to size sliders and explain the allowed range.
   """
   mediaRetentionPolicy: MediaRetentionPolicy!
+  "Allowed video ladders, account choice, and effective default."
+  transcodeLadderPolicy: TranscodeLadderPolicy!
 
   """
   Tenant-bound placement intent and actual enforcement progress.
@@ -26596,7 +27362,12 @@ type Mutation {
     The stream ID.
     """
     id: ID!
+    "Also end the publisher active when rotation is requested. Delivery retries preserve its generation."
+    endActiveSession: Boolean = false
   ): UpdateStreamResult!
+
+  "Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false."
+  disconnectIngest(streamId: ID!): DisconnectIngestResult!
 
   """
   Create a clip from a live or recorded stream.
@@ -27148,7 +27919,7 @@ type Mutation {
   ): RevokeBootstrapTokenResult! @internal(reason: "Requires the service token.")
 
   """
-  Create an additional stream key for a stream.
+  Deprecated. A stream has one key; this operation refuses creation. Use refreshStreamKey.
   """
   createStreamKey(
     """
@@ -27160,9 +27931,12 @@ type Mutation {
     """
     input: CreateStreamKeyInput!
   ): CreateStreamKeyResult!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   """
-  Delete a stream key.
+  Deprecated. A stream has one key; this operation refuses deletion. Use refreshStreamKey.
   """
   deleteStreamKey(
     """
@@ -27174,6 +27948,9 @@ type Mutation {
     """
     keyId: ID!
   ): DeleteStreamKeyResult!
+    @deprecated(
+      reason: "A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey."
+    )
 
   # ==================== Multistream Push Targets ====================
 
@@ -27339,6 +28116,8 @@ type Mutation {
   recorded in Foghorn's audit trail.
   """
   setNodeMode(input: SetNodeModeInput!): SetNodeModeResult!
+  "Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access."
+  setNodeCapacity(input: SetNodeCapacityInput!): SetNodeCapacityResult!
 
   """
   Open the MistServer admin UI on a specific edge node. Returns a short-TTL
@@ -27373,6 +28152,14 @@ type Mutation {
   cap is exposed via ` + "`" + `mediaRetentionPolicy.bounds.maxRecordingRetentionDays` + "`" + `.
   """
   setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
+  "Set the account's video ladder. Empty or null inherits the plan default."
+  setTranscodeLadderPolicy(input: SetTranscodeLadderPolicyInput!): SetTranscodeLadderPolicyResult!
+  "Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged."
+  setVodOriginalPolicy(keepVodOriginals: Boolean): SetMediaRetentionPolicyResult!
+  "Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5."
+  createVodOriginalDownload(id: ID!): CreateVodOriginalDownloadResult!
+  "Permanently delete only the retained upload; processed playback remains available."
+  deleteVodOriginal(id: ID!): DeleteVodOriginalResult!
 
   """
   Atomically saves the requested verbs. Saved does not mean effective on every cell.
@@ -27471,13 +28258,23 @@ type DeleteSuccess {
 # Mutation Result union types
 union CreateStreamResult = Stream | ValidationError | AuthError
 union UpdateStreamResult = Stream | ValidationError | NotFoundError | AuthError
+
+"An accepted request to stop the currently claimed push publisher."
+type IngestDisconnectSuccess {
+  streamId: ID!
+  stopRequested: Boolean!
+}
+union DisconnectIngestResult = IngestDisconnectSuccess | ValidationError | NotFoundError | AuthError
+
 union DeleteStreamResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreateClipResult = Clip | ValidationError | NotFoundError | AuthError
 union DeleteClipResult = DeleteSuccess | NotFoundError | AuthError
 
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 union CreateStreamKeyResult = StreamKey | ValidationError | NotFoundError | AuthError
-union DeleteStreamKeyResult = DeleteSuccess | NotFoundError | AuthError
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
+union DeleteStreamKeyResult = DeleteSuccess | ValidationError | NotFoundError | AuthError
 
 union StartDVRResult = DVRRequest | ValidationError | NotFoundError | AuthError
 union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
@@ -27490,6 +28287,14 @@ union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
 union VodUploadStatusResult = VodUploadStatus | ValidationError | NotFoundError | AuthError
 
+union SetTranscodeLadderPolicyResult = TranscodeLadderPolicy | ValidationError | AuthError
+union CreateVodOriginalDownloadResult =
+  | VodOriginalDownload
+  | ValidationError
+  | NotFoundError
+  | AuthError
+union DeleteVodOriginalResult = DeleteSuccess | ValidationError | NotFoundError | AuthError
+
 union SetMediaRetentionPolicyResult = MediaRetentionPolicy | ValidationError | AuthError
 union UpdateMediaRetentionResult = EffectiveRetention | ValidationError | NotFoundError | AuthError
 union SetStreamRetentionOverridesResult =
@@ -27499,6 +28304,43 @@ union SetStreamRetentionOverridesResult =
   | AuthError
 
 union SetNodeModeResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+union SetNodeCapacityResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+
+enum CapacityBudgetSource {
+  DEFAULT
+  OPERATOR
+}
+
+type NodeCapacity {
+  "Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+  egressBudgetBytesPerSec: Float!
+  "Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+  ingressBudgetBytesPerSec: Float!
+  egressSource: CapacityBudgetSource!
+  ingressSource: CapacityBudgetSource!
+  revision: Int!
+  updatedAt: Time
+  "Last revision applied by Helmsman; null when the node does not report one."
+  appliedRevision: Int
+}
+
+type ClusterCapacity {
+  egressBudgetBytesPerSec: Float!
+  ingressBudgetBytesPerSec: Float!
+  egressUsableBytesPerSec: Float!
+  ingressUsableBytesPerSec: Float!
+  defaultBudgetNodes: Int!
+}
+
+input SetNodeCapacityInput {
+  nodeId: ID!
+  "Positive whole bytes per second, or null to restore the default."
+  egressBudgetBytesPerSec: Float
+  "Positive whole bytes per second, or null to restore the default."
+  ingressBudgetBytesPerSec: Float
+  "Revision from the current capacity; a stale revision rejects the write."
+  expectedRevision: Int!
+}
 
 union OpenMistAdminSessionResult = MistAdminSession | ValidationError | NotFoundError | AuthError
 
@@ -27860,6 +28702,8 @@ input CreateStreamInput {
   pullSource: PullSourceInput
   "Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources."
   sourceLocation: SourceLocationInput
+  "Ladder name allowed by the plan. Empty inherits the account, then plan default."
+  transcodeLadder: String
 }
 
 """
@@ -27896,6 +28740,8 @@ input UpdateStreamInput {
   dvrChapterIntervalSeconds: Int
   "Per-stream Skipper monitoring override. INHERIT follows the tenant tier."
   monitoring: MonitoringToggle
+  "Ladder name; empty inherits the account, then plan. Applies from the next broadcast."
+  transcodeLadder: String
 }
 
 """
@@ -27951,6 +28797,8 @@ input CreateClipInput {
 
 # DVR types
 type DVRRequest {
+  "Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds."
+  chapters(page: ConnectionInput, rangeStartMs: Float, rangeEndMs: Float): DVRChapterConnection
   # Business metadata (from Commodore registry)
   id: ID # UUID from Commodore business registry
   dvrHash: ID!
@@ -28149,13 +28997,15 @@ input ImportVodAssetInput {
   url: String!
   """
   Filename to store the video under. Required when the URL path does not end
-  in a supported video extension (mp4, mov, mkv, webm, ts).
+  in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
   """
   filename: String
   "Optional display title for the asset."
   title: String
   "Optional description for the asset."
   description: String
+  "Video ladder for this import; empty inherits the account, then plan default."
+  transcodeLadder: String
 }
 
 """
@@ -28163,7 +29013,7 @@ Input for initiating a multipart VOD upload.
 Returns presigned S3 URLs for uploading file parts.
 """
 input CreateVodUploadInput {
-  "Original filename (for metadata and content-type detection)."
+  "Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused."
   filename: String!
   "Total file size in bytes (required for part calculation)."
   sizeBytes: Float!
@@ -28173,6 +29023,10 @@ input CreateVodUploadInput {
   title: String
   "Optional description for the asset."
   description: String
+  "Video ladder for this upload; empty inherits the account, then plan default."
+  transcodeLadder: String
+  "Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default."
+  keepOriginal: Boolean
 }
 
 """
@@ -28215,6 +29069,8 @@ type VodUploadSession {
   parts: [VodUploadPart!]!
   "When presigned URLs expire (typically 2 hours)."
   expiresAt: Time!
+  "Effective original-retention policy accepted for this upload. Null when an older server cannot report it."
+  keepOriginal: Boolean
 }
 
 """
@@ -28345,6 +29201,8 @@ type VodAsset implements Node {
   cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
   """
   storageCost: StorageCostProjection
+  "Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original."
+  originalFile: VodOriginalFile
 }
 
 enum StorageArtifactKind {
@@ -28386,6 +29244,10 @@ input StorageArtifactsInput {
 }
 
 type StorageArtifact {
+  "How the artifact was produced, such as dvr_chapter."
+  originType: String
+  "Catalog ID of the parent DVR recording, present on saved chapters."
+  parentRecordingId: ID
   key: ID!
   kind: StorageArtifactKind!
   id: ID!
@@ -28423,6 +29285,8 @@ type StorageArtifact {
   durationSeconds: Float
   "Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized."
   tracks: [ArtifactTrack!]!
+  "Retained original upload, when this VOD has one."
+  originalFile: VodOriginalFile
 }
 
 "A single A/V (or meta) track of a finalized artifact."
@@ -28556,9 +29420,7 @@ input CreateBootstrapTokenInput {
   clusterId: ID
 }
 
-"""
-Input for creating an additional stream key.
-"""
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 input CreateStreamKeyInput {
   "Human-readable name for the key."
   name: String!
@@ -29129,8 +29991,10 @@ type ViewerMetrics {
   sessionId: String
   connectionTime: Float # seconds connected
   position: Float # playback position
-  bandwidthInBps: Int # upload bandwidth (bits/sec)
-  bandwidthOutBps: Int # download bandwidth (bits/sec)
+  "Bandwidth in bytes per second sent to the viewer; legacy field name."
+  bandwidthInBps: Int
+  "Bandwidth in bytes per second received from the viewer; legacy field name."
+  bandwidthOutBps: Int
   bytesDownloaded: Float
   bytesUploaded: Float
   packetsSent: Int
@@ -29284,6 +30148,23 @@ type CustomDomainStatus {
   lastError: String
 }
 
+enum StreamIngestState {
+  IDLE
+  CONNECTED
+  LIVE
+}
+
+"Current ingest-session state, readable with streams:read."
+type StreamIngest {
+  state: StreamIngestState!
+  isLive: Boolean!
+  sessionId: ID
+  connectedAt: Time
+  liveSince: Time
+  endedAt: Time
+  resumableUntil: Time
+}
+
 """
 A live stream configuration with real-time operational metrics.
 Streams are the core entity for broadcasting and viewing live content.
@@ -29323,6 +30204,9 @@ type Stream implements Node {
   "When this stream was last modified."
   updatedAt: Time!
 
+  "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+  ingest: StreamIngest
+
   """
   Real-time operational metrics from the data plane.
   Includes viewer counts, quality metrics, and throughput data.
@@ -29331,6 +30215,11 @@ type Stream implements Node {
   carries a FORBIDDEN error at its path.
   """
   metrics: StreamMetrics
+
+  "Recordings from this stream's tenant catalog, newest first."
+  recordings(page: ConnectionInput): StreamArtifactsConnection
+  "Clips from this stream's tenant catalog, newest first."
+  clips(page: ConnectionInput): StreamArtifactsConnection
 
   "Configured multistream push targets for this stream."
   pushTargets: [PushTarget!]!
@@ -29370,6 +30259,9 @@ type Stream implements Node {
   stream-bound, so they don't appear here.
   """
   retentionOverrides: StreamRetentionOverrides
+  "Saved video ladder name; empty inherits the account, then plan default."
+  transcodeLadder: String!
+    @experimental(reason: "Transcode ladders are new in this release.", until: "v0.3.17")
 }
 
 """
@@ -29600,11 +30492,13 @@ type RebufferingEventsConnection {
 }
 
 # Stream Keys Connection
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKeyEdge {
   cursor: String!
   node: StreamKey!
 }
 
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKeysConnection {
   edges: [StreamKeyEdge!]!
   nodes: [StreamKey!]!
@@ -31281,8 +32175,10 @@ type Cluster implements Node {
   maxConcurrentStreams: Int!
   "Maximum allowed concurrent viewers."
   maxConcurrentViewers: Int!
-  "Maximum allowed bandwidth in Mbps."
-  maxBandwidthMbps: Int!
+  "Sum of node egress budgets in decimal Mbit/s."
+  maxBandwidthMbps: Int! @deprecated(reason: "Use capacity; bandwidth is managed per node.")
+  "Aggregate node budgets and usable capacity; null when the control plane is unavailable."
+  capacity: ClusterCapacity
   "Cluster health status (healthy, degraded, critical)."
   healthStatus: String!
   "Whether the cluster is operational."
@@ -31491,6 +32387,8 @@ type InfrastructureNode implements Node {
   Counts come from Foghorn's GetNodeHealth.
   """
   routingImpactPreview: RoutingImpactPreview!
+  "Operator-owned directional budgets; null when the control plane is unavailable."
+  capacity: NodeCapacity
 }
 
 """
@@ -31533,6 +32431,8 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
+  "Processing failure detail from the artifact catalog."
+  errorMessage: String
   "When the clip was requested."
   createdAt: Time
   "When the clip was last updated."
@@ -32120,6 +33020,8 @@ type NetworkClusterStatus {
   currentViewers: Int!
   egressMbps: Int!
   egressCapacityMbps: Int!
+  egressUsableMbps: Int!
+  defaultBudgetNodes: Int!
   ingressMbps: Int!
   services: [String!]!
 }
@@ -32667,6 +33569,7 @@ type ServiceInstanceHealth {
 # ============================================================================
 
 # Stream key management
+"Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey."
 type StreamKey {
   id: ID!
   streamId: ID!
@@ -32739,6 +33642,7 @@ type IngestEndpointResponse {
 
 "Playback format required when selecting and preparing a viewer destination."
 enum MediaViewerProtocol {
+  WEBVTT
   WEBRTC
   WHEP
   HLS
@@ -33559,6 +34463,10 @@ type MediaRetentionPolicy {
   effectiveDvrRetentionDays: Int!
   "Effective clip horizon the cascade resolves to today (0 = keep forever)."
   effectiveClipRetentionDays: Int!
+  "Account default for new uploads. Null inherits the system default (keep)."
+  keepVodOriginals: Boolean
+  "Effective original-retention default for new uploads."
+  effectiveKeepVodOriginals: Boolean!
 }
 
 """
@@ -34065,7 +34973,11 @@ type ClusterLiveStats {
   uploadBytesPerSec: Float!
   downloadBytesPerSec: Float!
   activeNodes: Int!
-  egressCapacityBps: Float!
+  egressCapacityBps: Float! @deprecated(reason: "Use egressBudgetBytesPerSec.")
+  egressBudgetBytesPerSec: Float!
+  egressUsableBytesPerSec: Float!
+  egressObservedBytesPerSec: Float!
+  defaultBudgetNodes: Int!
 }
 
 enum MediaPlacementVerb {
@@ -34559,6 +35471,7 @@ union PublicEventData =
   | CustomDomainVerified
   | MultistreamStatusChanged
   | RecordingChapterFailed
+  | RecordingChapterReady
   | RecordingFailed
   | RecordingReady
   | RecordingStarted
@@ -34566,7 +35479,9 @@ union PublicEventData =
   | StreamConnected
   | StreamCreated
   | StreamDeleted
+  | StreamEnded
   | StreamIdle
+  | StreamIngestDisconnected
   | StreamKeyRotated
   | StreamLive
   | StreamUpdated
@@ -34709,6 +35624,17 @@ type RecordingChapterFailed {
 }
 
 """
+` + "`" + `recording.chapter_ready` + "`" + ` event. Aggregate: ` + "`" + `artifacts` + "`" + `.
+"""
+type RecordingChapterReady {
+  artifact: EventArtifact
+  chapterId: ID!
+  startMs: Int!
+  endMs: Int!
+  sizeBytes: Int!
+}
+
+"""
 ` + "`" + `recording.failed` + "`" + ` event. Aggregate: ` + "`" + `artifacts` + "`" + `.
 """
 type RecordingFailed {
@@ -34746,6 +35672,7 @@ type StreamConnected {
   streamId: ID!
   protocol: EventIngestProtocol!
   playbackId: ID!
+  sessionId: ID!
 }
 
 """
@@ -34765,11 +35692,30 @@ type StreamDeleted {
 }
 
 """
+` + "`" + `stream.ended` + "`" + ` event. Aggregate: ` + "`" + `streams` + "`" + `.
+"""
+type StreamEnded {
+  streamId: ID!
+  playbackId: ID!
+  sessionId: ID!
+}
+
+"""
 ` + "`" + `stream.idle` + "`" + ` event. Aggregate: ` + "`" + `streams` + "`" + `.
 """
 type StreamIdle {
   streamId: ID!
   playbackId: ID!
+  sessionId: ID!
+}
+
+"""
+` + "`" + `stream.ingest_disconnected` + "`" + ` event. Aggregate: ` + "`" + `streams` + "`" + `.
+"""
+type StreamIngestDisconnected {
+  streamId: ID!
+  sessionId: ID!
+  reason: String!
 }
 
 """
@@ -34785,6 +35731,7 @@ type StreamKeyRotated {
 type StreamLive {
   streamId: ID!
   playbackId: ID!
+  sessionId: ID!
 }
 
 """
@@ -35017,6 +35964,61 @@ type SecurityActivityConnection {
   nodes: [SecurityActivityEvent!]!
   pageInfo: PageInfo!
   totalCount: Int!
+}
+
+"A named video rendition ladder, with rungs skipped for smaller sources."
+type TranscodeLadder {
+  name: String!
+  displayName: String!
+  description: String!
+  renditionNames: [String!]!
+}
+
+type TranscodeLadderPolicy {
+  ladders: [TranscodeLadder!]!
+  planDefault: String!
+  tenantLadder: String
+  effectiveLadder: String!
+}
+
+input SetTranscodeLadderPolicyInput {
+  ladder: String
+}
+
+"Metadata of the byte-identical retained upload."
+type VodOriginalFile {
+  sizeBytes: Float!
+}
+
+"Short-lived download of the byte-identical original upload, without playback metering."
+type VodOriginalDownload {
+  url: String!
+  expiresAt: Time!
+  sizeBytes: Float!
+  filename: String!
+}
+
+"A keyset-paginated collection of one stream's saved recordings or clips."
+type StreamArtifactsConnection {
+  edges: [StreamArtifactEdge!]!
+  nodes: [StorageArtifact!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+type StreamArtifactEdge {
+  cursor: String!
+  node: StorageArtifact!
+}
+"A keyset-paginated view of a recording's saved chapters."
+type DVRChapterConnection {
+  edges: [DVRChapterEdge!]!
+  nodes: [DVRChapterRef!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+type DVRChapterEdge {
+  cursor: String!
+  node: DVRChapterRef!
 }
 `, BuiltIn: false},
 }
@@ -35955,6 +36957,27 @@ func (ec *executionContext) field_Cluster_nodesConnection_args(ctx context.Conte
 	return args, nil
 }
 
+func (ec *executionContext) field_DVRRequest_chapters_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "rangeStartMs", ec.unmarshalOFloat2ᚖfloat64)
+	if err != nil {
+		return nil, err
+	}
+	args["rangeStartMs"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "rangeEndMs", ec.unmarshalOFloat2ᚖfloat64)
+	if err != nil {
+		return nil, err
+	}
+	args["rangeEndMs"] = arg2
+	return args, nil
+}
+
 func (ec *executionContext) field_InfrastructureNode_metrics1hConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -36387,6 +37410,17 @@ func (ec *executionContext) field_Mutation_createStripeCheckout_args(ctx context
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_createVodOriginalDownload_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_createVodUpload_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -36502,6 +37536,17 @@ func (ec *executionContext) field_Mutation_deleteVodAsset_args(ctx context.Conte
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_deleteVodOriginal_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_deleteWebhookEndpoint_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -36521,6 +37566,17 @@ func (ec *executionContext) field_Mutation_disableWebhookEndpoint_args(ctx conte
 		return nil, err
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_disconnectIngest_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["streamId"] = arg0
 	return args, nil
 }
 
@@ -36609,6 +37665,11 @@ func (ec *executionContext) field_Mutation_refreshStreamKey_args(ctx context.Con
 		return nil, err
 	}
 	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "endActiveSession", ec.unmarshalOBoolean2ᚖbool)
+	if err != nil {
+		return nil, err
+	}
+	args["endActiveSession"] = arg1
 	return args, nil
 }
 
@@ -36807,6 +37868,17 @@ func (ec *executionContext) field_Mutation_setMediaRetentionPolicy_args(ctx cont
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_setNodeCapacity_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNSetNodeCapacityInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetNodeCapacityInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_setNodeMode_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -36848,6 +37920,28 @@ func (ec *executionContext) field_Mutation_setStreamRetentionOverrides_args(ctx 
 		return nil, err
 	}
 	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setTranscodeLadderPolicy_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNSetTranscodeLadderPolicyInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetTranscodeLadderPolicyInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setVodOriginalPolicy_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "keepVodOriginals", ec.unmarshalOBoolean2ᚖbool)
+	if err != nil {
+		return nil, err
+	}
+	args["keepVodOriginals"] = arg0
 	return args, nil
 }
 
@@ -37497,6 +38591,17 @@ func (ec *executionContext) field_Query_dvrChapters_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["pageToken"] = arg6
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_dvrRecording_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
 	return args, nil
 }
 
@@ -38288,6 +39393,17 @@ func (ec *executionContext) field_StorageUsage_storageUsageConnection_args(ctx c
 	return args, nil
 }
 
+func (ec *executionContext) field_Stream_clips_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Stream_recentPullSourceEvents_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -38296,6 +39412,17 @@ func (ec *executionContext) field_Stream_recentPullSourceEvents_args(ctx context
 		return nil, err
 	}
 	args["limit"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Stream_recordings_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
 	return args, nil
 }
 
@@ -42598,8 +43725,14 @@ func (ec *executionContext) fieldContext_ArtifactEvent_stream(_ context.Context,
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -42616,6 +43749,8 @@ func (ec *executionContext) fieldContext_ArtifactEvent_stream(_ context.Context,
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -43310,8 +44445,14 @@ func (ec *executionContext) fieldContext_ArtifactState_stream(_ context.Context,
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -43328,6 +44469,8 @@ func (ec *executionContext) fieldContext_ArtifactState_stream(_ context.Context,
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -50744,8 +51887,14 @@ func (ec *executionContext) fieldContext_ClientMetrics5m_stream(_ context.Contex
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -50762,6 +51911,8 @@ func (ec *executionContext) fieldContext_ClientMetrics5m_stream(_ context.Contex
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -51548,8 +52699,14 @@ func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field gr
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -51566,6 +52723,8 @@ func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field gr
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -51805,6 +52964,35 @@ func (ec *executionContext) fieldContext_Clip_status(_ context.Context, field gr
 	return fc, nil
 }
 
+func (ec *executionContext) _Clip_errorMessage(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Clip_errorMessage,
+		func(ctx context.Context) (any, error) {
+			return obj.ErrorMessage, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Clip_errorMessage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Clip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Clip_createdAt(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -51986,7 +53174,7 @@ func (ec *executionContext) _Clip_hasLocalCopy(ctx context.Context, field graphq
 		field,
 		ec.fieldContext_Clip_hasLocalCopy,
 		func(ctx context.Context) (any, error) {
-			return obj.HasLocalCopy, nil
+			return ec.Resolvers.Clip().HasLocalCopy(ctx, obj)
 		},
 		nil,
 		ec.marshalOBoolean2ᚖbool,
@@ -51999,8 +53187,8 @@ func (ec *executionContext) fieldContext_Clip_hasLocalCopy(_ context.Context, fi
 	fc = &graphql.FieldContext{
 		Object:     "Clip",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
 		},
@@ -52835,10 +54023,10 @@ func (ec *executionContext) _Cluster_maxBandwidthMbps(ctx context.Context, field
 		field,
 		ec.fieldContext_Cluster_maxBandwidthMbps,
 		func(ctx context.Context) (any, error) {
-			return obj.MaxBandwidthMbps, nil
+			return ec.Resolvers.Cluster().MaxBandwidthMbps(ctx, obj)
 		},
 		nil,
-		ec.marshalNInt2int32,
+		ec.marshalNInt2int,
 		true,
 		true,
 	)
@@ -52848,10 +54036,51 @@ func (ec *executionContext) fieldContext_Cluster_maxBandwidthMbps(_ context.Cont
 	fc = &graphql.FieldContext{
 		Object:     "Cluster",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Cluster_capacity(ctx context.Context, field graphql.CollectedField, obj *quartermasterpb.InfrastructureCluster) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Cluster_capacity,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Cluster().Capacity(ctx, obj)
+		},
+		nil,
+		ec.marshalOClusterCapacity2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClusterCapacity,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Cluster_capacity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Cluster",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "egressBudgetBytesPerSec":
+				return ec.fieldContext_ClusterCapacity_egressBudgetBytesPerSec(ctx, field)
+			case "ingressBudgetBytesPerSec":
+				return ec.fieldContext_ClusterCapacity_ingressBudgetBytesPerSec(ctx, field)
+			case "egressUsableBytesPerSec":
+				return ec.fieldContext_ClusterCapacity_egressUsableBytesPerSec(ctx, field)
+			case "ingressUsableBytesPerSec":
+				return ec.fieldContext_ClusterCapacity_ingressUsableBytesPerSec(ctx, field)
+			case "defaultBudgetNodes":
+				return ec.fieldContext_ClusterCapacity_defaultBudgetNodes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ClusterCapacity", field.Name)
 		},
 	}
 	return fc, nil
@@ -54031,6 +55260,151 @@ func (ec *executionContext) fieldContext_ClusterCapabilities_media(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _ClusterCapacity_egressBudgetBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterCapacity_egressBudgetBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressBudgetBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterCapacity_egressBudgetBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterCapacity_ingressBudgetBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterCapacity_ingressBudgetBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.IngressBudgetBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterCapacity_ingressBudgetBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterCapacity_egressUsableBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterCapacity_egressUsableBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressUsableBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterCapacity_egressUsableBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterCapacity_ingressUsableBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterCapacity_ingressUsableBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.IngressUsableBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterCapacity_ingressUsableBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterCapacity_defaultBudgetNodes(ctx context.Context, field graphql.CollectedField, obj *model.ClusterCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterCapacity_defaultBudgetNodes,
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultBudgetNodes, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterCapacity_defaultBudgetNodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ClusterEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.ClusterEdge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -54108,6 +55482,8 @@ func (ec *executionContext) fieldContext_ClusterEdge_node(_ context.Context, fie
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -54971,6 +56347,122 @@ func (ec *executionContext) fieldContext_ClusterLiveStats_egressCapacityBps(_ co
 	return fc, nil
 }
 
+func (ec *executionContext) _ClusterLiveStats_egressBudgetBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterLiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterLiveStats_egressBudgetBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressBudgetBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterLiveStats_egressBudgetBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterLiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterLiveStats_egressUsableBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterLiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterLiveStats_egressUsableBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressUsableBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterLiveStats_egressUsableBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterLiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterLiveStats_egressObservedBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.ClusterLiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterLiveStats_egressObservedBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressObservedBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterLiveStats_egressObservedBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterLiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClusterLiveStats_defaultBudgetNodes(ctx context.Context, field graphql.CollectedField, obj *model.ClusterLiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterLiveStats_defaultBudgetNodes,
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultBudgetNodes, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterLiveStats_defaultBudgetNodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterLiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ClusterMediaCapabilities_ingest(ctx context.Context, field graphql.CollectedField, obj *quartermasterpb.ClusterMediaCapabilities) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -55483,6 +56975,8 @@ func (ec *executionContext) fieldContext_ClusterPivotRow_cluster(_ context.Conte
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -55558,6 +57052,14 @@ func (ec *executionContext) fieldContext_ClusterPivotRow_liveStats(_ context.Con
 				return ec.fieldContext_ClusterLiveStats_activeNodes(ctx, field)
 			case "egressCapacityBps":
 				return ec.fieldContext_ClusterLiveStats_egressCapacityBps(ctx, field)
+			case "egressBudgetBytesPerSec":
+				return ec.fieldContext_ClusterLiveStats_egressBudgetBytesPerSec(ctx, field)
+			case "egressUsableBytesPerSec":
+				return ec.fieldContext_ClusterLiveStats_egressUsableBytesPerSec(ctx, field)
+			case "egressObservedBytesPerSec":
+				return ec.fieldContext_ClusterLiveStats_egressObservedBytesPerSec(ctx, field)
+			case "defaultBudgetNodes":
+				return ec.fieldContext_ClusterLiveStats_defaultBudgetNodes(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClusterLiveStats", field.Name)
 		},
@@ -56935,6 +58437,8 @@ func (ec *executionContext) fieldContext_ClustersConnection_nodes(_ context.Cont
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -57208,8 +58712,14 @@ func (ec *executionContext) fieldContext_ConnectionEvent_stream(_ context.Contex
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -57226,6 +58736,8 @@ func (ec *executionContext) fieldContext_ConnectionEvent_stream(_ context.Contex
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -58808,6 +60320,8 @@ func (ec *executionContext) fieldContext_CreateEdgeClusterResponse_cluster(_ con
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -60718,6 +62232,244 @@ func (ec *executionContext) fieldContext_DVRChapter_lastFailureReason(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _DVRChapterConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterConnection_edges,
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		ec.marshalNDVRChapterEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterEdgeᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "cursor":
+				return ec.fieldContext_DVRChapterEdge_cursor(ctx, field)
+			case "node":
+				return ec.fieldContext_DVRChapterEdge_node(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DVRChapterEdge", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DVRChapterConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterConnection_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNDVRChapterRef2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterRefᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "chapterId":
+				return ec.fieldContext_DVRChapterRef_chapterId(ctx, field)
+			case "mode":
+				return ec.fieldContext_DVRChapterRef_mode(ctx, field)
+			case "intervalSeconds":
+				return ec.fieldContext_DVRChapterRef_intervalSeconds(ctx, field)
+			case "startMs":
+				return ec.fieldContext_DVRChapterRef_startMs(ctx, field)
+			case "endMs":
+				return ec.fieldContext_DVRChapterRef_endMs(ctx, field)
+			case "isCurrent":
+				return ec.fieldContext_DVRChapterRef_isCurrent(ctx, field)
+			case "state":
+				return ec.fieldContext_DVRChapterRef_state(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_DVRChapterRef_playbackId(ctx, field)
+			case "hasGaps":
+				return ec.fieldContext_DVRChapterRef_hasGaps(ctx, field)
+			case "segmentCount":
+				return ec.fieldContext_DVRChapterRef_segmentCount(ctx, field)
+			case "lastFailureReason":
+				return ec.fieldContext_DVRChapterRef_lastFailureReason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DVRChapterRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DVRChapterConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterConnection_pageInfo,
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "startCursor":
+				return ec.fieldContext_PageInfo_startCursor(ctx, field)
+			case "endCursor":
+				return ec.fieldContext_PageInfo_endCursor(ctx, field)
+			case "hasNextPage":
+				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+			case "hasPreviousPage":
+				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DVRChapterConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterConnection_totalCount,
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DVRChapterEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterEdge_cursor,
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DVRChapterEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRChapterEdge_node,
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		ec.marshalNDVRChapterRef2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterRef,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRChapterEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRChapterEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "chapterId":
+				return ec.fieldContext_DVRChapterRef_chapterId(ctx, field)
+			case "mode":
+				return ec.fieldContext_DVRChapterRef_mode(ctx, field)
+			case "intervalSeconds":
+				return ec.fieldContext_DVRChapterRef_intervalSeconds(ctx, field)
+			case "startMs":
+				return ec.fieldContext_DVRChapterRef_startMs(ctx, field)
+			case "endMs":
+				return ec.fieldContext_DVRChapterRef_endMs(ctx, field)
+			case "isCurrent":
+				return ec.fieldContext_DVRChapterRef_isCurrent(ctx, field)
+			case "state":
+				return ec.fieldContext_DVRChapterRef_state(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_DVRChapterRef_playbackId(ctx, field)
+			case "hasGaps":
+				return ec.fieldContext_DVRChapterRef_hasGaps(ctx, field)
+			case "segmentCount":
+				return ec.fieldContext_DVRChapterRef_segmentCount(ctx, field)
+			case "lastFailureReason":
+				return ec.fieldContext_DVRChapterRef_lastFailureReason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DVRChapterRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _DVRChapterRef_chapterId(ctx context.Context, field graphql.CollectedField, obj *model.DVRChapterRef) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -61119,6 +62871,57 @@ func (ec *executionContext) fieldContext_DVRChaptersPage_nextPageToken(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _DVRRequest_chapters(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DVRRequest_chapters,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.DVRRequest().Chapters(ctx, obj, fc.Args["page"].(*model.ConnectionInput), fc.Args["rangeStartMs"].(*float64), fc.Args["rangeEndMs"].(*float64))
+		},
+		nil,
+		ec.marshalODVRChapterConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterConnection,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_DVRRequest_chapters(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DVRRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_DVRChapterConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_DVRChapterConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_DVRChapterConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_DVRChapterConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DVRChapterConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_DVRRequest_chapters_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _DVRRequest_id(ctx context.Context, field graphql.CollectedField, obj *sharedpb.DVRInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -61316,8 +63119,14 @@ func (ec *executionContext) fieldContext_DVRRequest_stream(_ context.Context, fi
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -61334,6 +63143,8 @@ func (ec *executionContext) fieldContext_DVRRequest_stream(_ context.Context, fi
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -61857,7 +63668,7 @@ func (ec *executionContext) _DVRRequest_hasLocalCopy(ctx context.Context, field 
 		field,
 		ec.fieldContext_DVRRequest_hasLocalCopy,
 		func(ctx context.Context) (any, error) {
-			return obj.HasLocalCopy, nil
+			return ec.Resolvers.DVRRequest().HasLocalCopy(ctx, obj)
 		},
 		nil,
 		ec.marshalOBoolean2ᚖbool,
@@ -61870,8 +63681,8 @@ func (ec *executionContext) fieldContext_DVRRequest_hasLocalCopy(_ context.Conte
 	fc = &graphql.FieldContext{
 		Object:     "DVRRequest",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
 		},
@@ -64362,8 +66173,14 @@ func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -64380,6 +66197,8 @@ func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -67212,6 +69031,109 @@ func (ec *executionContext) fieldContext_InfrastructureNode_routingImpactPreview
 	return fc, nil
 }
 
+func (ec *executionContext) _InfrastructureNode_capacity(ctx context.Context, field graphql.CollectedField, obj *quartermasterpb.InfrastructureNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_InfrastructureNode_capacity,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.InfrastructureNode().Capacity(ctx, obj)
+		},
+		nil,
+		ec.marshalONodeCapacity2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐNodeCapacity,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_InfrastructureNode_capacity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "InfrastructureNode",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "egressBudgetBytesPerSec":
+				return ec.fieldContext_NodeCapacity_egressBudgetBytesPerSec(ctx, field)
+			case "ingressBudgetBytesPerSec":
+				return ec.fieldContext_NodeCapacity_ingressBudgetBytesPerSec(ctx, field)
+			case "egressSource":
+				return ec.fieldContext_NodeCapacity_egressSource(ctx, field)
+			case "ingressSource":
+				return ec.fieldContext_NodeCapacity_ingressSource(ctx, field)
+			case "revision":
+				return ec.fieldContext_NodeCapacity_revision(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_NodeCapacity_updatedAt(ctx, field)
+			case "appliedRevision":
+				return ec.fieldContext_NodeCapacity_appliedRevision(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type NodeCapacity", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IngestDisconnectSuccess_streamId(ctx context.Context, field graphql.CollectedField, obj *model.IngestDisconnectSuccess) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IngestDisconnectSuccess_streamId,
+		func(ctx context.Context) (any, error) {
+			return obj.StreamID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IngestDisconnectSuccess_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngestDisconnectSuccess",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IngestDisconnectSuccess_stopRequested(ctx context.Context, field graphql.CollectedField, obj *model.IngestDisconnectSuccess) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IngestDisconnectSuccess_stopRequested,
+		func(ctx context.Context) (any, error) {
+			return obj.StopRequested, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IngestDisconnectSuccess_stopRequested(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngestDisconnectSuccess",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _IngestEndpoint_nodeId(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpoint) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -67697,8 +69619,14 @@ func (ec *executionContext) fieldContext_IngestMetadata_stream(_ context.Context
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -67715,6 +69643,8 @@ func (ec *executionContext) fieldContext_IngestMetadata_stream(_ context.Context
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -77545,6 +79475,64 @@ func (ec *executionContext) fieldContext_MediaRetentionPolicy_effectiveClipReten
 	return fc, nil
 }
 
+func (ec *executionContext) _MediaRetentionPolicy_keepVodOriginals(ctx context.Context, field graphql.CollectedField, obj *model.MediaRetentionPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaRetentionPolicy_keepVodOriginals,
+		func(ctx context.Context) (any, error) {
+			return obj.KeepVodOriginals, nil
+		},
+		nil,
+		ec.marshalOBoolean2ᚖbool,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaRetentionPolicy_keepVodOriginals(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaRetentionPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaRetentionPolicy_effectiveKeepVodOriginals(ctx context.Context, field graphql.CollectedField, obj *model.MediaRetentionPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaRetentionPolicy_effectiveKeepVodOriginals,
+		func(ctx context.Context) (any, error) {
+			return obj.EffectiveKeepVodOriginals, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaRetentionPolicy_effectiveKeepVodOriginals(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaRetentionPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Message_id(ctx context.Context, field graphql.CollectedField, obj *model.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -78726,7 +80714,7 @@ func (ec *executionContext) _Mutation_refreshStreamKey(ctx context.Context, fiel
 		ec.fieldContext_Mutation_refreshStreamKey,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().RefreshStreamKey(ctx, fc.Args["id"].(string))
+			return ec.Resolvers.Mutation().RefreshStreamKey(ctx, fc.Args["id"].(string), fc.Args["endActiveSession"].(*bool))
 		},
 		nil,
 		ec.marshalNUpdateStreamResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUpdateStreamResult,
@@ -78753,6 +80741,47 @@ func (ec *executionContext) fieldContext_Mutation_refreshStreamKey(ctx context.C
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_refreshStreamKey_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_disconnectIngest(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_disconnectIngest,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().DisconnectIngest(ctx, fc.Args["streamId"].(string))
+		},
+		nil,
+		ec.marshalNDisconnectIngestResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDisconnectIngestResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_disconnectIngest(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DisconnectIngestResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_disconnectIngest_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -81757,6 +83786,47 @@ func (ec *executionContext) fieldContext_Mutation_setNodeMode(ctx context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_setNodeCapacity(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_setNodeCapacity,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetNodeCapacity(ctx, fc.Args["input"].(model.SetNodeCapacityInput))
+		},
+		nil,
+		ec.marshalNSetNodeCapacityResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetNodeCapacityResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_setNodeCapacity(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SetNodeCapacityResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setNodeCapacity_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_openMistAdminSession(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -81874,6 +83944,170 @@ func (ec *executionContext) fieldContext_Mutation_setMediaRetentionPolicy(ctx co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_setMediaRetentionPolicy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setTranscodeLadderPolicy(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_setTranscodeLadderPolicy,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetTranscodeLadderPolicy(ctx, fc.Args["input"].(model.SetTranscodeLadderPolicyInput))
+		},
+		nil,
+		ec.marshalNSetTranscodeLadderPolicyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetTranscodeLadderPolicyResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_setTranscodeLadderPolicy(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SetTranscodeLadderPolicyResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setTranscodeLadderPolicy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setVodOriginalPolicy(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_setVodOriginalPolicy,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetVodOriginalPolicy(ctx, fc.Args["keepVodOriginals"].(*bool))
+		},
+		nil,
+		ec.marshalNSetMediaRetentionPolicyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetMediaRetentionPolicyResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_setVodOriginalPolicy(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SetMediaRetentionPolicyResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setVodOriginalPolicy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_createVodOriginalDownload(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_createVodOriginalDownload,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().CreateVodOriginalDownload(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalNCreateVodOriginalDownloadResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateVodOriginalDownloadResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_createVodOriginalDownload(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type CreateVodOriginalDownloadResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_createVodOriginalDownload_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_deleteVodOriginal(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_deleteVodOriginal,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().DeleteVodOriginal(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalNDeleteVodOriginalResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteVodOriginalResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_deleteVodOriginal(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DeleteVodOriginalResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteVodOriginal_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -82326,6 +84560,8 @@ func (ec *executionContext) fieldContext_MySubscriptionEdge_node(_ context.Conte
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -82446,6 +84682,8 @@ func (ec *executionContext) fieldContext_MySubscriptionsConnection_nodes(_ conte
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -82974,6 +85212,64 @@ func (ec *executionContext) _NetworkClusterStatus_egressCapacityMbps(ctx context
 }
 
 func (ec *executionContext) fieldContext_NetworkClusterStatus_egressCapacityMbps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NetworkClusterStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NetworkClusterStatus_egressUsableMbps(ctx context.Context, field graphql.CollectedField, obj *model.NetworkClusterStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NetworkClusterStatus_egressUsableMbps,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressUsableMbps, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NetworkClusterStatus_egressUsableMbps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NetworkClusterStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NetworkClusterStatus_defaultBudgetNodes(ctx context.Context, field graphql.CollectedField, obj *model.NetworkClusterStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NetworkClusterStatus_defaultBudgetNodes,
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultBudgetNodes, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NetworkClusterStatus_defaultBudgetNodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "NetworkClusterStatus",
 		Field:      field,
@@ -83591,6 +85887,10 @@ func (ec *executionContext) fieldContext_NetworkStatus_clusters(_ context.Contex
 				return ec.fieldContext_NetworkClusterStatus_egressMbps(ctx, field)
 			case "egressCapacityMbps":
 				return ec.fieldContext_NetworkClusterStatus_egressCapacityMbps(ctx, field)
+			case "egressUsableMbps":
+				return ec.fieldContext_NetworkClusterStatus_egressUsableMbps(ctx, field)
+			case "defaultBudgetNodes":
+				return ec.fieldContext_NetworkClusterStatus_defaultBudgetNodes(ctx, field)
 			case "ingressMbps":
 				return ec.fieldContext_NetworkClusterStatus_ingressMbps(ctx, field)
 			case "services":
@@ -83816,6 +86116,209 @@ func (ec *executionContext) fieldContext_NetworkStatus_updatedAt(_ context.Conte
 	return fc, nil
 }
 
+func (ec *executionContext) _NodeCapacity_egressBudgetBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_egressBudgetBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressBudgetBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_egressBudgetBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_ingressBudgetBytesPerSec(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_ingressBudgetBytesPerSec,
+		func(ctx context.Context) (any, error) {
+			return obj.IngressBudgetBytesPerSec, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_ingressBudgetBytesPerSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_egressSource(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_egressSource,
+		func(ctx context.Context) (any, error) {
+			return obj.EgressSource, nil
+		},
+		nil,
+		ec.marshalNCapacityBudgetSource2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCapacityBudgetSource,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_egressSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type CapacityBudgetSource does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_ingressSource(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_ingressSource,
+		func(ctx context.Context) (any, error) {
+			return obj.IngressSource, nil
+		},
+		nil,
+		ec.marshalNCapacityBudgetSource2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCapacityBudgetSource,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_ingressSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type CapacityBudgetSource does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_revision(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeCapacity_appliedRevision(ctx context.Context, field graphql.CollectedField, obj *model.NodeCapacity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_NodeCapacity_appliedRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.AppliedRevision, nil
+		},
+		nil,
+		ec.marshalOInt2ᚖint,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_NodeCapacity_appliedRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeCapacity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _NodeEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.NodeEdge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -83921,6 +86424,8 @@ func (ec *executionContext) fieldContext_NodeEdge_node(_ context.Context, field 
 				return ec.fieldContext_InfrastructureNode_effectiveMode(ctx, field)
 			case "routingImpactPreview":
 				return ec.fieldContext_InfrastructureNode_routingImpactPreview(ctx, field)
+			case "capacity":
+				return ec.fieldContext_InfrastructureNode_capacity(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type InfrastructureNode", field.Name)
 		},
@@ -86433,6 +88938,8 @@ func (ec *executionContext) fieldContext_NodesConnection_nodes(_ context.Context
 				return ec.fieldContext_InfrastructureNode_effectiveMode(ctx, field)
 			case "routingImpactPreview":
 				return ec.fieldContext_InfrastructureNode_routingImpactPreview(ctx, field)
+			case "capacity":
+				return ec.fieldContext_InfrastructureNode_capacity(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type InfrastructureNode", field.Name)
 		},
@@ -93656,8 +96163,14 @@ func (ec *executionContext) fieldContext_ProcessingUsageRecord_stream(_ context.
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -93674,6 +96187,8 @@ func (ec *executionContext) fieldContext_ProcessingUsageRecord_stream(_ context.
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -96633,8 +99148,14 @@ func (ec *executionContext) fieldContext_QualityTierDaily_stream(_ context.Conte
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -96651,6 +99172,8 @@ func (ec *executionContext) fieldContext_QualityTierDaily_stream(_ context.Conte
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -98045,8 +100568,14 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -98063,6 +100592,8 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -98234,6 +100765,8 @@ func (ec *executionContext) fieldContext_Query_clip(ctx context.Context, field g
 				return ec.fieldContext_Clip_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_Clip_status(ctx, field)
+			case "errorMessage":
+				return ec.fieldContext_Clip_errorMessage(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Clip_createdAt(ctx, field)
 			case "updatedAt":
@@ -99215,6 +101748,8 @@ func (ec *executionContext) fieldContext_Query_cluster(ctx context.Context, fiel
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -99982,6 +102517,8 @@ func (ec *executionContext) fieldContext_Query_mySubscriptions(ctx context.Conte
 				return ec.fieldContext_Cluster_maxConcurrentViewers(ctx, field)
 			case "maxBandwidthMbps":
 				return ec.fieldContext_Cluster_maxBandwidthMbps(ctx, field)
+			case "capacity":
+				return ec.fieldContext_Cluster_capacity(ctx, field)
 			case "healthStatus":
 				return ec.fieldContext_Cluster_healthStatus(ctx, field)
 			case "isActive":
@@ -101406,6 +103943,109 @@ func (ec *executionContext) fieldContext_Query_dvrChapters(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_dvrRecording(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_dvrRecording,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().DvrRecording(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalODVRRequest2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfo,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_dvrRecording(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "chapters":
+				return ec.fieldContext_DVRRequest_chapters(ctx, field)
+			case "id":
+				return ec.fieldContext_DVRRequest_id(ctx, field)
+			case "dvrHash":
+				return ec.fieldContext_DVRRequest_dvrHash(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_DVRRequest_playbackId(ctx, field)
+			case "streamId":
+				return ec.fieldContext_DVRRequest_streamId(ctx, field)
+			case "sourceStreamId":
+				return ec.fieldContext_DVRRequest_sourceStreamId(ctx, field)
+			case "stream":
+				return ec.fieldContext_DVRRequest_stream(ctx, field)
+			case "title":
+				return ec.fieldContext_DVRRequest_title(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_DVRRequest_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_DVRRequest_updatedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_DVRRequest_expiresAt(ctx, field)
+			case "isExpired":
+				return ec.fieldContext_DVRRequest_isExpired(ctx, field)
+			case "effectiveRetention":
+				return ec.fieldContext_DVRRequest_effectiveRetention(ctx, field)
+			case "storageCost":
+				return ec.fieldContext_DVRRequest_storageCost(ctx, field)
+			case "storageNodeId":
+				return ec.fieldContext_DVRRequest_storageNodeId(ctx, field)
+			case "status":
+				return ec.fieldContext_DVRRequest_status(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_DVRRequest_startedAt(ctx, field)
+			case "endedAt":
+				return ec.fieldContext_DVRRequest_endedAt(ctx, field)
+			case "durationSeconds":
+				return ec.fieldContext_DVRRequest_durationSeconds(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_DVRRequest_sizeBytes(ctx, field)
+			case "manifestPath":
+				return ec.fieldContext_DVRRequest_manifestPath(ctx, field)
+			case "errorMessage":
+				return ec.fieldContext_DVRRequest_errorMessage(ctx, field)
+			case "storageLocation":
+				return ec.fieldContext_DVRRequest_storageLocation(ctx, field)
+			case "syncStatus":
+				return ec.fieldContext_DVRRequest_syncStatus(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_DVRRequest_hasLocalCopy(ctx, field)
+			case "isSynced":
+				return ec.fieldContext_DVRRequest_isSynced(ctx, field)
+			case "isFinalized":
+				return ec.fieldContext_DVRRequest_isFinalized(ctx, field)
+			case "frozenAt":
+				return ec.fieldContext_DVRRequest_frozenAt(ctx, field)
+			case "s3Url":
+				return ec.fieldContext_DVRRequest_s3Url(ctx, field)
+			case "thumbnailAssets":
+				return ec.fieldContext_DVRRequest_thumbnailAssets(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DVRRequest", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_dvrRecording_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_vodAsset(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -101489,6 +104129,8 @@ func (ec *executionContext) fieldContext_Query_vodAsset(ctx context.Context, fie
 				return ec.fieldContext_VodAsset_effectiveRetention(ctx, field)
 			case "storageCost":
 				return ec.fieldContext_VodAsset_storageCost(ctx, field)
+			case "originalFile":
+				return ec.fieldContext_VodAsset_originalFile(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type VodAsset", field.Name)
 		},
@@ -102141,8 +104783,51 @@ func (ec *executionContext) fieldContext_Query_mediaRetentionPolicy(_ context.Co
 				return ec.fieldContext_MediaRetentionPolicy_effectiveDvrRetentionDays(ctx, field)
 			case "effectiveClipRetentionDays":
 				return ec.fieldContext_MediaRetentionPolicy_effectiveClipRetentionDays(ctx, field)
+			case "keepVodOriginals":
+				return ec.fieldContext_MediaRetentionPolicy_keepVodOriginals(ctx, field)
+			case "effectiveKeepVodOriginals":
+				return ec.fieldContext_MediaRetentionPolicy_effectiveKeepVodOriginals(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MediaRetentionPolicy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_transcodeLadderPolicy(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_transcodeLadderPolicy,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().TranscodeLadderPolicy(ctx)
+		},
+		nil,
+		ec.marshalNTranscodeLadderPolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadderPolicy,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_transcodeLadderPolicy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "ladders":
+				return ec.fieldContext_TranscodeLadderPolicy_ladders(ctx, field)
+			case "planDefault":
+				return ec.fieldContext_TranscodeLadderPolicy_planDefault(ctx, field)
+			case "tenantLadder":
+				return ec.fieldContext_TranscodeLadderPolicy_tenantLadder(ctx, field)
+			case "effectiveLadder":
+				return ec.fieldContext_TranscodeLadderPolicy_effectiveLadder(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TranscodeLadderPolicy", field.Name)
 		},
 	}
 	return fc, nil
@@ -102781,8 +105466,14 @@ func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Conte
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -102799,6 +105490,8 @@ func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Conte
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -103327,6 +106020,161 @@ func (ec *executionContext) fieldContext_RecordingChapterFailed_reason(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type EventMediaFailureReason does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterReady_artifact(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterReady) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterReady_artifact,
+		func(ctx context.Context) (any, error) {
+			return obj.Artifact, nil
+		},
+		nil,
+		ec.marshalOEventArtifact2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐArtifact,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterReady_artifact(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterReady",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "artifactId":
+				return ec.fieldContext_EventArtifact_artifactId(ctx, field)
+			case "kind":
+				return ec.fieldContext_EventArtifact_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_EventArtifact_streamId(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_EventArtifact_playbackId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EventArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterReady_chapterId(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterReady) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterReady_chapterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ChapterId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterReady_chapterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterReady",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterReady_startMs(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterReady) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterReady_startMs,
+		func(ctx context.Context) (any, error) {
+			return obj.StartMs, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterReady_startMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterReady",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterReady_endMs(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterReady) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterReady_endMs,
+		func(ctx context.Context) (any, error) {
+			return obj.EndMs, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterReady_endMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterReady",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterReady_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterReady) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterReady_sizeBytes,
+		func(ctx context.Context) (any, error) {
+			return obj.SizeBytes, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterReady_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterReady",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -104068,8 +106916,14 @@ func (ec *executionContext) fieldContext_RoutingEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -104086,6 +106940,8 @@ func (ec *executionContext) fieldContext_RoutingEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -109278,6 +112134,64 @@ func (ec *executionContext) fieldContext_SourceLocationCluster_nodeIds(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_originType(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StorageArtifact_originType,
+		func(ctx context.Context) (any, error) {
+			return obj.OriginType, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_originType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StorageArtifact_parentRecordingId(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StorageArtifact_parentRecordingId,
+		func(ctx context.Context) (any, error) {
+			return obj.ParentRecordingID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_parentRecordingId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifact_key(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -110194,6 +113108,39 @@ func (ec *executionContext) fieldContext_StorageArtifact_tracks(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_originalFile(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StorageArtifact_originalFile,
+		func(ctx context.Context) (any, error) {
+			return obj.OriginalFile, nil
+		},
+		nil,
+		ec.marshalOVodOriginalFile2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodOriginalFile,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_originalFile(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "sizeBytes":
+				return ec.fieldContext_VodOriginalFile_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type VodOriginalFile", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifactKindCounts_total(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifactKindCounts) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -110363,6 +113310,10 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_nodes(_ cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "originType":
+				return ec.fieldContext_StorageArtifact_originType(ctx, field)
+			case "parentRecordingId":
+				return ec.fieldContext_StorageArtifact_parentRecordingId(ctx, field)
 			case "key":
 				return ec.fieldContext_StorageArtifact_key(ctx, field)
 			case "kind":
@@ -110423,6 +113374,8 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_nodes(_ cont
 				return ec.fieldContext_StorageArtifact_durationSeconds(ctx, field)
 			case "tracks":
 				return ec.fieldContext_StorageArtifact_tracks(ctx, field)
+			case "originalFile":
+				return ec.fieldContext_StorageArtifact_originalFile(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StorageArtifact", field.Name)
 		},
@@ -110842,8 +113795,14 @@ func (ec *executionContext) fieldContext_StorageEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -110860,6 +113819,8 @@ func (ec *executionContext) fieldContext_StorageEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -112771,6 +115732,51 @@ func (ec *executionContext) fieldContext_Stream_updatedAt(_ context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _Stream_ingest(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_ingest,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Stream().Ingest(ctx, obj)
+		},
+		nil,
+		ec.marshalOStreamIngest2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamIngest,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_ingest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "state":
+				return ec.fieldContext_StreamIngest_state(ctx, field)
+			case "isLive":
+				return ec.fieldContext_StreamIngest_isLive(ctx, field)
+			case "sessionId":
+				return ec.fieldContext_StreamIngest_sessionId(ctx, field)
+			case "connectedAt":
+				return ec.fieldContext_StreamIngest_connectedAt(ctx, field)
+			case "liveSince":
+				return ec.fieldContext_StreamIngest_liveSince(ctx, field)
+			case "endedAt":
+				return ec.fieldContext_StreamIngest_endedAt(ctx, field)
+			case "resumableUntil":
+				return ec.fieldContext_StreamIngest_resumableUntil(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamIngest", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Stream_metrics(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -112844,6 +115850,108 @@ func (ec *executionContext) fieldContext_Stream_metrics(_ context.Context, field
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StreamMetrics", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Stream_recordings(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_recordings,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Stream().Recordings(ctx, obj, fc.Args["page"].(*model.ConnectionInput))
+		},
+		nil,
+		ec.marshalOStreamArtifactsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactsConnection,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_recordings(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_StreamArtifactsConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_StreamArtifactsConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_StreamArtifactsConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_StreamArtifactsConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamArtifactsConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Stream_recordings_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Stream_clips(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_clips,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Stream().Clips(ctx, obj, fc.Args["page"].(*model.ConnectionInput))
+		},
+		nil,
+		ec.marshalOStreamArtifactsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactsConnection,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_clips(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_StreamArtifactsConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_StreamArtifactsConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_StreamArtifactsConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_StreamArtifactsConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamArtifactsConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Stream_clips_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -113158,6 +116266,35 @@ func (ec *executionContext) fieldContext_Stream_retentionOverrides(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _Stream_transcodeLadder(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_transcodeLadder,
+		func(ctx context.Context) (any, error) {
+			return obj.TranscodeLadder, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_transcodeLadder(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StreamAnalyticsDaily_id(ctx context.Context, field graphql.CollectedField, obj *periscopepb.StreamAnalyticsDaily) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -113297,8 +116434,14 @@ func (ec *executionContext) fieldContext_StreamAnalyticsDaily_stream(_ context.C
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -113315,6 +116458,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsDaily_stream(_ context.C
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -113778,8 +116923,14 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummary_stream(_ context
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -113796,6 +116947,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummary_stream(_ context
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -114792,6 +117945,332 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummaryEdge_node(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _StreamArtifactEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactEdge_cursor,
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamArtifactEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactEdge_node,
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		ec.marshalNStorageArtifact2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifact,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "originType":
+				return ec.fieldContext_StorageArtifact_originType(ctx, field)
+			case "parentRecordingId":
+				return ec.fieldContext_StorageArtifact_parentRecordingId(ctx, field)
+			case "key":
+				return ec.fieldContext_StorageArtifact_key(ctx, field)
+			case "kind":
+				return ec.fieldContext_StorageArtifact_kind(ctx, field)
+			case "id":
+				return ec.fieldContext_StorageArtifact_id(ctx, field)
+			case "hash":
+				return ec.fieldContext_StorageArtifact_hash(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_StorageArtifact_playbackId(ctx, field)
+			case "streamId":
+				return ec.fieldContext_StorageArtifact_streamId(ctx, field)
+			case "streamTitle":
+				return ec.fieldContext_StorageArtifact_streamTitle(ctx, field)
+			case "title":
+				return ec.fieldContext_StorageArtifact_title(ctx, field)
+			case "secondaryLabel":
+				return ec.fieldContext_StorageArtifact_secondaryLabel(ctx, field)
+			case "description":
+				return ec.fieldContext_StorageArtifact_description(ctx, field)
+			case "errorMessage":
+				return ec.fieldContext_StorageArtifact_errorMessage(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
+			case "status":
+				return ec.fieldContext_StorageArtifact_status(ctx, field)
+			case "storageLocation":
+				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
+			case "storageClusterId":
+				return ec.fieldContext_StorageArtifact_storageClusterId(ctx, field)
+			case "syncStatus":
+				return ec.fieldContext_StorageArtifact_syncStatus(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_StorageArtifact_hasLocalCopy(ctx, field)
+			case "isSynced":
+				return ec.fieldContext_StorageArtifact_isSynced(ctx, field)
+			case "isFinalized":
+				return ec.fieldContext_StorageArtifact_isFinalized(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_StorageArtifact_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_StorageArtifact_updatedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_StorageArtifact_expiresAt(ctx, field)
+			case "effectiveRetention":
+				return ec.fieldContext_StorageArtifact_effectiveRetention(ctx, field)
+			case "storageCost":
+				return ec.fieldContext_StorageArtifact_storageCost(ctx, field)
+			case "deleteId":
+				return ec.fieldContext_StorageArtifact_deleteId(ctx, field)
+			case "retentionId":
+				return ec.fieldContext_StorageArtifact_retentionId(ctx, field)
+			case "thumbnailUrl":
+				return ec.fieldContext_StorageArtifact_thumbnailUrl(ctx, field)
+			case "thumbnailAssets":
+				return ec.fieldContext_StorageArtifact_thumbnailAssets(ctx, field)
+			case "durationSeconds":
+				return ec.fieldContext_StorageArtifact_durationSeconds(ctx, field)
+			case "tracks":
+				return ec.fieldContext_StorageArtifact_tracks(ctx, field)
+			case "originalFile":
+				return ec.fieldContext_StorageArtifact_originalFile(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StorageArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamArtifactsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactsConnection_edges,
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		ec.marshalNStreamArtifactEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactEdgeᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "cursor":
+				return ec.fieldContext_StreamArtifactEdge_cursor(ctx, field)
+			case "node":
+				return ec.fieldContext_StreamArtifactEdge_node(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamArtifactEdge", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamArtifactsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactsConnection_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNStorageArtifact2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "originType":
+				return ec.fieldContext_StorageArtifact_originType(ctx, field)
+			case "parentRecordingId":
+				return ec.fieldContext_StorageArtifact_parentRecordingId(ctx, field)
+			case "key":
+				return ec.fieldContext_StorageArtifact_key(ctx, field)
+			case "kind":
+				return ec.fieldContext_StorageArtifact_kind(ctx, field)
+			case "id":
+				return ec.fieldContext_StorageArtifact_id(ctx, field)
+			case "hash":
+				return ec.fieldContext_StorageArtifact_hash(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_StorageArtifact_playbackId(ctx, field)
+			case "streamId":
+				return ec.fieldContext_StorageArtifact_streamId(ctx, field)
+			case "streamTitle":
+				return ec.fieldContext_StorageArtifact_streamTitle(ctx, field)
+			case "title":
+				return ec.fieldContext_StorageArtifact_title(ctx, field)
+			case "secondaryLabel":
+				return ec.fieldContext_StorageArtifact_secondaryLabel(ctx, field)
+			case "description":
+				return ec.fieldContext_StorageArtifact_description(ctx, field)
+			case "errorMessage":
+				return ec.fieldContext_StorageArtifact_errorMessage(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
+			case "status":
+				return ec.fieldContext_StorageArtifact_status(ctx, field)
+			case "storageLocation":
+				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
+			case "storageClusterId":
+				return ec.fieldContext_StorageArtifact_storageClusterId(ctx, field)
+			case "syncStatus":
+				return ec.fieldContext_StorageArtifact_syncStatus(ctx, field)
+			case "hasLocalCopy":
+				return ec.fieldContext_StorageArtifact_hasLocalCopy(ctx, field)
+			case "isSynced":
+				return ec.fieldContext_StorageArtifact_isSynced(ctx, field)
+			case "isFinalized":
+				return ec.fieldContext_StorageArtifact_isFinalized(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_StorageArtifact_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_StorageArtifact_updatedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_StorageArtifact_expiresAt(ctx, field)
+			case "effectiveRetention":
+				return ec.fieldContext_StorageArtifact_effectiveRetention(ctx, field)
+			case "storageCost":
+				return ec.fieldContext_StorageArtifact_storageCost(ctx, field)
+			case "deleteId":
+				return ec.fieldContext_StorageArtifact_deleteId(ctx, field)
+			case "retentionId":
+				return ec.fieldContext_StorageArtifact_retentionId(ctx, field)
+			case "thumbnailUrl":
+				return ec.fieldContext_StorageArtifact_thumbnailUrl(ctx, field)
+			case "thumbnailAssets":
+				return ec.fieldContext_StorageArtifact_thumbnailAssets(ctx, field)
+			case "durationSeconds":
+				return ec.fieldContext_StorageArtifact_durationSeconds(ctx, field)
+			case "tracks":
+				return ec.fieldContext_StorageArtifact_tracks(ctx, field)
+			case "originalFile":
+				return ec.fieldContext_StorageArtifact_originalFile(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StorageArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamArtifactsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactsConnection_pageInfo,
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "startCursor":
+				return ec.fieldContext_PageInfo_startCursor(ctx, field)
+			case "endCursor":
+				return ec.fieldContext_PageInfo_endCursor(ctx, field)
+			case "hasNextPage":
+				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+			case "hasPreviousPage":
+				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamArtifactsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.StreamArtifactsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamArtifactsConnection_totalCount,
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamArtifactsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamArtifactsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StreamConnected_streamId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamConnected) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -114867,6 +118346,35 @@ func (ec *executionContext) _StreamConnected_playbackId(ctx context.Context, fie
 }
 
 func (ec *executionContext) fieldContext_StreamConnected_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamConnected",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamConnected_sessionId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamConnected) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamConnected_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamConnected_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamConnected",
 		Field:      field,
@@ -115018,8 +118526,14 @@ func (ec *executionContext) fieldContext_StreamConnectionHourly_stream(_ context
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -115036,6 +118550,8 @@ func (ec *executionContext) fieldContext_StreamConnectionHourly_stream(_ context
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -115549,8 +119065,14 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -115567,8 +119089,97 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamEnded_streamId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamEnded) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamEnded_streamId,
+		func(ctx context.Context) (any, error) {
+			return obj.StreamId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamEnded_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamEnded",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamEnded_playbackId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamEnded) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamEnded_playbackId,
+		func(ctx context.Context) (any, error) {
+			return obj.PlaybackId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamEnded_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamEnded",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamEnded_sessionId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamEnded) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamEnded_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamEnded_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamEnded",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
 		},
 	}
 	return fc, nil
@@ -115713,8 +119324,14 @@ func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, f
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -115731,6 +119348,8 @@ func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, f
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -117832,8 +121451,14 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Con
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -117850,6 +121475,8 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Con
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -119215,6 +122842,325 @@ func (ec *executionContext) fieldContext_StreamIdle_playbackId(_ context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _StreamIdle_sessionId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamIdle) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIdle_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIdle_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIdle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_state(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_state,
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		ec.marshalNStreamIngestState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamIngestState,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type StreamIngestState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_isLive(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_isLive,
+		func(ctx context.Context) (any, error) {
+			return obj.IsLive, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_isLive(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_sessionId(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_connectedAt(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_connectedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ConnectedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_connectedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_liveSince(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_liveSince,
+		func(ctx context.Context) (any, error) {
+			return obj.LiveSince, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_liveSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_endedAt(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_endedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.EndedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_endedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngest_resumableUntil(ctx context.Context, field graphql.CollectedField, obj *model.StreamIngest) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngest_resumableUntil,
+		func(ctx context.Context) (any, error) {
+			return obj.ResumableUntil, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngest_resumableUntil(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngest",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngestDisconnected_streamId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamIngestDisconnected) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngestDisconnected_streamId,
+		func(ctx context.Context) (any, error) {
+			return obj.StreamId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngestDisconnected_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngestDisconnected",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngestDisconnected_sessionId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamIngestDisconnected) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngestDisconnected_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngestDisconnected_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngestDisconnected",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamIngestDisconnected_reason(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamIngestDisconnected) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIngestDisconnected_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIngestDisconnected_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIngestDisconnected",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StreamKey_id(ctx context.Context, field graphql.CollectedField, obj *commodorepb.StreamKey) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -119325,8 +123271,14 @@ func (ec *executionContext) fieldContext_StreamKey_stream(_ context.Context, fie
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -119343,6 +123295,8 @@ func (ec *executionContext) fieldContext_StreamKey_stream(_ context.Context, fie
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -119796,6 +123750,35 @@ func (ec *executionContext) _StreamLive_playbackId(ctx context.Context, field gr
 }
 
 func (ec *executionContext) fieldContext_StreamLive_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamLive",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamLive_sessionId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamLive) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamLive_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamLive_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamLive",
 		Field:      field,
@@ -122335,8 +126318,14 @@ func (ec *executionContext) fieldContext_StreamsConnection_nodes(_ context.Conte
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -122353,6 +126342,8 @@ func (ec *executionContext) fieldContext_StreamsConnection_nodes(_ context.Conte
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -128850,8 +132841,14 @@ func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -128868,6 +132865,8 @@ func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -129357,8 +133356,14 @@ func (ec *executionContext) fieldContext_TrackListUpdate_stream(_ context.Contex
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -129375,6 +133380,8 @@ func (ec *executionContext) fieldContext_TrackListUpdate_stream(_ context.Contex
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -129813,6 +133820,248 @@ func (ec *executionContext) fieldContext_TrackListUpdate_primaryAudioSampleRate(
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadder_name(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadder) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadder_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadder_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadder",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadder_displayName(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadder) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadder_displayName,
+		func(ctx context.Context) (any, error) {
+			return obj.DisplayName, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadder_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadder",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadder_description(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadder) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadder_description,
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadder_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadder",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadder_renditionNames(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadder) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadder_renditionNames,
+		func(ctx context.Context) (any, error) {
+			return obj.RenditionNames, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadder_renditionNames(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadder",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadderPolicy_ladders(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadderPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadderPolicy_ladders,
+		func(ctx context.Context) (any, error) {
+			return obj.Ladders, nil
+		},
+		nil,
+		ec.marshalNTranscodeLadder2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadderᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadderPolicy_ladders(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadderPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_TranscodeLadder_name(ctx, field)
+			case "displayName":
+				return ec.fieldContext_TranscodeLadder_displayName(ctx, field)
+			case "description":
+				return ec.fieldContext_TranscodeLadder_description(ctx, field)
+			case "renditionNames":
+				return ec.fieldContext_TranscodeLadder_renditionNames(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TranscodeLadder", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadderPolicy_planDefault(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadderPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadderPolicy_planDefault,
+		func(ctx context.Context) (any, error) {
+			return obj.PlanDefault, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadderPolicy_planDefault(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadderPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadderPolicy_tenantLadder(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadderPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadderPolicy_tenantLadder,
+		func(ctx context.Context) (any, error) {
+			return obj.TenantLadder, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadderPolicy_tenantLadder(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadderPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TranscodeLadderPolicy_effectiveLadder(ctx context.Context, field graphql.CollectedField, obj *model.TranscodeLadderPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TranscodeLadderPolicy_effectiveLadder,
+		func(ctx context.Context) (any, error) {
+			return obj.EffectiveLadder, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TranscodeLadderPolicy_effectiveLadder(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TranscodeLadderPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -131386,8 +135635,14 @@ func (ec *executionContext) fieldContext_ViewerCountBucket_stream(_ context.Cont
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -131404,6 +135659,8 @@ func (ec *executionContext) fieldContext_ViewerCountBucket_stream(_ context.Cont
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -132343,8 +136600,14 @@ func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Conte
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -132361,6 +136624,8 @@ func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Conte
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -133109,8 +137374,14 @@ func (ec *executionContext) fieldContext_ViewerHoursHourly_stream(_ context.Cont
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -133127,6 +137398,8 @@ func (ec *executionContext) fieldContext_ViewerHoursHourly_stream(_ context.Cont
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -133652,8 +137925,14 @@ func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context,
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -133670,6 +137949,8 @@ func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context,
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -134338,8 +138619,14 @@ func (ec *executionContext) fieldContext_ViewerSession_stream(_ context.Context,
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
+			case "ingest":
+				return ec.fieldContext_Stream_ingest(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
+			case "recordings":
+				return ec.fieldContext_Stream_recordings(ctx, field)
+			case "clips":
+				return ec.fieldContext_Stream_clips(ctx, field)
 			case "pushTargets":
 				return ec.fieldContext_Stream_pushTargets(ctx, field)
 			case "playbackPolicy":
@@ -134356,6 +138643,8 @@ func (ec *executionContext) fieldContext_ViewerSession_stream(_ context.Context,
 				return ec.fieldContext_Stream_thumbnailAssets(ctx, field)
 			case "retentionOverrides":
 				return ec.fieldContext_Stream_retentionOverrides(ctx, field)
+			case "transcodeLadder":
+				return ec.fieldContext_Stream_transcodeLadder(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Stream", field.Name)
 		},
@@ -136093,6 +140382,184 @@ func (ec *executionContext) fieldContext_VodAsset_storageCost(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _VodAsset_originalFile(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodAsset_originalFile,
+		func(ctx context.Context) (any, error) {
+			return obj.OriginalFile, nil
+		},
+		nil,
+		ec.marshalOVodOriginalFile2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodOriginalFile,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodAsset_originalFile(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodAsset",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "sizeBytes":
+				return ec.fieldContext_VodOriginalFile_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type VodOriginalFile", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodOriginalDownload_url(ctx context.Context, field graphql.CollectedField, obj *model.VodOriginalDownload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodOriginalDownload_url,
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodOriginalDownload_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodOriginalDownload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodOriginalDownload_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.VodOriginalDownload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodOriginalDownload_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodOriginalDownload_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodOriginalDownload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodOriginalDownload_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *model.VodOriginalDownload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodOriginalDownload_sizeBytes,
+		func(ctx context.Context) (any, error) {
+			return obj.SizeBytes, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodOriginalDownload_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodOriginalDownload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodOriginalDownload_filename(ctx context.Context, field graphql.CollectedField, obj *model.VodOriginalDownload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodOriginalDownload_filename,
+		func(ctx context.Context) (any, error) {
+			return obj.Filename, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodOriginalDownload_filename(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodOriginalDownload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodOriginalFile_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *model.VodOriginalFile) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodOriginalFile_sizeBytes,
+		func(ctx context.Context) (any, error) {
+			return obj.SizeBytes, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodOriginalFile_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodOriginalFile",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _VodRetention_bucketWidthS(ctx context.Context, field graphql.CollectedField, obj *periscopepb.VodRetention) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -136958,6 +141425,35 @@ func (ec *executionContext) fieldContext_VodUploadSession_expiresAt(_ context.Co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _VodUploadSession_keepOriginal(ctx context.Context, field graphql.CollectedField, obj *model.VodUploadSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodUploadSession_keepOriginal,
+		func(ctx context.Context) (any, error) {
+			return obj.KeepOriginal, nil
+		},
+		nil,
+		ec.marshalOBoolean2ᚖbool,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodUploadSession_keepOriginal(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodUploadSession",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -142140,7 +146636,7 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 		asMap["ingestMode"] = "PUSH"
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation"}
+	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation", "transcodeLadder"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -142196,6 +146692,13 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.SourceLocation = data
+		case "transcodeLadder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("transcodeLadder"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TranscodeLadder = data
 		}
 	}
 	return it, nil
@@ -142242,7 +146745,7 @@ func (ec *executionContext) unmarshalInputCreateVodUploadInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"filename", "sizeBytes", "contentType", "title", "description"}
+	fieldsInOrder := [...]string{"filename", "sizeBytes", "contentType", "title", "description", "transcodeLadder", "keepOriginal"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -142284,6 +146787,20 @@ func (ec *executionContext) unmarshalInputCreateVodUploadInput(ctx context.Conte
 				return it, err
 			}
 			it.Description = data
+		case "transcodeLadder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("transcodeLadder"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TranscodeLadder = data
+		case "keepOriginal":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("keepOriginal"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.KeepOriginal = data
 		}
 	}
 	return it, nil
@@ -142388,7 +146905,7 @@ func (ec *executionContext) unmarshalInputImportVodAssetInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"url", "filename", "title", "description"}
+	fieldsInOrder := [...]string{"url", "filename", "title", "description", "transcodeLadder"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -142423,6 +146940,13 @@ func (ec *executionContext) unmarshalInputImportVodAssetInput(ctx context.Contex
 				return it, err
 			}
 			it.Description = data
+		case "transcodeLadder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("transcodeLadder"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TranscodeLadder = data
 		}
 	}
 	return it, nil
@@ -143663,6 +148187,57 @@ func (ec *executionContext) unmarshalInputSetMediaRetentionPolicyInput(ctx conte
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputSetNodeCapacityInput(ctx context.Context, obj any) (model.SetNodeCapacityInput, error) {
+	var it model.SetNodeCapacityInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"nodeId", "egressBudgetBytesPerSec", "ingressBudgetBytesPerSec", "expectedRevision"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "nodeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeID = data
+		case "egressBudgetBytesPerSec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("egressBudgetBytesPerSec"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EgressBudgetBytesPerSec = data
+		case "ingressBudgetBytesPerSec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ingressBudgetBytesPerSec"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IngressBudgetBytesPerSec = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputSetNodeModeInput(ctx context.Context, obj any) (model.SetNodeModeInput, error) {
 	var it model.SetNodeModeInput
 	if obj == nil {
@@ -143811,6 +148386,36 @@ func (ec *executionContext) unmarshalInputSetStreamRetentionOverridesInput(ctx c
 				return it, err
 			}
 			it.ClearClipRetentionOverride = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSetTranscodeLadderPolicyInput(ctx context.Context, obj any) (model.SetTranscodeLadderPolicyInput, error) {
+	var it model.SetTranscodeLadderPolicyInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"ladder"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "ladder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ladder"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Ladder = data
 		}
 	}
 	return it, nil
@@ -144424,7 +149029,7 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring"}
+	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring", "transcodeLadder"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -144501,6 +149106,13 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.Monitoring = data
+		case "transcodeLadder":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("transcodeLadder"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TranscodeLadder = data
 		}
 	}
 	return it, nil
@@ -145348,6 +149960,47 @@ func (ec *executionContext) _CreateStreamResult(ctx context.Context, sel ast.Sel
 	}
 }
 
+func (ec *executionContext) _CreateVodOriginalDownloadResult(ctx context.Context, sel ast.SelectionSet, obj model.CreateVodOriginalDownloadResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.VodOriginalDownload:
+		return ec._VodOriginalDownload(ctx, sel, &obj)
+	case *model.VodOriginalDownload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._VodOriginalDownload(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of CreateVodOriginalDownloadResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _CreateVodUploadResult(ctx context.Context, sel ast.SelectionSet, obj model.CreateVodUploadResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -145488,6 +150141,13 @@ func (ec *executionContext) _DeleteStreamKeyResult(ctx context.Context, sel ast.
 	switch obj := (obj).(type) {
 	case nil:
 		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
 	case model.NotFoundError:
 		return ec._NotFoundError(ctx, sel, &obj)
 	case *model.NotFoundError:
@@ -145586,6 +150246,47 @@ func (ec *executionContext) _DeleteVodAssetResult(ctx context.Context, sel ast.S
 	}
 }
 
+func (ec *executionContext) _DeleteVodOriginalResult(ctx context.Context, sel ast.SelectionSet, obj model.DeleteVodOriginalResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.DeleteSuccess:
+		return ec._DeleteSuccess(ctx, sel, &obj)
+	case *model.DeleteSuccess:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._DeleteSuccess(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of DeleteVodOriginalResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _DeleteWebhookEndpointResult(ctx context.Context, sel ast.SelectionSet, obj model.DeleteWebhookEndpointResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -145616,6 +150317,47 @@ func (ec *executionContext) _DeleteWebhookEndpointResult(ctx context.Context, se
 			return typedObj
 		} else {
 			panic(fmt.Errorf("unexpected type %T; non-generated variants of DeleteWebhookEndpointResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _DisconnectIngestResult(ctx context.Context, sel ast.SelectionSet, obj model.DisconnectIngestResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.IngestDisconnectSuccess:
+		return ec._IngestDisconnectSuccess(ctx, sel, &obj)
+	case *model.IngestDisconnectSuccess:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._IngestDisconnectSuccess(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of DisconnectIngestResult must implement graphql.Marshaler", obj))
 		}
 	}
 }
@@ -146520,11 +151262,21 @@ func (ec *executionContext) _PublicEventData(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._StreamKeyRotated(ctx, sel, obj)
+	case *publicv1.StreamIngestDisconnected:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._StreamIngestDisconnected(ctx, sel, obj)
 	case *publicv1.StreamIdle:
 		if obj == nil {
 			return graphql.Null
 		}
 		return ec._StreamIdle(ctx, sel, obj)
+	case *publicv1.StreamEnded:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._StreamEnded(ctx, sel, obj)
 	case *publicv1.StreamDeleted:
 		if obj == nil {
 			return graphql.Null
@@ -146560,6 +151312,11 @@ func (ec *executionContext) _PublicEventData(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._RecordingFailed(ctx, sel, obj)
+	case *publicv1.RecordingChapterReady:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RecordingChapterReady(ctx, sel, obj)
 	case *publicv1.RecordingChapterFailed:
 		if obj == nil {
 			return graphql.Null
@@ -147080,6 +151837,45 @@ func (ec *executionContext) _SetMediaRetentionPolicyResult(ctx context.Context, 
 	}
 }
 
+func (ec *executionContext) _SetNodeCapacityResult(ctx context.Context, sel ast.SelectionSet, obj model.SetNodeCapacityResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case *quartermasterpb.InfrastructureNode:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._InfrastructureNode(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of SetNodeCapacityResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _SetNodeModeResult(ctx context.Context, sel ast.SelectionSet, obj model.SetNodeModeResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -147246,6 +152042,40 @@ func (ec *executionContext) _SetStreamRetentionOverridesResult(ctx context.Conte
 			return typedObj
 		} else {
 			panic(fmt.Errorf("unexpected type %T; non-generated variants of SetStreamRetentionOverridesResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _SetTranscodeLadderPolicyResult(ctx context.Context, sel ast.SelectionSet, obj model.SetTranscodeLadderPolicyResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.TranscodeLadderPolicy:
+		return ec._TranscodeLadderPolicy(ctx, sel, &obj)
+	case *model.TranscodeLadderPolicy:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._TranscodeLadderPolicy(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of SetTranscodeLadderPolicyResult must implement graphql.Marshaler", obj))
 		}
 	}
 }
@@ -152023,7 +156853,7 @@ func (ec *executionContext) _AssetNodeCopy(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult", "RevokeAuthSessionResult", "RevokeOtherAuthSessionsResult", "RenameAuthSessionResult", "ChangePasswordResult"}
+var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DisconnectIngestResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetTranscodeLadderPolicyResult", "CreateVodOriginalDownloadResult", "DeleteVodOriginalResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "SetNodeCapacityResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult", "RevokeAuthSessionResult", "RevokeOtherAuthSessionsResult", "RenameAuthSessionResult", "ChangePasswordResult"}
 
 func (ec *executionContext) _AuthError(ctx context.Context, sel ast.SelectionSet, obj *model.AuthError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, authErrorImplementors)
@@ -155352,6 +160182,8 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "errorMessage":
+			out.Values[i] = ec._Clip_errorMessage(ctx, field, obj)
 		case "createdAt":
 			field := field
 
@@ -155489,7 +160321,38 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 		case "syncStatus":
 			out.Values[i] = ec._Clip_syncStatus(ctx, field, obj)
 		case "hasLocalCopy":
-			out.Values[i] = ec._Clip_hasLocalCopy(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Clip_hasLocalCopy(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "isSynced":
 			out.Values[i] = ec._Clip_isSynced(ctx, field, obj)
 		case "isFinalized":
@@ -155904,10 +160767,74 @@ func (ec *executionContext) _Cluster(ctx context.Context, sel ast.SelectionSet, 
 				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "maxBandwidthMbps":
-			out.Values[i] = ec._Cluster_maxBandwidthMbps(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Cluster_maxBandwidthMbps(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "capacity":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Cluster_capacity(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "healthStatus":
 			out.Values[i] = ec._Cluster_healthStatus(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -156391,6 +161318,65 @@ func (ec *executionContext) _ClusterCapabilities(ctx context.Context, sel ast.Se
 	return out
 }
 
+var clusterCapacityImplementors = []string{"ClusterCapacity"}
+
+func (ec *executionContext) _ClusterCapacity(ctx context.Context, sel ast.SelectionSet, obj *model.ClusterCapacity) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, clusterCapacityImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClusterCapacity")
+		case "egressBudgetBytesPerSec":
+			out.Values[i] = ec._ClusterCapacity_egressBudgetBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ingressBudgetBytesPerSec":
+			out.Values[i] = ec._ClusterCapacity_ingressBudgetBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "egressUsableBytesPerSec":
+			out.Values[i] = ec._ClusterCapacity_egressUsableBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ingressUsableBytesPerSec":
+			out.Values[i] = ec._ClusterCapacity_ingressUsableBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "defaultBudgetNodes":
+			out.Values[i] = ec._ClusterCapacity_defaultBudgetNodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var clusterEdgeImplementors = []string{"ClusterEdge"}
 
 func (ec *executionContext) _ClusterEdge(ctx context.Context, sel ast.SelectionSet, obj *model.ClusterEdge) graphql.Marshaler {
@@ -156781,6 +161767,26 @@ func (ec *executionContext) _ClusterLiveStats(ctx context.Context, sel ast.Selec
 			}
 		case "egressCapacityBps":
 			out.Values[i] = ec._ClusterLiveStats_egressCapacityBps(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "egressBudgetBytesPerSec":
+			out.Values[i] = ec._ClusterLiveStats_egressBudgetBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "egressUsableBytesPerSec":
+			out.Values[i] = ec._ClusterLiveStats_egressUsableBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "egressObservedBytesPerSec":
+			out.Values[i] = ec._ClusterLiveStats_egressObservedBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "defaultBudgetNodes":
+			out.Values[i] = ec._ClusterLiveStats_defaultBudgetNodes(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -159089,6 +164095,104 @@ func (ec *executionContext) _DVRChapter(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var dVRChapterConnectionImplementors = []string{"DVRChapterConnection"}
+
+func (ec *executionContext) _DVRChapterConnection(ctx context.Context, sel ast.SelectionSet, obj *model.DVRChapterConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, dVRChapterConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DVRChapterConnection")
+		case "edges":
+			out.Values[i] = ec._DVRChapterConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodes":
+			out.Values[i] = ec._DVRChapterConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._DVRChapterConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._DVRChapterConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var dVRChapterEdgeImplementors = []string{"DVRChapterEdge"}
+
+func (ec *executionContext) _DVRChapterEdge(ctx context.Context, sel ast.SelectionSet, obj *model.DVRChapterEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, dVRChapterEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DVRChapterEdge")
+		case "cursor":
+			out.Values[i] = ec._DVRChapterEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._DVRChapterEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var dVRChapterRefImplementors = []string{"DVRChapterRef"}
 
 func (ec *executionContext) _DVRChapterRef(ctx context.Context, sel ast.SelectionSet, obj *model.DVRChapterRef) graphql.Marshaler {
@@ -159221,6 +164325,39 @@ func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSe
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DVRRequest")
+		case "chapters":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._DVRRequest_chapters(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "id":
 			out.Values[i] = ec._DVRRequest_id(ctx, field, obj)
 		case "dvrHash":
@@ -159844,7 +164981,38 @@ func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSe
 		case "syncStatus":
 			out.Values[i] = ec._DVRRequest_syncStatus(ctx, field, obj)
 		case "hasLocalCopy":
-			out.Values[i] = ec._DVRRequest_hasLocalCopy(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._DVRRequest_hasLocalCopy(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "isSynced":
 			out.Values[i] = ec._DVRRequest_isSynced(ctx, field, obj)
 		case "isFinalized":
@@ -159940,7 +165108,7 @@ func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
-var deleteSuccessImplementors = []string{"DeleteSuccess", "DeleteStreamResult", "DeleteClipResult", "DeleteStreamKeyResult", "StopDVRResult", "DeleteDVRResult", "AbortVodUploadResult", "DeleteVodAssetResult", "RevokeDeveloperTokenResult", "DeleteWebhookEndpointResult", "RevokeBootstrapTokenResult", "RevokeClusterInviteResult", "UnlinkWalletResult"}
+var deleteSuccessImplementors = []string{"DeleteSuccess", "DeleteStreamResult", "DeleteClipResult", "DeleteStreamKeyResult", "StopDVRResult", "DeleteDVRResult", "AbortVodUploadResult", "DeleteVodAssetResult", "DeleteVodOriginalResult", "RevokeDeveloperTokenResult", "DeleteWebhookEndpointResult", "RevokeBootstrapTokenResult", "RevokeClusterInviteResult", "UnlinkWalletResult"}
 
 func (ec *executionContext) _DeleteSuccess(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteSuccess) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, deleteSuccessImplementors)
@@ -161912,7 +167080,7 @@ func (ec *executionContext) _IncidentsConnection(ctx context.Context, sel ast.Se
 	return out
 }
 
-var infrastructureNodeImplementors = []string{"InfrastructureNode", "SetNodeModeResult", "Node"}
+var infrastructureNodeImplementors = []string{"InfrastructureNode", "SetNodeModeResult", "SetNodeCapacityResult", "Node"}
 
 func (ec *executionContext) _InfrastructureNode(ctx context.Context, sel ast.SelectionSet, obj *quartermasterpb.InfrastructureNode) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, infrastructureNodeImplementors)
@@ -162467,6 +167635,83 @@ func (ec *executionContext) _InfrastructureNode(ctx context.Context, sel ast.Sel
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "capacity":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._InfrastructureNode_capacity(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var ingestDisconnectSuccessImplementors = []string{"IngestDisconnectSuccess", "DisconnectIngestResult"}
+
+func (ec *executionContext) _IngestDisconnectSuccess(ctx context.Context, sel ast.SelectionSet, obj *model.IngestDisconnectSuccess) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, ingestDisconnectSuccessImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IngestDisconnectSuccess")
+		case "streamId":
+			out.Values[i] = ec._IngestDisconnectSuccess_streamId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stopRequested":
+			out.Values[i] = ec._IngestDisconnectSuccess_stopRequested(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -167118,6 +172363,13 @@ func (ec *executionContext) _MediaRetentionPolicy(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "keepVodOriginals":
+			out.Values[i] = ec._MediaRetentionPolicy_keepVodOriginals(ctx, field, obj)
+		case "effectiveKeepVodOriginals":
+			out.Values[i] = ec._MediaRetentionPolicy_effectiveKeepVodOriginals(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -167753,6 +173005,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "disconnectIngest":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_disconnectIngest(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "createClip":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createClip(ctx, field)
@@ -168226,6 +173485,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "setNodeCapacity":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setNodeCapacity(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "openMistAdminSession":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_openMistAdminSession(ctx, field)
@@ -168243,6 +173509,34 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "setMediaRetentionPolicy":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_setMediaRetentionPolicy(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setTranscodeLadderPolicy":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setTranscodeLadderPolicy(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setVodOriginalPolicy":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setVodOriginalPolicy(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createVodOriginalDownload":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_createVodOriginalDownload(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deleteVodOriginal":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteVodOriginal(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -168514,6 +173808,16 @@ func (ec *executionContext) _NetworkClusterStatus(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "egressUsableMbps":
+			out.Values[i] = ec._NetworkClusterStatus_egressUsableMbps(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "defaultBudgetNodes":
+			out.Values[i] = ec._NetworkClusterStatus_defaultBudgetNodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "ingressMbps":
 			out.Values[i] = ec._NetworkClusterStatus_ingressMbps(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -168777,6 +174081,69 @@ func (ec *executionContext) _NetworkStatus(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var nodeCapacityImplementors = []string{"NodeCapacity"}
+
+func (ec *executionContext) _NodeCapacity(ctx context.Context, sel ast.SelectionSet, obj *model.NodeCapacity) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, nodeCapacityImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("NodeCapacity")
+		case "egressBudgetBytesPerSec":
+			out.Values[i] = ec._NodeCapacity_egressBudgetBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ingressBudgetBytesPerSec":
+			out.Values[i] = ec._NodeCapacity_ingressBudgetBytesPerSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "egressSource":
+			out.Values[i] = ec._NodeCapacity_egressSource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ingressSource":
+			out.Values[i] = ec._NodeCapacity_ingressSource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._NodeCapacity_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._NodeCapacity_updatedAt(ctx, field, obj)
+		case "appliedRevision":
+			out.Values[i] = ec._NodeCapacity_appliedRevision(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -170828,7 +176195,7 @@ func (ec *executionContext) _NodesConnection(ctx context.Context, sel ast.Select
 	return out
 }
 
-var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult", "RevokeAuthSessionResult", "RenameAuthSessionResult"}
+var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DisconnectIngestResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "CreateVodOriginalDownloadResult", "DeleteVodOriginalResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "SetNodeCapacityResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult", "RevokeAuthSessionResult", "RenameAuthSessionResult"}
 
 func (ec *executionContext) _NotFoundError(ctx context.Context, sel ast.SelectionSet, obj *model.NotFoundError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, notFoundErrorImplementors)
@@ -178128,6 +183495,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "dvrRecording":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_dvrRecording(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "vodAsset":
 			field := field
 
@@ -178409,6 +183795,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_mediaRetentionPolicy(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "transcodeLadderPolicy":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_transcodeLadderPolicy(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -179087,6 +184495,62 @@ func (ec *executionContext) _RecordingChapterFailed(ctx context.Context, sel ast
 			}
 		case "reason":
 			out.Values[i] = ec._RecordingChapterFailed_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var recordingChapterReadyImplementors = []string{"RecordingChapterReady", "PublicEventData"}
+
+func (ec *executionContext) _RecordingChapterReady(ctx context.Context, sel ast.SelectionSet, obj *publicv1.RecordingChapterReady) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, recordingChapterReadyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RecordingChapterReady")
+		case "artifact":
+			out.Values[i] = ec._RecordingChapterReady_artifact(ctx, field, obj)
+		case "chapterId":
+			out.Values[i] = ec._RecordingChapterReady_chapterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startMs":
+			out.Values[i] = ec._RecordingChapterReady_startMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "endMs":
+			out.Values[i] = ec._RecordingChapterReady_endMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizeBytes":
+			out.Values[i] = ec._RecordingChapterReady_sizeBytes(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -182058,6 +187522,10 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("StorageArtifact")
+		case "originType":
+			out.Values[i] = ec._StorageArtifact_originType(ctx, field, obj)
+		case "parentRecordingId":
+			out.Values[i] = ec._StorageArtifact_parentRecordingId(ctx, field, obj)
 		case "key":
 			out.Values[i] = ec._StorageArtifact_key(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -182157,6 +187625,8 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "originalFile":
+			out.Values[i] = ec._StorageArtifact_originalFile(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -183646,6 +189116,39 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "ingest":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Stream_ingest(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "metrics":
 			field := field
 
@@ -183656,6 +189159,72 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 					}
 				}()
 				res = ec._Stream_metrics(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "recordings":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Stream_recordings(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "clips":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Stream_clips(ctx, field, obj)
 				return res
 			}
 
@@ -183887,6 +189456,11 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "transcodeLadder":
+			out.Values[i] = ec._Stream_transcodeLadder(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -184974,6 +190548,104 @@ func (ec *executionContext) _StreamAnalyticsSummaryEdge(ctx context.Context, sel
 	return out
 }
 
+var streamArtifactEdgeImplementors = []string{"StreamArtifactEdge"}
+
+func (ec *executionContext) _StreamArtifactEdge(ctx context.Context, sel ast.SelectionSet, obj *model.StreamArtifactEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamArtifactEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamArtifactEdge")
+		case "cursor":
+			out.Values[i] = ec._StreamArtifactEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._StreamArtifactEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamArtifactsConnectionImplementors = []string{"StreamArtifactsConnection"}
+
+func (ec *executionContext) _StreamArtifactsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.StreamArtifactsConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamArtifactsConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamArtifactsConnection")
+		case "edges":
+			out.Values[i] = ec._StreamArtifactsConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodes":
+			out.Values[i] = ec._StreamArtifactsConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._StreamArtifactsConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._StreamArtifactsConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var streamConnectedImplementors = []string{"StreamConnected", "PublicEventData"}
 
 func (ec *executionContext) _StreamConnected(ctx context.Context, sel ast.SelectionSet, obj *publicv1.StreamConnected) graphql.Marshaler {
@@ -184997,6 +190669,11 @@ func (ec *executionContext) _StreamConnected(ctx context.Context, sel ast.Select
 			}
 		case "playbackId":
 			out.Values[i] = ec._StreamConnected_playbackId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._StreamConnected_sessionId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -185510,6 +191187,55 @@ func (ec *executionContext) _StreamEdge(ctx context.Context, sel ast.SelectionSe
 			}
 		case "node":
 			out.Values[i] = ec._StreamEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamEndedImplementors = []string{"StreamEnded", "PublicEventData"}
+
+func (ec *executionContext) _StreamEnded(ctx context.Context, sel ast.SelectionSet, obj *publicv1.StreamEnded) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamEndedImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamEnded")
+		case "streamId":
+			out.Values[i] = ec._StreamEnded_streamId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "playbackId":
+			out.Values[i] = ec._StreamEnded_playbackId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._StreamEnded_sessionId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -187064,6 +192790,114 @@ func (ec *executionContext) _StreamIdle(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "sessionId":
+			out.Values[i] = ec._StreamIdle_sessionId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamIngestImplementors = []string{"StreamIngest"}
+
+func (ec *executionContext) _StreamIngest(ctx context.Context, sel ast.SelectionSet, obj *model.StreamIngest) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamIngestImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamIngest")
+		case "state":
+			out.Values[i] = ec._StreamIngest_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isLive":
+			out.Values[i] = ec._StreamIngest_isLive(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._StreamIngest_sessionId(ctx, field, obj)
+		case "connectedAt":
+			out.Values[i] = ec._StreamIngest_connectedAt(ctx, field, obj)
+		case "liveSince":
+			out.Values[i] = ec._StreamIngest_liveSince(ctx, field, obj)
+		case "endedAt":
+			out.Values[i] = ec._StreamIngest_endedAt(ctx, field, obj)
+		case "resumableUntil":
+			out.Values[i] = ec._StreamIngest_resumableUntil(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamIngestDisconnectedImplementors = []string{"StreamIngestDisconnected", "PublicEventData"}
+
+func (ec *executionContext) _StreamIngestDisconnected(ctx context.Context, sel ast.SelectionSet, obj *publicv1.StreamIngestDisconnected) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamIngestDisconnectedImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamIngestDisconnected")
+		case "streamId":
+			out.Values[i] = ec._StreamIngestDisconnected_streamId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._StreamIngestDisconnected_sessionId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._StreamIngestDisconnected_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -187431,6 +193265,11 @@ func (ec *executionContext) _StreamLive(ctx context.Context, sel ast.SelectionSe
 			}
 		case "playbackId":
 			out.Values[i] = ec._StreamLive_playbackId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._StreamLive_sessionId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -192078,6 +197917,111 @@ func (ec *executionContext) _TrackListUpdate(ctx context.Context, sel ast.Select
 	return out
 }
 
+var transcodeLadderImplementors = []string{"TranscodeLadder"}
+
+func (ec *executionContext) _TranscodeLadder(ctx context.Context, sel ast.SelectionSet, obj *model.TranscodeLadder) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, transcodeLadderImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TranscodeLadder")
+		case "name":
+			out.Values[i] = ec._TranscodeLadder_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "displayName":
+			out.Values[i] = ec._TranscodeLadder_displayName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "description":
+			out.Values[i] = ec._TranscodeLadder_description(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "renditionNames":
+			out.Values[i] = ec._TranscodeLadder_renditionNames(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var transcodeLadderPolicyImplementors = []string{"TranscodeLadderPolicy", "SetTranscodeLadderPolicyResult"}
+
+func (ec *executionContext) _TranscodeLadderPolicy(ctx context.Context, sel ast.SelectionSet, obj *model.TranscodeLadderPolicy) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, transcodeLadderPolicyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TranscodeLadderPolicy")
+		case "ladders":
+			out.Values[i] = ec._TranscodeLadderPolicy_ladders(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "planDefault":
+			out.Values[i] = ec._TranscodeLadderPolicy_planDefault(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tenantLadder":
+			out.Values[i] = ec._TranscodeLadderPolicy_tenantLadder(ctx, field, obj)
+		case "effectiveLadder":
+			out.Values[i] = ec._TranscodeLadderPolicy_effectiveLadder(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var uploadAbortedImplementors = []string{"UploadAborted", "PublicEventData"}
 
 func (ec *executionContext) _UploadAborted(ctx context.Context, sel ast.SelectionSet, obj *publicv1.UploadAborted) graphql.Marshaler {
@@ -192891,7 +198835,7 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 	return out
 }
 
-var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "CreateClipResult", "CreateStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "RevokeAuthSessionResult", "RevokeOtherAuthSessionsResult", "RenameAuthSessionResult", "ChangePasswordResult"}
+var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "DisconnectIngestResult", "CreateClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetTranscodeLadderPolicyResult", "CreateVodOriginalDownloadResult", "DeleteVodOriginalResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "SetNodeCapacityResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "RevokeAuthSessionResult", "RevokeOtherAuthSessionsResult", "RenameAuthSessionResult", "ChangePasswordResult"}
 
 func (ec *executionContext) _ValidationError(ctx context.Context, sel ast.SelectionSet, obj *model.ValidationError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, validationErrorImplementors)
@@ -195480,6 +201424,101 @@ func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "originalFile":
+			out.Values[i] = ec._VodAsset_originalFile(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var vodOriginalDownloadImplementors = []string{"VodOriginalDownload", "CreateVodOriginalDownloadResult"}
+
+func (ec *executionContext) _VodOriginalDownload(ctx context.Context, sel ast.SelectionSet, obj *model.VodOriginalDownload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, vodOriginalDownloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("VodOriginalDownload")
+		case "url":
+			out.Values[i] = ec._VodOriginalDownload_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._VodOriginalDownload_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizeBytes":
+			out.Values[i] = ec._VodOriginalDownload_sizeBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "filename":
+			out.Values[i] = ec._VodOriginalDownload_filename(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var vodOriginalFileImplementors = []string{"VodOriginalFile"}
+
+func (ec *executionContext) _VodOriginalFile(ctx context.Context, sel ast.SelectionSet, obj *model.VodOriginalFile) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, vodOriginalFileImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("VodOriginalFile")
+		case "sizeBytes":
+			out.Values[i] = ec._VodOriginalFile_sizeBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -195852,6 +201891,8 @@ func (ec *executionContext) _VodUploadSession(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "keepOriginal":
+			out.Values[i] = ec._VodUploadSession_keepOriginal(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -198039,6 +204080,16 @@ func (ec *executionContext) marshalNCapabilities2ᚖframeworksᚋapi_gatewayᚋg
 	return ec._Capabilities(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNCapacityBudgetSource2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCapacityBudgetSource(ctx context.Context, v any) (model.CapacityBudgetSource, error) {
+	var res model.CapacityBudgetSource
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCapacityBudgetSource2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCapacityBudgetSource(ctx context.Context, sel ast.SelectionSet, v model.CapacityBudgetSource) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNCardPaymentProvider2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCardPaymentProvider(ctx context.Context, v any) (model.CardPaymentProvider, error) {
 	var res model.CardPaymentProvider
 	err := res.UnmarshalGQL(v)
@@ -199071,6 +205122,16 @@ func (ec *executionContext) marshalNCreateStreamResult2frameworksᚋapi_gateway�
 	return ec._CreateStreamResult(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNCreateVodOriginalDownloadResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateVodOriginalDownloadResult(ctx context.Context, sel ast.SelectionSet, v model.CreateVodOriginalDownloadResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CreateVodOriginalDownloadResult(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNCreateVodUploadInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateVodUploadInput(ctx context.Context, v any) (model.CreateVodUploadInput, error) {
 	res, err := ec.unmarshalInputCreateVodUploadInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -199153,6 +205214,32 @@ func (ec *executionContext) marshalNCurrency2string(ctx context.Context, sel ast
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNDVRChapterEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.DVRChapterEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNDVRChapterEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNDVRChapterEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterEdge(ctx context.Context, sel ast.SelectionSet, v *model.DVRChapterEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DVRChapterEdge(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNDVRChapterMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterMode(ctx context.Context, v any) (model.DVRChapterMode, error) {
@@ -199265,6 +205352,16 @@ func (ec *executionContext) marshalNDeleteVodAssetResult2frameworksᚋapi_gatewa
 	return ec._DeleteVodAssetResult(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNDeleteVodOriginalResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteVodOriginalResult(ctx context.Context, sel ast.SelectionSet, v model.DeleteVodOriginalResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DeleteVodOriginalResult(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNDeleteWebhookEndpointResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteWebhookEndpointResult(ctx context.Context, sel ast.SelectionSet, v model.DeleteWebhookEndpointResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -199339,6 +205436,16 @@ func (ec *executionContext) marshalNDeveloperTokensConnection2ᚖframeworksᚋap
 		return graphql.Null
 	}
 	return ec._DeveloperTokensConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNDisconnectIngestResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDisconnectIngestResult(ctx context.Context, sel ast.SelectionSet, v model.DisconnectIngestResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DisconnectIngestResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNEntitlementEntry2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEntitlementEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.EntitlementEntry) graphql.Marshaler {
@@ -202920,6 +209027,21 @@ func (ec *executionContext) marshalNSetMediaRetentionPolicyResult2frameworksᚋa
 	return ec._SetMediaRetentionPolicyResult(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNSetNodeCapacityInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetNodeCapacityInput(ctx context.Context, v any) (model.SetNodeCapacityInput, error) {
+	res, err := ec.unmarshalInputSetNodeCapacityInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetNodeCapacityResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetNodeCapacityResult(ctx context.Context, sel ast.SelectionSet, v model.SetNodeCapacityResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetNodeCapacityResult(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNSetNodeModeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetNodeModeInput(ctx context.Context, v any) (model.SetNodeModeInput, error) {
 	res, err := ec.unmarshalInputSetNodeModeInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -202973,6 +209095,21 @@ func (ec *executionContext) marshalNSetStreamRetentionOverridesResult2frameworks
 		return graphql.Null
 	}
 	return ec._SetStreamRetentionOverridesResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSetTranscodeLadderPolicyInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetTranscodeLadderPolicyInput(ctx context.Context, v any) (model.SetTranscodeLadderPolicyInput, error) {
+	res, err := ec.unmarshalInputSetTranscodeLadderPolicyInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetTranscodeLadderPolicyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetTranscodeLadderPolicyResult(ctx context.Context, sel ast.SelectionSet, v model.SetTranscodeLadderPolicyResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetTranscodeLadderPolicyResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNSigningKey2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐSigningKeyᚄ(ctx context.Context, sel ast.SelectionSet, v []*commodorepb.SigningKey) graphql.Marshaler {
@@ -203736,6 +209873,32 @@ func (ec *executionContext) marshalNStreamAnalyticsSummaryEdge2ᚖframeworksᚋa
 	return ec._StreamAnalyticsSummaryEdge(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNStreamArtifactEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.StreamArtifactEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNStreamArtifactEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNStreamArtifactEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactEdge(ctx context.Context, sel ast.SelectionSet, v *model.StreamArtifactEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StreamArtifactEdge(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNStreamConnectionHourly2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋperiscopeᚐStreamConnectionHourlyᚄ(ctx context.Context, sel ast.SelectionSet, v []*periscopepb.StreamConnectionHourly) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -204062,6 +210225,16 @@ func (ec *executionContext) marshalNStreamHealthSummary2ᚖframeworksᚋapi_gate
 		return graphql.Null
 	}
 	return ec._StreamHealthSummary(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNStreamIngestState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamIngestState(ctx context.Context, v any) (model.StreamIngestState, error) {
+	var res model.StreamIngestState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNStreamIngestState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamIngestState(ctx context.Context, sel ast.SelectionSet, v model.StreamIngestState) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNStreamKey2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐStreamKeyᚄ(ctx context.Context, sel ast.SelectionSet, v []*commodorepb.StreamKey) graphql.Marshaler {
@@ -204672,6 +210845,46 @@ func (ec *executionContext) marshalNTrackListUpdate2ᚖgithubᚗcomᚋLivepeer�
 		return graphql.Null
 	}
 	return ec._TrackListUpdate(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNTranscodeLadder2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadderᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.TranscodeLadder) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTranscodeLadder2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadder(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTranscodeLadder2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadder(ctx context.Context, sel ast.SelectionSet, v *model.TranscodeLadder) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TranscodeLadder(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNTranscodeLadderPolicy2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadderPolicy(ctx context.Context, sel ast.SelectionSet, v model.TranscodeLadderPolicy) graphql.Marshaler {
+	return ec._TranscodeLadderPolicy(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTranscodeLadderPolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTranscodeLadderPolicy(ctx context.Context, sel ast.SelectionSet, v *model.TranscodeLadderPolicy) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TranscodeLadderPolicy(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNUnlinkWalletResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUnlinkWalletResult(ctx context.Context, sel ast.SelectionSet, v model.UnlinkWalletResult) graphql.Marshaler {
@@ -206061,6 +212274,13 @@ func (ec *executionContext) marshalOClusterCapabilities2ᚕᚖgithubᚗcomᚋLiv
 	return ret
 }
 
+func (ec *executionContext) marshalOClusterCapacity2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClusterCapacity(ctx context.Context, sel ast.SelectionSet, v *model.ClusterCapacity) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ClusterCapacity(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOClusterLiveStats2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClusterLiveStats(ctx context.Context, sel ast.SelectionSet, v *model.ClusterLiveStats) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -206165,6 +212385,13 @@ func (ec *executionContext) marshalODVRChapter2ᚖframeworksᚋapi_gatewayᚋgra
 	return ec._DVRChapter(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalODVRChapterConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterConnection(ctx context.Context, sel ast.SelectionSet, v *model.DVRChapterConnection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._DVRChapterConnection(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalODVRChapterMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterMode(ctx context.Context, v any) (*model.DVRChapterMode, error) {
 	if v == nil {
 		return nil, nil
@@ -206186,6 +212413,13 @@ func (ec *executionContext) marshalODVRChaptersPage2ᚖframeworksᚋapi_gateway�
 		return graphql.Null
 	}
 	return ec._DVRChaptersPage(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalODVRRequest2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐDVRInfo(ctx context.Context, sel ast.SelectionSet, v *sharedpb.DVRInfo) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._DVRRequest(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOEdgeTelemetrySetup2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEdgeTelemetrySetup(ctx context.Context, sel ast.SelectionSet, v *model.EdgeTelemetrySetup) graphql.Marshaler {
@@ -206863,6 +213097,13 @@ func (ec *executionContext) marshalONode2frameworksᚋapi_gatewayᚋgraphᚋmode
 	return ec._Node(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalONodeCapacity2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐNodeCapacity(ctx context.Context, sel ast.SelectionSet, v *model.NodeCapacity) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._NodeCapacity(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalONodeStatus2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐNodeStatus(ctx context.Context, v any) (*model.NodeStatus, error) {
 	if v == nil {
 		return nil, nil
@@ -207320,11 +213561,25 @@ func (ec *executionContext) marshalOStream2ᚖgithubᚗcomᚋLivepeerᚑFrameWor
 	return ec._Stream(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalOStreamArtifactsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamArtifactsConnection(ctx context.Context, sel ast.SelectionSet, v *model.StreamArtifactsConnection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._StreamArtifactsConnection(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOStreamEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEvent(ctx context.Context, sel ast.SelectionSet, v *model.StreamEvent) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._StreamEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOStreamIngest2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamIngest(ctx context.Context, sel ast.SelectionSet, v *model.StreamIngest) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._StreamIngest(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOStreamMetrics2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋperiscopeᚐStreamStatusResponse(ctx context.Context, sel ast.SelectionSet, v *periscopepb.StreamStatusResponse) graphql.Marshaler {
@@ -207587,6 +213842,13 @@ func (ec *executionContext) marshalOVodAsset2ᚖframeworksᚋapi_gatewayᚋgraph
 		return graphql.Null
 	}
 	return ec._VodAsset(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOVodOriginalFile2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐVodOriginalFile(ctx context.Context, sel ast.SelectionSet, v *model.VodOriginalFile) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._VodOriginalFile(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOWebhookDelivery2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐWebhookDelivery(ctx context.Context, sel ast.SelectionSet, v *model.WebhookDelivery) graphql.Marshaler {

@@ -159,6 +159,46 @@ func TestPlayRewriteOffersTheStreamsGrantToTheServingEdge(t *testing.T) {
 	}
 }
 
+func TestColdPullPlayRewriteAndGrantUseUnstartedSource(t *testing.T) {
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+	defer closeDB()
+	object := &mediaauthoritypb.MediaObjectAuthority{}
+	if err := proto.Unmarshal(objectBytes, object); err != nil {
+		t.Fatal(err)
+	}
+	object.GetLiveStream().IngestMode = "pull"
+	objectBytes, err := proto.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(time.Hour)
+	expectLocalPair(mock, objectBytes, tenantBytes, until, until, true)
+	expectLocalTenant(mock, tenantBytes, until, true)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(t.Context(), "edge-node-1", "", "", "cluster-a", nil)
+	registry := control.NewStreamRegistry(nil, "cell", time.Minute)
+	previous := control.StreamRegistryInstance
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(previous) })
+	admitViewerPlacementForTest(t, p)
+	delivery := newRecordingGrantDelivery()
+	p.SetPlaybackGrantDelivery(delivery)
+	trigger := &ipcpb.MistTrigger{NodeId: "edge-node-1", TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{PlayRewrite: &ipcpb.ViewerResolveTrigger{
+		RequestedStream: "PlaybackKey", ViewerHost: "192.0.2.10", OutputType: "HLS", RequestUrl: "https://edge/hls/PlaybackKey/index.m3u8",
+	}}}
+	response, abort, err := p.handlePlayRewrite(trigger)
+	if err != nil || abort || response != "pull+stream-internal" {
+		t.Fatalf("cold pull cannot start its source: response=%q abort=%v error=%v", response, abort, err)
+	}
+	if offers := delivery.waitOffers(t, 1); offers[0].grant.GetInternalName() != response {
+		t.Fatalf("cold pull grant differs from its unstarted source: %+v", offers)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An authority apply reaches every edge holding the stream's grant with one
 // push: a renewal extends the validity, a policy change carries the new
 // policy (a revoked signing key is absent from the active keys), and a

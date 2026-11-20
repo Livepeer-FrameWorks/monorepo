@@ -175,8 +175,9 @@ SET size_bytes = $1, duration = $2,
     retention_until = to_timestamp($13::bigint),
     error_message = $14,
     thumbnail_serving_cluster_id = COALESCE($15::varchar, thumbnail_serving_cluster_id),
-    catalog_revision = $16::bigint, updated_at = NOW()
-WHERE tenant_id = $17::uuid AND vod_hash = $18
+    catalog_revision = $16::bigint, updated_at = NOW(),
+    original_size_bytes = $17::bigint
+WHERE tenant_id = $18::uuid AND vod_hash = $19
   AND (catalog_revision IS NULL OR catalog_revision < $16::bigint
        OR (catalog_revision = $16::bigint
            AND thumbnail_serving_cluster_id IS NULL
@@ -202,6 +203,7 @@ type ApplyVODCatalogSnapshotParams struct {
 	ErrorMessage              sql.NullString `db:"error_message" json:"error_message"`
 	ThumbnailServingClusterID sql.NullString `db:"thumbnail_serving_cluster_id" json:"thumbnail_serving_cluster_id"`
 	SourceRevision            int64          `db:"source_revision" json:"source_revision"`
+	OriginalSizeBytes         sql.NullInt64  `db:"original_size_bytes" json:"original_size_bytes"`
 	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
 	AssetKey                  string         `db:"asset_key" json:"asset_key"`
 }
@@ -229,6 +231,7 @@ func (q *Queries) ApplyVODCatalogSnapshot(ctx context.Context, arg ApplyVODCatal
 		arg.ErrorMessage,
 		arg.ThumbnailServingClusterID,
 		arg.SourceRevision,
+		arg.OriginalSizeBytes,
 		arg.TenantID,
 		arg.AssetKey,
 	)

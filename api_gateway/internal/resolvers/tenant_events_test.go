@@ -144,7 +144,7 @@ func TestTenantEventsDeliverOnlyTheSubscribersTenant(t *testing.T) {
 func TestTenantEventsRefuseInternalEvents(t *testing.T) {
 	opener := newFakeOpener()
 	sm := testSubscriptionManager(t, opener, SubscriptionManagerConfig{})
-	filter, err := NewTenantEventFilter([]string{"recording.chapter_ready", "recording.ready"}, nil)
+	filter, err := NewTenantEventFilter([]string{"artifact.node_copy_changed", "recording.ready"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +154,8 @@ func TestTenantEventsRefuseInternalEvents(t *testing.T) {
 	}
 	upstream := opener.waitOpened(t)
 	tenant := tenantEventsTenantA
-	chapter := &internalv1.RecordingChapterReady{Artifact: clipArtifact(tenantEventsStream), ChapterId: "chapter-1"}
-	internal := publicTenantEvent(t, "internal", "recording.chapter_ready", chapter)
+	chapter := &internalv1.ArtifactNodeCopyChanged{ArtifactHash: "chapter-1"}
+	internal := publicTenantEvent(t, "internal", "artifact.node_copy_changed", chapter)
 	forged := publicTenantEvent(t, "forged", "recording.ready", chapter)
 	upstream.push(t, onEventsChannel(&tenant, internal))
 	upstream.push(t, onEventsChannel(&tenant, forged))

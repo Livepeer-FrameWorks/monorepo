@@ -13,11 +13,15 @@ type fakeS3 struct {
 	deleteCalls       []string
 	deletePrefixCalls []string
 	deleteErr         error
+	failKey           string
 	deletePrefixErr   error
 }
 
 func (f *fakeS3) Delete(_ context.Context, key string) error {
 	f.deleteCalls = append(f.deleteCalls, key)
+	if key == f.failKey {
+		return errors.New("original storage unavailable")
+	}
 	return f.deleteErr
 }
 func (f *fakeS3) DeletePrefix(_ context.Context, prefix string) (int, error) {
@@ -577,5 +581,40 @@ func TestCleaner_LocalClusterMatchUsesLocalS3(t *testing.T) {
 	}
 	if len(s3.deleteCalls) != 2 { // main object + co-located .dtsh
 		t.Errorf("local Delete calls = %d, want 2", len(s3.deleteCalls))
+	}
+}
+
+func TestCleanerDeletesKeptOriginalWithProcessedVideo(t *testing.T) {
+	store := &fakeS3{}
+	cleaner := &Cleaner{S3: store, LocalBackendID: "backend"}
+	err := cleaner.Delete(context.Background(), ArtifactRef{Hash: "vod", Type: "vod", BackendID: "backend", ActiveObjectKey: "processed.att-1.mkv", OriginalObjectKey: "upload.mkv", PendingObjectKey: "pending.mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(store.deleteCalls, ","); got != "processed.att-1.mkv,processed.att-1.mkv.dtsh,pending.mkv,upload.mkv" {
+		t.Fatalf("deleted %s: retained original must be freed with the artifact", got)
+	}
+}
+
+func TestCleanerRetriesOriginalDeletionFailure(t *testing.T) {
+	store := &fakeS3{failKey: "original.mov"}
+	cleaner := &Cleaner{S3: store, LocalBackendID: "backend"}
+	ref := ArtifactRef{Hash: "vod", Type: "vod", BackendID: "backend", ActiveObjectKey: "processed.mkv", OriginalObjectKey: "original.mov"}
+	if err := cleaner.Delete(context.Background(), ref); err == nil {
+		t.Fatal("original failure must retain the purge row for retry")
+	}
+	store.failKey = ""
+	if err := cleaner.Delete(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestCleanerFreesOriginalWithoutAProcessedTarget(t *testing.T) {
+	store := &fakeS3{}
+	cleaner := &Cleaner{S3: store, LocalBackendID: "backend"}
+	if err := cleaner.Delete(context.Background(), ArtifactRef{Type: "vod", BackendID: "backend", OriginalObjectKey: "original.mov"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(store.deleteCalls, ",") != "original.mov" {
+		t.Fatalf("original leaked: %v", store.deleteCalls)
 	}
 }

@@ -102,13 +102,13 @@ func TestLivepeerVODMinSpeed(t *testing.T) {
 // source. Verify the safe allowlist, the known-unsafe set, and that
 // normalization (case + leading dot) does not leak an unsafe format through.
 func TestIsRelaySafeFormat(t *testing.T) {
-	safe := []string{".mp4", "mp4", ".MOV", "mkv", ".webm", "ts", ".m2ts", "m3u8", ".m3u"}
+	safe := []string{".mp4", "mp4", ".MOV", "mkv", ".webm", "ts", ".m2ts", ".MTS"}
 	for _, ext := range safe {
 		if !isRelaySafeFormat(ext) {
 			t.Errorf("isRelaySafeFormat(%q) = false, want true", ext)
 		}
 	}
-	unsafe := []string{".avi", "flv", ".m4v", "AVI", "", "mp3", ".exe", "wav"}
+	unsafe := []string{".avi", "flv", ".m4v", "AVI", "", "mp3", ".exe", "wav", "m3u8", ".m3u"}
 	for _, ext := range unsafe {
 		if isRelaySafeFormat(ext) {
 			t.Errorf("isRelaySafeFormat(%q) = true, want false", ext)

@@ -62,6 +62,9 @@ func TestDemoConnectionGeneratorsShape(t *testing.T) {
 		name string
 		conn any
 	}{
+		{"StreamRecordingsConnection", GenerateStreamArtifactsConnection("dvr")},
+		{"StreamClipsConnection", GenerateStreamArtifactsConnection("clip")},
+		{"DVRChapterConnection", GenerateDVRChapterConnection()},
 		{"StreamAnalyticsSummariesConnection", GenerateStreamAnalyticsSummariesConnection()},
 		{"RoutingEventsConnection", GenerateRoutingEventsConnection()},
 		{"ConnectionEventsConnection", GenerateConnectionEventsConnection()},
@@ -202,16 +205,6 @@ func TestDemoStreamScopedGeneratorsUseDemoID(t *testing.T) {
 	}
 	if summary.GetStreamId() != DemoStreamID {
 		t.Errorf("summary stream id = %q, want %q", summary.GetStreamId(), DemoStreamID)
-	}
-
-	keys := GenerateStreamKeys(DemoStreamID)
-	if len(keys) == 0 {
-		t.Fatal("expected demo stream keys")
-	}
-	for i, k := range keys {
-		if k == nil {
-			t.Errorf("stream key %d is nil", i)
-		}
 	}
 
 	for i, m := range GenerateStreamHealthMetrics() {

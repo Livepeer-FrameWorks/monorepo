@@ -16,6 +16,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
@@ -1096,24 +1097,27 @@ func (c *GRPCClient) RefreshStreamKey(ctx context.Context, streamID string) (*co
 // STREAM KEY OPERATIONS
 // ============================================================================
 
-// CreateStreamKey creates a new stream key
+// CreateStreamKey retains the refusal contract for deprecated GraphQL fields.
 func (c *GRPCClient) CreateStreamKey(ctx context.Context, streamID, keyName string) (*commodorepb.StreamKeyResponse, error) {
+	//nolint:staticcheck // Live SDK lines 0.3–0.5 retain this GraphQL compatibility RPC.
 	return c.streamKey.CreateStreamKey(ctx, &commodorepb.CreateStreamKeyRequest{
 		StreamId: streamID,
 		KeyName:  keyName,
 	})
 }
 
-// ListStreamKeys lists stream keys for a stream
+// ListStreamKeys reads the primary key through the deprecated compatibility RPC.
 func (c *GRPCClient) ListStreamKeys(ctx context.Context, streamID string, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamKeysResponse, error) {
+	//nolint:staticcheck // Live SDK lines 0.3–0.5 retain this GraphQL compatibility RPC.
 	return c.streamKey.ListStreamKeys(ctx, &commodorepb.ListStreamKeysRequest{
 		StreamId:   streamID,
 		Pagination: pagination,
 	})
 }
 
-// DeactivateStreamKey deactivates a stream key
+// DeactivateStreamKey retains the refusal contract for deprecated GraphQL fields.
 func (c *GRPCClient) DeactivateStreamKey(ctx context.Context, streamID, keyID string) error {
+	//nolint:staticcheck // Live SDK lines 0.3–0.5 retain this GraphQL compatibility RPC.
 	_, err := c.streamKey.DeactivateStreamKey(ctx, &commodorepb.DeactivateStreamKeyRequest{
 		StreamId: streamID,
 		KeyId:    keyID,
@@ -1536,6 +1540,13 @@ func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *commodorepb.Cr
 // NODE MANAGEMENT (Gateway → Commodore → Foghorn proxy)
 // ============================================================================
 
+func (c *GRPCClient) SetNodeCapacity(ctx context.Context, req *quartermasterpb.SetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error) {
+	return c.nodeMgmt.SetNodeCapacity(ctx, req)
+}
+func (c *GRPCClient) GetNodeCapacity(ctx context.Context, req *quartermasterpb.GetNodeCapacityRequest) (*quartermasterpb.NodeCapacity, error) {
+	return c.nodeMgmt.GetNodeCapacity(ctx, req)
+}
+
 // SetNodeMode sets a node's operational mode via Foghorn.
 func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
 	return c.nodeMgmt.SetNodeOperationalMode(ctx, req)
@@ -1759,4 +1770,42 @@ func (c *GRPCClient) AdminRecordDiagnosticRead(ctx context.Context, req *commodo
 
 func (c *GRPCClient) DiagnoseStream(ctx context.Context, identifier string) (*commodorepb.DiagnoseStreamResponse, error) {
 	return c.stream.DiagnoseStream(ctx, &commodorepb.DiagnoseStreamRequest{Identifier: identifier})
+}
+
+func (c *GRPCClient) GetTranscodeLadderPolicy(ctx context.Context, req *commodorepb.GetTranscodeLadderPolicyRequest) (*commodorepb.TranscodeLadderPolicy, error) {
+	return c.internal.GetTranscodeLadderPolicy(ctx, req)
+}
+
+func (c *GRPCClient) SetTenantTranscodeLadder(ctx context.Context, req *commodorepb.SetTenantTranscodeLadderRequest) (*commodorepb.TranscodeLadderPolicy, error) {
+	return c.internal.SetTenantTranscodeLadder(ctx, req)
+}
+
+func (c *GRPCClient) SetVodOriginalPolicy(ctx context.Context, req *commodorepb.SetVodOriginalPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error) {
+	return c.internal.SetVodOriginalPolicy(ctx, req)
+}
+
+func (c *GRPCClient) CreateVodOriginalDownload(ctx context.Context, req *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error) {
+	return c.vod.CreateVodOriginalDownload(ctx, req)
+}
+
+func (c *GRPCClient) DeleteVodOriginal(ctx context.Context, req *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error) {
+	return c.vod.DeleteVodOriginal(ctx, req)
+}
+
+func (c *GRPCClient) GetStreamIngestStates(ctx context.Context, streamIDs []string) (*foghorncontrolpb.GetStreamIngestStatesResponse, error) {
+	return c.stream.GetStreamIngestStates(ctx, &foghorncontrolpb.GetStreamIngestStatesRequest{StreamIds: streamIDs})
+}
+
+func (c *GRPCClient) ListStreamArtifacts(ctx context.Context, req *commodorepb.ListStreamArtifactsRequest) (*commodorepb.ListStreamArtifactsResponse, error) {
+	return c.stream.ListStreamArtifacts(ctx, req)
+}
+func (c *GRPCClient) GetDVRRecording(ctx context.Context, id string) (*sharedpb.DVRInfo, error) {
+	return c.dvr.GetDVRRecording(ctx, &commodorepb.GetDVRRecordingRequest{Id: id})
+}
+
+func (c *GRPCClient) RefreshStreamKeyAndEndIngest(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error) {
+	return c.stream.RefreshStreamKeyAndEndIngest(ctx, &commodorepb.RefreshStreamKeyRequest{StreamId: streamID, EndActiveSession: true})
+}
+func (c *GRPCClient) DisconnectIngest(ctx context.Context, streamID string) (*commodorepb.DisconnectIngestResponse, error) {
+	return c.stream.DisconnectIngest(ctx, &commodorepb.DisconnectIngestRequest{StreamId: streamID})
 }

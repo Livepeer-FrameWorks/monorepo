@@ -107,7 +107,7 @@ func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
 		t.Fatalf("instance after reconcile = %+v, want offline/non-replicated with zero inputs", inst)
 	}
 
-	snapshots := sm.GetBalancerNodeSnapshots()
+	snapshots := sm.GetAllNodesSnapshot().Nodes
 	if len(snapshots) != 1 {
 		t.Fatalf("snapshots = %d, want 1", len(snapshots))
 	}
@@ -117,10 +117,9 @@ func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
 	}
 }
 
-// Virtual viewers are this instance's routing state. Their operations change
-// the local penalty and never publish the node snapshot, which would carry
-// this instance's copy of the owner's heartbeat and listener facts.
-func TestVirtualViewerPenaltyStaysLocal(t *testing.T) {
+// Viewer correlation and reservation changes never republish the node snapshot,
+// which would carry a replica's copy of the owner's heartbeat and listener facts.
+func TestVirtualViewerCorrelationDoesNotRepublishNodeSnapshots(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -1182,8 +1181,7 @@ func TestNodeActiveViewersUsesConfirmedViewersNotRawConnections(t *testing.T) {
 
 	sm.SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 	sm.UpdateNodeStats(internalName, nodeID, 17, 1, 0, 0, false)
-	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
-	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
+	setTestAudience(t, sm, internalName, nodeID, tenantID, 2)
 
 	if got := sm.GetNodeActiveViewers(nodeID); got != 2 {
 		t.Fatalf("expected 2 confirmed viewers, got %d", got)

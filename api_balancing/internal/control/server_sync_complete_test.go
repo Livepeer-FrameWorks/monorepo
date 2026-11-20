@@ -702,6 +702,7 @@ func TestProcessSyncComplete_RepublishEnqueuesSupersededObject(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
 		WithArgs("s3://bucket/tenant-1/vods/vod-hash/vod-hash.mp4.att-", "tenant-1/vods/vod-hash/vod-hash.mp4.att-", false, "", int64(1024), "vod-hash", "tenant-1", "", "node-1", "tenant-1/vods/vod-hash/vod-hash.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("GetKeptVodOriginalKey").WithArgs("vod-hash", "tenant-1").WillReturnRows(sqlmock.NewRows([]string{"original_s3_key"}).AddRow(""))
 	// Superseded MEDIA object + its version-addressed .dtsh index enqueued (before node-copy).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prev, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prevDtsh, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -744,6 +745,7 @@ func TestProcessSyncComplete_LegacyRepublishRecoversSupersededObjectFromS3URL(t 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
 		WithArgs("s3://bucket/"+legacyKey+".att-", legacyKey+".att-", false, "", int64(1024), "legacy-hash", "tenant-1", "", "node-1", legacyKey).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("GetKeptVodOriginalKey").WithArgs("legacy-hash", "tenant-1").WillReturnRows(sqlmock.NewRows([]string{"original_s3_key"}).AddRow(""))
 	// The prior object recovered from s3_url (== legacyKey) and its co-located .dtsh are enqueued as superseded.
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey+".dtsh", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -971,6 +973,44 @@ func TestProcessSyncComplete_LocalMissingAbsentCopyRemainsRetryable(t *testing.T
 	processSyncCompleteAt(&ipcpb.SyncComplete{
 		AssetHash: "hash-absent", Status: "failed", Error: "gone", RequestId: "req-absent", LocalMissing: true,
 	}, "node-1", 1234, logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_KeepsOriginalMKVAfterPublishingProcessedVideo(t *testing.T) {
+	mock, s3Mock, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+	s3Mock.headObjectInfoFn = stagingHead(1024, false, 0)
+
+	// The row is already published at a PREVIOUS version key (active_object_key), which this re-publish
+	// supersedes; its .dtsh index is version-addressed at the PREVIOUS active_dtsh_key.
+	prev := "tenant-1/vods/vod-hash/vod-hash.mkv"
+	prevDtsh := "tenant-1/vods/vod-hash/vod-hash.mkv.dtsh"
+	expectMetadata(mock, "vod-hash", "", "node-1", "vod", "vod-int", "mkv", "tenant-1", "", prev, "in_progress", "tenant-1/vods/vod-hash/vod-hash.mkv", prevDtsh)
+	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/vods/vod-hash/vod-hash.mkv", ""))
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
+		WithArgs("s3://bucket/tenant-1/vods/vod-hash/vod-hash.mkv.att-", "tenant-1/vods/vod-hash/vod-hash.mkv.att-", false, "", int64(1024), "vod-hash", "tenant-1", "", "node-1", "tenant-1/vods/vod-hash/vod-hash.mkv").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("GetKeptVodOriginalKey").WithArgs("vod-hash", "tenant-1").WillReturnRows(sqlmock.NewRows([]string{"original_s3_key"}).AddRow(prev))
+	// The original stays referenced; only the superseded index is garbage.
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prevDtsh, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNodeCopyGained(mock, "vod-hash", "node-1", 1024)
+	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
+		WithArgs("vod-hash", "tenant-1/vods/vod-hash/vod-hash.mkv.att-", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
+		WithArgs(FreezeStagingKey("tenant-1/vods/vod-hash/vod-hash.mkv", ""), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectLedgerClear(mock)
+	mock.ExpectCommit()
+
+	processSyncComplete(&ipcpb.SyncComplete{
+		AssetHash: "vod-hash", Status: "success",
+	}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

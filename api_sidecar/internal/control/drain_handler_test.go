@@ -52,14 +52,20 @@ func TestIsolatedDrainDoesNotAcknowledgeAsynchronousNukeAsStopped(t *testing.T) 
 	}
 	var response *ipcpb.DrainStreamResponse
 	drain := func() {
-		handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: runtime, PriorOwnerSourceGeneration: generation}, func(msg *ipcpb.ControlMessage) { response = msg.GetDrainStreamResponse() })
+		handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: runtime, PriorOwnerSourceGeneration: generation, TenantId: "tenant-drain"}, func(msg *ipcpb.ControlMessage) { response = msg.GetDrainStreamResponse() })
 	}
 	drain()
+	if response.GetTenantId() != "tenant-drain" {
+		t.Fatalf("drain lost tenant: %+v", response)
+	}
 	if response == nil || response.GetUnloaded() || response.GetError() == "" {
 		t.Fatalf("asynchronous nuke was acknowledged as stopped: %+v", response)
 	}
 	present.Store(false)
 	drain()
+	if response.GetTenantId() != "tenant-drain" {
+		t.Fatalf("drain lost tenant: %+v", response)
+	}
 	if response == nil || !response.GetUnloaded() || response.GetError() != "" {
 		t.Fatalf("proven absence did not complete exact drain: %+v", response)
 	}

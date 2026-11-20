@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,18 @@ Mode B — Pre-existing token (no login needed):
 			ctx := cmd.Context()
 			out := cmd.OutOrStdout()
 			modeA := enrollmentToken == ""
+			if bandwidthMbps < 0 {
+				return fmt.Errorf("bandwidth_mbps must be non-negative")
+			}
+			if bandwidthMbps > 0 {
+				if _, err := parseCapacityMbps(strconv.Itoa(bandwidthMbps)); err != nil {
+					return fmt.Errorf("bandwidth_mbps: %w", err)
+				}
+			}
+
+			if !modeA && cmd.Flags().Changed("bandwidth-mbps") {
+				return fmt.Errorf("token-only deployment cannot set bandwidth; after enrollment run %s using an authenticated operator context", edgeCapacityFollowup("<node-id>", bandwidthMbps))
+			}
 
 			target := sshTarget
 			if target == "" {
@@ -113,6 +126,7 @@ Mode B — Pre-existing token (no login needed):
 				enrollmentTokenTTL: tokenTTL,
 				capabilities:       capabilities,
 				bandwidthMbps:      bandwidthMbps,
+				capacitySet:        cmd.Flags().Changed("bandwidth-mbps"),
 				maxTranscodes:      maxTranscodes,
 				storageBytes:       storageBytes,
 			}
@@ -172,7 +186,7 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "HTTPS verification timeout")
 	cmd.Flags().StringVar(&tokenTTL, "token-ttl", "", "enrollment token TTL when --cluster-id mints a token")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
-	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
+	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Operator-owned budget for both directions in decimal Mbit/s (logged-in deployment only)")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
 	cmd.Flags().Uint64Var(&storageBytes, "storage-capacity-bytes", 0, "Local storage capacity limit for Helmsman to report")
 	return cmd
@@ -200,6 +214,7 @@ type deployConfig struct {
 	enrollmentTokenTTL string
 	capabilities       []string
 	bandwidthMbps      int
+	capacitySet        bool
 	maxTranscodes      int
 	storageBytes       uint64
 }
@@ -252,7 +267,17 @@ func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig,
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  Deployment receipt: %s\n", cfg.receiptPath)
 
-	return created, runEdgeDeploy(ctx, cmd, cliCtx, *cfg, nodeID, domain, clusterSlug)
+	if err := runEdgeDeploy(ctx, cmd, cliCtx, *cfg, nodeID, domain, clusterSlug); err != nil {
+		return created, err
+	}
+	if cfg.capacitySet || cfg.bandwidthMbps > 0 {
+		if err := writeDeployedBridgeCapacity(ctx, bc, jwt, *nodeID, cfg.bandwidthMbps, 2*time.Minute); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Capacity was not saved: %v\nAfter the node registers, run %s\n", err, edgeCapacityFollowup(*nodeID, cfg.bandwidthMbps))
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "Capacity saved through the API")
+		}
+	}
+	return created, nil
 }
 
 // resolveEnrollmentToken finds or creates an edge cluster via Bridge and
@@ -453,7 +478,6 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		CABundlePEM:     caBundlePEM,
 		Email:           cfg.email,
 		Capabilities:    cfg.capabilities,
-		BandwidthMbps:   cfg.bandwidthMbps,
 		MaxTranscodes:   cfg.maxTranscodes,
 		StorageBytes:    cfg.storageBytes,
 		SkipPreflight:   cfg.skipPreflight,
@@ -513,7 +537,6 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		CABundlePEM:     caBundlePEM,
 		Email:           cfg.email,
 		Capabilities:    cfg.capabilities,
-		BandwidthMbps:   cfg.bandwidthMbps,
 		MaxTranscodes:   cfg.maxTranscodes,
 		StorageBytes:    cfg.storageBytes,
 		SkipPreflight:   cfg.skipPreflight,

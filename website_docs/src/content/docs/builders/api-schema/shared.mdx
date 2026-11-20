@@ -11,6 +11,22 @@ Types that root fields of two or more domains reach: scalars, errors, pagination
 
 ## Types
 
+### ArtifactTrack
+
+**object**
+
+A single A/V (or meta) track of a finalized artifact.
+
+- **type**: `String!` — &#34;video&#34; &#124; &#34;audio&#34; &#124; &#34;meta&#34;
+- **codec**: `String!`
+- **width**: `Int`
+- **height**: `Int`
+- **fps**: `Float`
+- **resolution**: `String`
+- **bitrateKbps**: `Int`
+- **channels**: `Int`
+- **sampleRate**: `Int`
+
 ### AuthError
 
 **object**
@@ -19,6 +35,13 @@ Implements [Error](/builders/api-schema/shared/#error).
 
 - **message**: `String!`
 - **code**: `String`
+
+### CapacityBudgetSource
+
+**enum**
+
+- `DEFAULT`
+- `OPERATOR`
 
 ### Clip
 
@@ -42,6 +65,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **storagePath**: `String` — Storage path on the processing node.
 - **sizeBytes**: `Float` — File size in bytes.
 - **status**: `String!` — Processing status (queued, processing, ready, failed).
+- **errorMessage**: `String` — Processing failure detail from the artifact catalog.
 - **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the clip was requested.
 - **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the clip was last updated.
 - **clipMode**: `String` — Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW).
@@ -225,6 +249,46 @@ Implemented by [AuthError](/builders/api-schema/shared/#autherror), [NotFoundErr
 - `ACKNOWLEDGED`
 - `RESOLVED`
 
+### InfrastructureNode
+
+**object**
+
+An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers.
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **nodeId**: `String!` — Internal node identifier (UUID).
+- **clusterId**: `String!` — Cluster this node belongs to.
+- **nodeName**: `String!` — Human-readable node name.
+- **nodeType**: `String!` — Node role (edge, origin, transcoder, hybrid).
+- **internalIp**: `String` — Private network IP address.
+- **externalIp**: `String` — Public IP address for external access.
+- **wireguardIp**: `String` — WireGuard mesh network IP.
+- **wireguardPublicKey**: `String` — WireGuard public key for mesh peering.
+- **region**: `String` — Geographic region (us-east, eu-west, etc.).
+- **latitude**: `Float` — GPS latitude.
+- **longitude**: `Float` — GPS longitude.
+- **availabilityZone**: `String` — Availability zone within region.
+- **cpuCores**: `Int` — Number of CPU cores.
+- **memoryGb**: `Int` — Memory in gigabytes.
+- **diskGb**: `Int` — Disk storage in gigabytes.
+- **lastHeartbeat**: `Time` ([Time](/builders/api-schema/shared/#time)) — Last heartbeat timestamp from node agent.
+- **tags**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Custom tags for node organization.
+- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Additional node metadata.
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was registered.
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was last updated.
+- **metricsConnection**: `NodeMetricsConnection!` ([NodeMetricsConnection](/builders/api-schema/shared/#nodemetricsconnection)) — Paginated time-series metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **metrics1hConnection**: `NodeMetrics1hConnection!` ([NodeMetrics1hConnection](/builders/api-schema/shared/#nodemetrics1hconnection)) — Hourly aggregated metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **liveState**: `LiveNode` ([LiveNode](/builders/api-schema/shared/#livenode)) — Real-time state from the analytics data plane.
+- **effectiveMode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/shared/#nodeoperationalmode)) — Current operational mode (normal / draining / maintenance). Read from Foghorn&#39;s per-node heartbeat. Changes via setNodeMode.
+- **routingImpactPreview**: `RoutingImpactPreview!` ([RoutingImpactPreview](/builders/api-schema/shared/#routingimpactpreview)) — Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn&#39;s GetNodeHealth.
+- **capacity**: `NodeCapacity` ([NodeCapacity](/builders/api-schema/shared/#nodecapacity)) — Operator-owned directional budgets; null when the control plane is unavailable.
+
 ### IngestMode
 
 **enum**
@@ -251,6 +315,27 @@ Service instance lifecycle status.
 ### JSON
 
 **scalar**
+
+### LiveNode
+
+**object**
+
+- **nodeId**: `String!`
+- **tenantId**: `ID!`
+- **cpuPercent**: `Float!`
+- **ramUsedBytes**: `Float!` — Used memory in MiB (field name is historical).
+- **ramTotalBytes**: `Float!` — Total memory in MiB (field name is historical).
+- **diskUsedBytes**: `Float!`
+- **diskTotalBytes**: `Float!`
+- **upSpeed**: `Float!`
+- **downSpeed**: `Float!`
+- **activeStreams**: `Int!`
+- **isHealthy**: `Boolean!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **location**: `String!`
+- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 
 ### ManagedSourceView
 
@@ -302,9 +387,21 @@ Per-stream Skipper AI monitoring override.
 
 Relay-style global node interface. All fetchable objects implement this interface and can be retrieved by their global ID.
 
-Implemented by [APIUsageRecord](/builders/api-schema/analytics-types-a-r/#apiusagerecord), [ArtifactEvent](/builders/api-schema/analytics-types-a-r/#artifactevent), [BufferEvent](/builders/api-schema/analytics-types-a-r/#bufferevent), [ClientMetrics5m](/builders/api-schema/analytics-types-a-r/#clientmetrics5m), [Clip](/builders/api-schema/shared/#clip), [Cluster](/builders/api-schema/clusters-types/#cluster), [ConnectionEvent](/builders/api-schema/shared/#connectionevent), [Conversation](/builders/api-schema/shared/#conversation), [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode), [Message](/builders/api-schema/shared/#message), [NodeMetric](/builders/api-schema/shared/#nodemetric), [NodeMetricHourly](/builders/api-schema/shared/#nodemetrichourly), [NodePerformance5m](/builders/api-schema/analytics-types-a-r/#nodeperformance5m), [ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord), [QualityTierDaily](/builders/api-schema/analytics-types-a-r/#qualitytierdaily), [SigningKey](/builders/api-schema/access/#signingkey), [StorageEvent](/builders/api-schema/shared/#storageevent), [StorageUsageRecord](/builders/api-schema/analytics-types-s-v/#storageusagerecord), [Stream](/builders/api-schema/shared/#stream), [StreamAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#streamanalyticsdaily), [StreamConnectionHourly](/builders/api-schema/analytics-types-s-v/#streamconnectionhourly), [StreamEvent](/builders/api-schema/shared/#streamevent), [StreamHealth5m](/builders/api-schema/analytics-types-s-v/#streamhealth5m), [StreamHealthMetric](/builders/api-schema/analytics-types-s-v/#streamhealthmetric), [TenantDailyStat](/builders/api-schema/analytics-types-s-v/#tenantdailystat), [TrackListEvent](/builders/api-schema/analytics-types-s-v/#tracklistevent), [ViewerGeoHourly](/builders/api-schema/analytics-types-s-v/#viewergeohourly), [ViewerHoursHourly](/builders/api-schema/analytics-types-s-v/#viewerhourshourly), [ViewerSession](/builders/api-schema/analytics-types-s-v/#viewersession), [VodAsset](/builders/api-schema/shared/#vodasset).
+Implemented by [APIUsageRecord](/builders/api-schema/analytics-types-a-r/#apiusagerecord), [ArtifactEvent](/builders/api-schema/analytics-types-a-r/#artifactevent), [BufferEvent](/builders/api-schema/analytics-types-a-r/#bufferevent), [ClientMetrics5m](/builders/api-schema/analytics-types-a-r/#clientmetrics5m), [Clip](/builders/api-schema/shared/#clip), [Cluster](/builders/api-schema/clusters-types/#cluster), [ConnectionEvent](/builders/api-schema/shared/#connectionevent), [Conversation](/builders/api-schema/shared/#conversation), [InfrastructureNode](/builders/api-schema/shared/#infrastructurenode), [Message](/builders/api-schema/shared/#message), [NodeMetric](/builders/api-schema/shared/#nodemetric), [NodeMetricHourly](/builders/api-schema/shared/#nodemetrichourly), [NodePerformance5m](/builders/api-schema/analytics-types-a-r/#nodeperformance5m), [ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord), [QualityTierDaily](/builders/api-schema/analytics-types-a-r/#qualitytierdaily), [SigningKey](/builders/api-schema/access/#signingkey), [StorageEvent](/builders/api-schema/shared/#storageevent), [StorageUsageRecord](/builders/api-schema/analytics-types-s-v/#storageusagerecord), [Stream](/builders/api-schema/shared/#stream), [StreamAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#streamanalyticsdaily), [StreamConnectionHourly](/builders/api-schema/analytics-types-s-v/#streamconnectionhourly), [StreamEvent](/builders/api-schema/shared/#streamevent), [StreamHealth5m](/builders/api-schema/analytics-types-s-v/#streamhealth5m), [StreamHealthMetric](/builders/api-schema/analytics-types-s-v/#streamhealthmetric), [TenantDailyStat](/builders/api-schema/analytics-types-s-v/#tenantdailystat), [TrackListEvent](/builders/api-schema/analytics-types-s-v/#tracklistevent), [ViewerGeoHourly](/builders/api-schema/analytics-types-s-v/#viewergeohourly), [ViewerHoursHourly](/builders/api-schema/analytics-types-s-v/#viewerhourshourly), [ViewerSession](/builders/api-schema/analytics-types-s-v/#viewersession), [VodAsset](/builders/api-schema/shared/#vodasset).
 
 - **id**: `ID!` — The globally unique identifier for this object.
+
+### NodeCapacity
+
+**object**
+
+- **egressBudgetBytesPerSec**: `Float!` — Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+- **ingressBudgetBytesPerSec**: `Float!` — Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).
+- **egressSource**: `CapacityBudgetSource!` ([CapacityBudgetSource](/builders/api-schema/shared/#capacitybudgetsource))
+- **ingressSource**: `CapacityBudgetSource!` ([CapacityBudgetSource](/builders/api-schema/shared/#capacitybudgetsource))
+- **revision**: `Int!`
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **appliedRevision**: `Int` — Last revision applied by Helmsman; null when the node does not report one.
 
 ### NodeMetric
 
@@ -388,6 +485,16 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **nodes**: `[NodeMetric!]!` ([NodeMetric](/builders/api-schema/shared/#nodemetric))
 - **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
 - **totalCount**: `Int!`
+
+### NodeOperationalMode
+
+**enum**
+
+Operational mode controlling whether a node accepts new sessions. The mode is set via setNodeMode and snapshotted onto the node&#39;s heartbeat; routing inspects it via GetNodeHealth and steers around drained / maintenance nodes.
+
+- `NORMAL` — Accepts new viewers and ingest. Default.
+- `DRAINING` — Existing viewers continue; new viewers are routed elsewhere. Use before maintenance to bleed load gracefully.
+- `MAINTENANCE` — Hard out — node is removed from routing entirely. Existing sessions terminate.
 
 ### NodeStatus
 
@@ -618,6 +725,15 @@ Source of an effective retention horizon. Mirrors the cascade layers used at art
 - **controlCellId**: `String`
 - **originClusterId**: `String`
 
+### RoutingImpactPreview
+
+**object**
+
+Snapshot of how much traffic a node is currently serving.
+
+- **activeStreams**: `Int!`
+- **activeViewers**: `Int!`
+
 ### ServiceInstance
 
 **object**
@@ -692,6 +808,44 @@ Where a stream&#39;s source may be ingested. It is a summary of the stream&#39;s
 - `RESTRICTED` — Only the listed clusters, optionally narrowed to specific nodes and excluding avoided nodes.
 - `CUSTOM` — The stream&#39;s own ingest rules contain constraints this summary cannot express. Read-only here; edit them in the stream&#39;s placement rules.
 
+### StorageArtifact
+
+**object**
+
+- **originType**: `String` — How the artifact was produced, such as dvr_chapter.
+- **parentRecordingId**: `ID` — Catalog ID of the parent DVR recording, present on saved chapters.
+- **key**: `ID!`
+- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/shared/#storageartifactkind))
+- **id**: `ID!`
+- **hash**: `String!`
+- **playbackId**: `String`
+- **streamId**: `ID`
+- **streamTitle**: `String!`
+- **title**: `String!`
+- **secondaryLabel**: `String!`
+- **description**: `String` — User-provided description (VOD uploads and clips); null when unset.
+- **errorMessage**: `String` — Processing failure detail for a failed artifact; null when not failed.
+- **sizeBytes**: `Float`
+- **status**: `String!`
+- **storageLocation**: `String`
+- **storageClusterId**: `String` — ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
+- **syncStatus**: `String`
+- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
+- **isSynced**: `Boolean`
+- **isFinalized**: `Boolean`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention))
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection))
+- **deleteId**: `ID!`
+- **retentionId**: `ID!`
+- **thumbnailUrl**: `String`
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Poster + hover-scrub sprite assets, when the artifact has thumbnails.
+- **durationSeconds**: `Float` — Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized.
+- **tracks**: `[ArtifactTrack!]!` ([ArtifactTrack](/builders/api-schema/shared/#artifacttrack)) — Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
+- **originalFile**: `VodOriginalFile` ([VodOriginalFile](/builders/api-schema/shared/#vodoriginalfile)) — Retained original upload, when this VOD has one.
+
 ### StorageArtifactKind
 
 **enum**
@@ -757,7 +911,12 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **sourceLocation**: `SourceLocation!` ([SourceLocation](/builders/api-schema/shared/#sourcelocation)) — Where the stream&#39;s source may be ingested, derived from the stream&#39;s own ingest placement rules.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this stream was created.
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this stream was last modified.
+- **ingest**: `StreamIngest` ([StreamIngest](/builders/api-schema/shared/#streamingest)) — Ingest state under streams:read; null with a field error when the owning cell is unavailable.
 - **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/shared/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path.
+- **recordings**: `StreamArtifactsConnection` ([StreamArtifactsConnection](/builders/api-schema/shared/#streamartifactsconnection)) — Recordings from this stream&#39;s tenant catalog, newest first.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+- **clips**: `StreamArtifactsConnection` ([StreamArtifactsConnection](/builders/api-schema/shared/#streamartifactsconnection)) — Clips from this stream&#39;s tenant catalog, newest first.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
 - **pushTargets**: `[PushTarget!]!` ([PushTarget](/builders/api-schema/shared/#pushtarget)) — Configured multistream push targets for this stream.
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 - **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast.
@@ -767,6 +926,25 @@ Implements [Node](/builders/api-schema/shared/#node).
   - `limit`: `Int` (default `50`)
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the stream&#39;s poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player&#39;s fallback chain handles.
 - **retentionOverrides**: `StreamRetentionOverrides` ([StreamRetentionOverrides](/builders/api-schema/shared/#streamretentionoverrides)) — Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren&#39;t stream-bound, so they don&#39;t appear here.
+- **transcodeLadder**: `String!` **Experimental until v0.3.17.** — Saved video ladder name; empty inherits the account, then plan default.
+
+### StreamArtifactEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StorageArtifact!` ([StorageArtifact](/builders/api-schema/shared/#storageartifact))
+
+### StreamArtifactsConnection
+
+**object**
+
+A keyset-paginated collection of one stream&#39;s saved recordings or clips.
+
+- **edges**: `[StreamArtifactEdge!]!` ([StreamArtifactEdge](/builders/api-schema/shared/#streamartifactedge))
+- **nodes**: `[StorageArtifact!]!` ([StorageArtifact](/builders/api-schema/shared/#storageartifact))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
 
 ### StreamEvent
 
@@ -831,6 +1009,28 @@ Implements [Node](/builders/api-schema/shared/#node).
 - `TRACK_LIST_UPDATE`
 - `PLAY_REWRITE`
 - `STREAM_SOURCE`
+
+### StreamIngest
+
+**object**
+
+Current ingest-session state, readable with streams:read.
+
+- **state**: `StreamIngestState!` ([StreamIngestState](/builders/api-schema/shared/#streamingeststate))
+- **isLive**: `Boolean!`
+- **sessionId**: `ID`
+- **connectedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **liveSince**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **endedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **resumableUntil**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+### StreamIngestState
+
+**enum**
+
+- `IDLE`
+- `CONNECTED`
+- `LIVE`
 
 ### StreamMetrics
 
@@ -974,6 +1174,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the VOD&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset&#39;s retention_until column is unset (infinite).
 - **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
+- **originalFile**: `VodOriginalFile` ([VodOriginalFile](/builders/api-schema/shared/#vodoriginalfile)) — Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original.
 
 ### VodAssetStatus
 
@@ -987,3 +1188,11 @@ VOD asset processing status.
 - `FAILED` — Validation failed or upload error.
 - `DELETED` — Marked for deletion.
 - `EXPIRED` — Multipart upload session deadline elapsed without completion; client must restart.
+
+### VodOriginalFile
+
+**object**
+
+Metadata of the byte-identical retained upload.
+
+- **sizeBytes**: `Float!`

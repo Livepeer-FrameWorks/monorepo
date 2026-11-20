@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { documentIdentity } from "../src/identity.js";
 import * as documents from "../src/generated/graphql.js";
 import { operations } from "../src/generated/manifest.js";
@@ -50,6 +50,14 @@ describe("document identity", () => {
     expect(() => documentIdentity(b)).toThrow();
   });
   it("does not borrow the version gate of a same-name custom document", async () => {
+    const since = operations.GetBillingLifecycle.since;
+    Object.defineProperty(operations.GetBillingLifecycle, "since", {
+      value: "v99.0.0",
+      configurable: true,
+    });
+    onTestFinished(() => {
+      Object.defineProperty(operations.GetBillingLifecycle, "since", { value: since });
+    });
     const sent: string[] = [];
     const client = createClient({
       url: "https://identity-gate.test/graphql",
@@ -60,7 +68,7 @@ describe("document identity", () => {
           JSON.stringify({
             data:
               body.operationName === "ServerInfo"
-                ? { serverInfo: { version: "v0.3.11", features: [] } }
+                ? { serverInfo: { version: "v0.3.16", features: [] } }
                 : { tenant: { id: "tenant" } },
           })
         );
@@ -76,7 +84,7 @@ describe("document identity", () => {
       UnsupportedOperationError
     );
     expect(sent).not.toContain("GetBillingLifecycle");
-    expect(operations.GetBillingLifecycle.since).toBe("v0.3.14");
+    expect(operations.GetBillingLifecycle.since).toBe("v99.0.0");
   });
   it("named methods retain per-call options and request/response types", async () => {
     let headers: Headers | undefined;

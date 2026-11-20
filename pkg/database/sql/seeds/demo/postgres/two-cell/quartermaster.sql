@@ -11,7 +11,7 @@
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     cluster_class,
-    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    max_concurrent_streams, max_concurrent_viewers,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description,
     cell_id, control_cell_id, region_id, eligible_serving_cell_ids, owner_tenant_id
@@ -19,7 +19,7 @@ INSERT INTO quartermaster.infrastructure_clusters (
 VALUES (
     'us-primary', 'US Platform', 'central', 'us.platform.demo.frameworks.network',
     'platform_official',
-    0, 0, 0,
+    0, 0,
     FALSE, TRUE, TRUE,
     'public', 'Second platform cell for the two-cell media proof',
     'us-primary', 'us-primary', 'us-east', ARRAY['us-primary', 'central-primary'],
@@ -35,7 +35,7 @@ ON CONFLICT (cluster_id) DO UPDATE SET
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     cluster_class,
-    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    max_concurrent_streams, max_concurrent_viewers,
     is_default_cluster, is_platform_official, public_topology,
     visibility, short_description,
     cell_id, control_cell_id, region_id, eligible_serving_cell_ids, owner_tenant_id
@@ -43,7 +43,7 @@ INSERT INTO quartermaster.infrastructure_clusters (
 VALUES (
     'demo-media-us', 'Demo Media US', 'edge', 'us.demo.frameworks.network',
     'platform_official',
-    0, 0, 0,
+    0, 0,
     FALSE, TRUE, TRUE,
     'public', 'Media cluster of the second platform cell: edge nodes, stream routing, viewer delivery',
     'us-primary', 'us-primary', 'us-east', ARRAY['us-primary', 'central-primary'],

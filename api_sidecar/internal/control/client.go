@@ -64,7 +64,8 @@ const foghornInternalServerName = "foghorn.internal"
 //   - Version 10 = authorizes a session stop against its live owner waiter and uses local duration budgets.
 //   - Version 11 = isolates publisher and relay executions, confirms exact runtime drains,
 //     and persists recording source transitions with writer-bound progress and stop reports.
-const controlProtocolVersion int32 = 11
+//   - Version 12 = durably rejects delayed admissions for explicitly stopped generations.
+const controlProtocolVersion int32 = 12
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -1993,6 +1994,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 		ActiveProcessingJobIds:   activeProcessingJobIDsForRegister(),
 	}
 	registration.LiveIngestGenerations, registration.LiveIngestGenerationsReported = liveIngestGenerationsForRegister()
+	registration.LiveSourceBuffers, registration.LiveSourceBuffersReported, registration.LiveSourceBuffersSampledUnixMillis = liveSourceBuffersForRegister(logger, cfg)
 	identityKey, identityStatus, err := nodeidentity.LoadOrCreatePrivateKey(
 		cfg.StateDir, cfg.NodeID, cfg.StorageLocalPath, cfg.RotateNodeIdentity, cfg.EnrollmentToken,
 	)
@@ -2245,6 +2247,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 							RuntimeName:      x.DrainStreamRequest.GetRuntimeName(),
 							Error:            "drain command expired in transit",
 							SourceGeneration: x.DrainStreamRequest.GetSourceGeneration(),
+							TenantId:         x.DrainStreamRequest.GetTenantId(),
 						},
 					}}
 					if err := stream.Send(resp); err != nil {
@@ -3651,6 +3654,15 @@ func handleInvalidateSessions(logger logging.Logger, req *ipcpb.InvalidateSessio
 // drain, so viewers do not remain on a stale buffer. Idempotent — an absent stream returns success
 // with unloaded=false.
 func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, send func(*ipcpb.ControlMessage)) {
+	if send != nil {
+		originalSend := send
+		send = func(message *ipcpb.ControlMessage) {
+			if response := message.GetDrainStreamResponse(); response != nil {
+				response.TenantId = req.GetTenantId()
+			}
+			originalSend(message)
+		}
+	}
 	runtimeName := strings.TrimSpace(req.GetRuntimeName())
 	if runtimeName == "" {
 		return

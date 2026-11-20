@@ -6,12 +6,14 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 )
 
@@ -440,8 +442,16 @@ func HandleRootPage(c *gin.Context) {
                     <span class="value">{{.DownSpeedStr}}</span>
                 </div>
                 <div class="detail-row">
-                    <span class="label">BW Limit</span>
+                    <span class="label">Egress Budget ({{.BudgetSource}})</span>
                     <span class="value">{{.BWLimitStr}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Measurement</span>
+                    <span class="value">{{.ObservedSource}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Capacity</span>
+                    <span class="value">{{.CapacityStatus}}</span>
                 </div>
                 <div class="detail-row">
                     <span class="label">BW Available</span>
@@ -880,6 +890,9 @@ func HandleRootPage(c *gin.Context) {
 		DownSpeedStr        string
 		BWLimit             float64
 		BWLimitStr          string
+		BudgetSource        string
+		ObservedSource      string
+		CapacityStatus      string
 		AvailBandwidth      uint64
 		AvailBandwidthStr   string
 		AddBandwidth        uint64
@@ -1059,42 +1072,63 @@ func HandleRootPage(c *gin.Context) {
 				}
 				return 0
 			}(),
-			RAMCurrent:          node.RAMCurrent,
-			RAMCurrentStr:       formatBytes(uint64(node.RAMCurrent)),
-			RAMMax:              node.RAMMax,
-			RAMMaxStr:           formatBytes(uint64(node.RAMMax)),
-			DiskTotalBytesStr:   formatBytes(node.DiskTotalBytes),
-			DiskUsedBytesStr:    formatBytes(node.DiskUsedBytes),
-			DiskUsedPercent:     diskPercent,
-			StorageCapacity:     node.StorageCapacityBytes,
-			StorageCapacityStr:  formatBytes(node.StorageCapacityBytes),
-			StorageUsed:         node.StorageUsedBytes,
-			StorageUsedStr:      formatBytes(node.StorageUsedBytes),
-			GeoLatitude:         node.GeoLatitude,
-			GeoLongitude:        node.GeoLongitude,
-			LocationName:        node.LocationName,
-			Capabilities:        caps,
-			Roles:               node.Roles,
-			LastUpdateAgo:       updateAgo,
-			Tags:                node.Tags,
-			ConfigStreams:       node.ConfigStreams,
-			Port:                node.Port,
-			DTSCPort:            node.DTSCPort,
-			StorageLocal:        node.StorageLocal,
-			StorageBucket:       node.StorageBucket,
-			StoragePrefix:       node.StoragePrefix,
-			GPUVendor:           node.GPUVendor,
-			GPUCount:            node.GPUCount,
-			GPUMemMB:            node.GPUMemMB,
-			GPUCC:               node.GPUCC,
-			TranscodeUsed:       nodeClassUsed(node, mist.ProcessingClassVideoTranscode),
-			TranscodeTotal:      nodeClassTotal(node, mist.ProcessingClassVideoTranscode),
-			UpSpeed:             uint64(node.UpSpeed),
-			UpSpeedStr:          formatBytesPerSec(uint64(node.UpSpeed)),
-			DownSpeed:           uint64(node.DownSpeed),
-			DownSpeedStr:        formatBytesPerSec(uint64(node.DownSpeed)),
-			BWLimit:             node.BWLimit,
-			BWLimitStr:          formatBytesPerSec(uint64(node.BWLimit)),
+			RAMCurrent:         node.RAMCurrent,
+			RAMCurrentStr:      formatBytes(uint64(node.RAMCurrent)),
+			RAMMax:             node.RAMMax,
+			RAMMaxStr:          formatBytes(uint64(node.RAMMax)),
+			DiskTotalBytesStr:  formatBytes(node.DiskTotalBytes),
+			DiskUsedBytesStr:   formatBytes(node.DiskUsedBytes),
+			DiskUsedPercent:    diskPercent,
+			StorageCapacity:    node.StorageCapacityBytes,
+			StorageCapacityStr: formatBytes(node.StorageCapacityBytes),
+			StorageUsed:        node.StorageUsedBytes,
+			StorageUsedStr:     formatBytes(node.StorageUsedBytes),
+			GeoLatitude:        node.GeoLatitude,
+			GeoLongitude:       node.GeoLongitude,
+			LocationName:       node.LocationName,
+			Capabilities:       caps,
+			Roles:              node.Roles,
+			LastUpdateAgo:      updateAgo,
+			Tags:               node.Tags,
+			ConfigStreams:      node.ConfigStreams,
+			Port:               node.Port,
+			DTSCPort:           node.DTSCPort,
+			StorageLocal:       node.StorageLocal,
+			StorageBucket:      node.StorageBucket,
+			StoragePrefix:      node.StoragePrefix,
+			GPUVendor:          node.GPUVendor,
+			GPUCount:           node.GPUCount,
+			GPUMemMB:           node.GPUMemMB,
+			GPUCC:              node.GPUCC,
+			TranscodeUsed:      nodeClassUsed(node, mist.ProcessingClassVideoTranscode),
+			TranscodeTotal:     nodeClassTotal(node, mist.ProcessingClassVideoTranscode),
+			UpSpeed:            uint64(node.UpSpeed),
+			UpSpeedStr:         formatBytesPerSec(uint64(node.UpSpeed)),
+			DownSpeed:          uint64(node.DownSpeed),
+			DownSpeedStr:       formatBytesPerSec(uint64(node.DownSpeed)),
+			BWLimit:            node.BWLimit,
+			BWLimitStr:         formatBytesPerSec(uint64(node.BWLimit)),
+			BudgetSource: func() string {
+				if node.Capacity == nil {
+					return "DEFAULT"
+				}
+				return strings.TrimPrefix(node.Capacity.GetEgressSource().String(), "BANDWIDTH_BUDGET_SOURCE_")
+			}(),
+			ObservedSource: func() string {
+				if node.ObservedSource == ipcpb.ObservedSource_OBSERVED_SOURCE_UNSPECIFIED {
+					return "MIST"
+				}
+				return strings.TrimPrefix(node.ObservedSource.String(), "OBSERVED_SOURCE_")
+			}(),
+			CapacityStatus: func() string {
+				if node.CapacityRevisionApplied == nil {
+					return "Helmsman does not apply capacity"
+				}
+				if *node.CapacityRevisionApplied != node.Capacity.GetRevision() {
+					return "Capacity not applied"
+				}
+				return "Applied"
+			}(),
 			AvailBandwidth:      node.AvailBandwidth,
 			AvailBandwidthStr:   formatBytesPerSec(uint64(node.AvailBandwidth)),
 			AddBandwidth:        node.AddBandwidth,

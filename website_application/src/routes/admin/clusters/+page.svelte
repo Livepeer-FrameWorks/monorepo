@@ -93,8 +93,9 @@
                 <TableHead>Type</TableHead>
                 <TableHead class="text-right">Live streams</TableHead>
                 <TableHead class="text-right">Viewers</TableHead>
-                <TableHead class="text-right">In Mbps</TableHead>
-                <TableHead class="text-right">Out Mbps</TableHead>
+                <TableHead class="text-right">Egress Mbit/s</TableHead>
+                <TableHead class="text-right">Ingress Mbit/s</TableHead>
+                <TableHead class="text-right">Budget / usable Mbit/s</TableHead>
                 <TableHead class="text-right">Nodes</TableHead>
                 <TableHead>Tenants</TableHead>
               </TableRow>
@@ -117,6 +118,16 @@
                   <TableCell class="text-right"
                     >{formatMbps(row.liveStats?.downloadBytesPerSec)}</TableCell
                   >
+                  <TableCell class="text-right">
+                    {formatMbps(row.liveStats?.egressBudgetBytesPerSec)} / {formatMbps(
+                      row.liveStats?.egressUsableBytesPerSec
+                    )}
+                    {#if row.liveStats?.defaultBudgetNodes}<div
+                        class="text-xs text-muted-foreground"
+                      >
+                        {row.liveStats.defaultBudgetNodes} default
+                      </div>{/if}
+                  </TableCell>
                   <TableCell class="text-right">{row.liveStats?.activeNodes ?? "—"}</TableCell>
                   <TableCell>
                     <div class="flex flex-wrap items-center gap-1">

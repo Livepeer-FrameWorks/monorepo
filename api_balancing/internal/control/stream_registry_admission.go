@@ -228,7 +228,7 @@ func (r *StreamRegistry) MarkSourceOwnerIfUnset(internalName, nodeID string) (st
 		ce.entry.Locations = make(map[string]Location)
 	}
 	loc := ce.entry.Locations[r.clusterID]
-	if loc.OwnerNodeID != "" {
+	if loc.OwnerNodeID != "" && loc.SourceActive {
 		owner = loc.OwnerNodeID
 	} else {
 		loc.ClusterID = r.clusterID

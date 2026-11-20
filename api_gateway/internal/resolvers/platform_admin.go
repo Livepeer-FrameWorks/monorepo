@@ -531,12 +531,16 @@ func clusterLiveStatsFromPB(s *periscopepb.NetworkClusterLiveStats) *model.Clust
 		return nil
 	}
 	return &model.ClusterLiveStats{
-		ClusterID:           s.ClusterId,
-		ActiveStreams:       int(s.ActiveStreams),
-		CurrentViewers:      int(s.CurrentViewers),
-		UploadBytesPerSec:   float64(s.UploadBytesPerSec),
-		DownloadBytesPerSec: float64(s.DownloadBytesPerSec),
-		ActiveNodes:         int(s.ActiveNodes),
-		EgressCapacityBps:   float64(s.EgressCapacityBps),
+		ClusterID:                 s.ClusterId,
+		ActiveStreams:             int(s.ActiveStreams),
+		CurrentViewers:            int(s.CurrentViewers),
+		UploadBytesPerSec:         float64(s.UploadBytesPerSec),
+		DownloadBytesPerSec:       float64(s.DownloadBytesPerSec),
+		ActiveNodes:               int(s.ActiveNodes),
+		EgressCapacityBps:         float64(s.EgressBudgetBytesPerSec),
+		EgressBudgetBytesPerSec:   float64(s.GetEgressBudgetBytesPerSec()),
+		EgressUsableBytesPerSec:   float64(s.GetEgressUsableBytesPerSec()),
+		EgressObservedBytesPerSec: float64(s.GetEgressObservedBytesPerSec()),
+		DefaultBudgetNodes:        int(s.GetDefaultBudgetNodes()),
 	}
 }

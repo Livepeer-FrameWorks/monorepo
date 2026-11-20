@@ -124,3 +124,18 @@ func parseViewerSessions(response map[string]interface{}) ([]ViewerSession, erro
 	}
 	return sessions, nil
 }
+
+// TagSessionIDs persists a classification in Mist's session statistics.
+func (c *Client) TagSessionIDs(ctx context.Context, sessionIDs []string, tag string) error {
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+	tags := make(map[string]string, len(sessionIDs))
+	for _, sid := range sessionIDs {
+		if sid != "" {
+			tags[sid] = tag
+		}
+	}
+	_, err := c.makeAPIRequestContext(ctx, map[string]interface{}{"tag_sessid": tags})
+	return err
+}

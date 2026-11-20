@@ -40,6 +40,9 @@ func TestVODImportFilename(t *testing.T) {
 		ok                   bool
 	}{
 		{"", "https://cdn.example/a/talk.mov", "talk.mov", true},
+		{"", "https://cdn.example/a/talk.m2ts", "talk.m2ts", true},
+		{"clip.MTS", "https://cdn.example/file", "clip.MTS", true},
+		{"list.m3u8", "https://cdn.example/file", "", false},
 		{"clip.MKV", "https://gw.example/ipfs/bafy", "clip.MKV", true},
 		{"", "https://gw.example/ipfs/bafy", "", false},
 		// m4v is not relay-readable: Mist opens it only from a local file.

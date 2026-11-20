@@ -144,11 +144,12 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	live := authority.ObjectKind == mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM
 	if push {
 		prepared, pushErr := runtime.Push.Reconcile(ctx, req, receipt, bind)
 		if pushErr == nil {
-			reserveLiveViewer(req)
+			if reserveErr := reservePreparedViewer(ctx, req); reserveErr != nil {
+				return nil, reserveErr
+			}
 		}
 		return prepared, pushErr
 	}
@@ -198,8 +199,8 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	if live {
-		reserveLiveViewer(req)
+	if err := reservePreparedViewer(ctx, req); err != nil {
+		return nil, err
 	}
 	q := req.Query
 	return &placementpb.Preparation{
@@ -211,11 +212,16 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	}, nil
 }
 
-// reserveLiveViewer reserves the prepared node's bandwidth for the viewer in
-// this cell, which owns the node's load observations and receives its
-// connection. The attempt ID is the viewer's playback correlation ID.
-func reserveLiveViewer(req *placementpb.PreparePlacementRequest) {
-	state.DefaultManager().ReservePendingViewer(req.GetAttemptId(), req.GetNodeId(), req.GetQuery().GetInternalName())
+// reservePreparedViewer accounts for live and stored media using the URL's attempt ID.
+func reservePreparedViewer(ctx context.Context, req *placementpb.PreparePlacementRequest) error {
+	ok, err := state.DefaultManager().PrepareViewerBandwidth(ctx, req.GetAttemptId(), req.GetNodeId(), req.GetQuery().GetInternalName())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return status.Error(codes.ResourceExhausted, "node egress capacity exhausted")
+	}
+	return nil
 }
 
 // classify reads the signed pair once and reports whether the push runtime owns

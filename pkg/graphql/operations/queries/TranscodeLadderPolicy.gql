@@ -1,0 +1,16 @@
+# Transcode ladders the tenant's plan allows, the plan default and the ladder
+# the tenant's streams and VOD uploads inherit. Used by the stream create and
+# edit dialogs and the tenant transcoding panel.
+query TranscodeLadderPolicy {
+  transcodeLadderPolicy {
+    ladders {
+      name
+      displayName
+      description
+      renditionNames
+    }
+    planDefault
+    tenantLadder
+    effectiveLadder
+  }
+}

@@ -65,7 +65,6 @@ type EdgeProvisionConfig struct {
 	TelemetryToken           string
 	TelemetryAddress         string
 	Capabilities             []string
-	BandwidthMbps            int
 	MaxTranscodes            int
 	StorageBytes             uint64
 

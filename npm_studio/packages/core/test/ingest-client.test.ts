@@ -6,7 +6,7 @@ import { clearServerInfoProbes, probeServerInfo } from "@livepeer-frameworks/api
 
 const MOCK_GATEWAY_URL = "https://gateway.example.com/graphql";
 const MOCK_STREAM_KEY = "test-stream-key";
-const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.11", features: [] } } };
+const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.16", features: [] } } };
 
 function mockFetchSuccess(data = mockEndpointResponse()) {
   return vi.fn().mockResolvedValue({

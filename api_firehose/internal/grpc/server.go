@@ -342,8 +342,6 @@ func serviceEventPayloadToMap(event *ipcpb.ServiceEvent) (map[string]any, error)
 		return protoMessageToMap(payload.ClusterEvent)
 	case *ipcpb.ServiceEvent_StreamChangeEvent:
 		return protoMessageToMap(payload.StreamChangeEvent)
-	case *ipcpb.ServiceEvent_StreamKeyEvent:
-		return protoMessageToMap(payload.StreamKeyEvent)
 	case *ipcpb.ServiceEvent_BillingEvent:
 		return protoMessageToMap(payload.BillingEvent)
 	case *ipcpb.ServiceEvent_SupportEvent:
