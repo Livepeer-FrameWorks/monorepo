@@ -78,6 +78,10 @@ cat > "$fixture/bin/ssh" <<'SSH'
 #!/usr/bin/env bash
 command=${!#}
 command=${command//\/srv\/frameworks-dev/$REMOTE_DEV_TEST_ROOT}
+# Host login profiles must not replace the simulated remote filesystem's tools.
+if [[ $command == "bash -lc "* ]]; then
+  command="bash -c ${command#"bash -lc "}"
+fi
 exec bash -c "$command"
 SSH
 chmod +x "$fixture/bin/ssh"
