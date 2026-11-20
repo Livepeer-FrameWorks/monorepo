@@ -1,0 +1,16 @@
+#!/bin/sh
+# s6 supplies the supervised process group, including surviving connection handlers.
+pg=${4:-}
+case "$pg" in
+''|*[!0-9]*|0|1) ;;
+*)
+kill -TERM -"$pg" 2>/dev/null || true
+attempt=0
+while kill -0 -"$pg" 2>/dev/null && [ "$attempt" -lt 80 ]; do
+  sleep 0.1
+  attempt=$((attempt + 1))
+done
+kill -KILL -"$pg" 2>/dev/null || true
+;;
+esac
+rm -f /dev/shm/Mst* /dev/shm/sem.Mst*
