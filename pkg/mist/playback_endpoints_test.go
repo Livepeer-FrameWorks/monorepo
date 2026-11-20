@@ -77,6 +77,29 @@ func TestResolvePlaybackURLAutoRequiresAnyReportedBrowserOutput(t *testing.T) {
 	}
 }
 
+func TestResolvePlaybackURLRequiresNativeMatroskaOutput(t *testing.T) {
+	base := "https://media.example/view"
+	for _, tc := range []struct {
+		name    string
+		outputs map[string]any
+		want    string
+	}{
+		{name: "verified projection", outputs: map[string]any{nativeMatroskaOutput: base + "/$.mkv"}, want: base + "/chapter.mkv"},
+		{name: "generic EBML alias", outputs: map[string]any{"EBML": base + "/$.mkv"}},
+		{name: "raw MKV label", outputs: map[string]any{"MKV": base + "/$.mkv"}},
+		{name: "WebM template", outputs: map[string]any{nativeMatroskaOutput: base + "/$.webm"}},
+		{name: "HTML template", outputs: map[string]any{nativeMatroskaOutput: base + "/$.html"}},
+		{name: "WebSocket", outputs: map[string]any{nativeMatroskaOutput: "wss://media.example/view/$.mkv"}},
+		{name: "pre-filled query", outputs: map[string]any{nativeMatroskaOutput: base + "/$.mkv?query=unexpected"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveNativeMatroskaPlaybackURL(tc.outputs, base, "chapter"); got != tc.want {
+				t.Errorf("MKV resolved to %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A DTSC connector without an explicit port listens on 4200; the resolved URL
 // must carry that port so the stream advertisement, the placement claim and the
 // arranged origin pull all name the listener with one string.

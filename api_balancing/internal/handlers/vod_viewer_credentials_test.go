@@ -45,13 +45,17 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, transport string
 		status                int
+		chapter, matroska     bool
 	}{
-		{"query redirect", "vod-public/hls/index.m3u8", "query", http.StatusTemporaryRedirect},
-		{"query JSON", "vod-public", "query", http.StatusOK},
-		{"missing", "vod-public/hls/index.m3u8", "", http.StatusForbidden},
-		{"invalid", "vod-public/hls/index.m3u8", "invalid", http.StatusForbidden},
-		{"header", "vod-public/hls/index.m3u8", "header", http.StatusTemporaryRedirect},
-		{"cookie", "vod-public/hls/index.m3u8", "cookie", http.StatusTemporaryRedirect},
+		{name: "query redirect", path: "vod-public/hls/index.m3u8", transport: "query", status: http.StatusTemporaryRedirect},
+		{name: "query JSON", path: "vod-public", transport: "query", status: http.StatusOK},
+		{name: "missing", path: "vod-public/hls/index.m3u8", status: http.StatusForbidden},
+		{name: "invalid", path: "vod-public/hls/index.m3u8", transport: "invalid", status: http.StatusForbidden},
+		{name: "header", path: "vod-public/hls/index.m3u8", transport: "header", status: http.StatusTemporaryRedirect},
+		{name: "cookie", path: "vod-public/hls/index.m3u8", transport: "cookie", status: http.StatusTemporaryRedirect},
+		{name: "chapter Matroska", path: "chapter-public.mkv", transport: "query", status: http.StatusTemporaryRedirect, chapter: true, matroska: true},
+		{name: "chapter without Matroska", path: "chapter-public.mkv", transport: "query", status: http.StatusNotFound, chapter: true},
+		{name: "chapter Matroska denied", path: "chapter-public.mkv", transport: "invalid", status: http.StatusForbidden, chapter: true, matroska: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupPreparedViewerHTTP(t, false, &commodoreBalancingFake{
@@ -62,11 +66,19 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 			sm := balancingTestEnv(t)
 			mock := withMockDBArms(t)
 			const hash = "vodhashaaaaaaaaaaaaaaaaaaaaaaaa1"
-			seedArtifactEdgeArms(t, sm, "vod-edge", "vod.example", "https://vod.example/", hash,
-				map[string]any{"HLS": "https://vod.example/view/hls/$/index.m3u8"})
+			contentType := "vod"
+			outputs := map[string]any{"HLS": "https://vod.example/view/hls/$/index.m3u8"}
+			if tc.chapter {
+				contentType = "chapter"
+				outputs = matroskaPlaybackOutputs(t, "https://vod.example/view", tc.matroska)
+			}
+			seedArtifactEdgeArms(t, sm, "vod-edge", "vod.example", "https://vod.example/", hash, outputs)
 			startCommodoreFakeArms(t, &commodoreArmsFake{
-				artifactPlaybackID: func(context.Context, *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
-					return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, ArtifactHash: hash, InternalName: "art", TenantId: "tenant-vod", ContentType: "vod", RequiresAuth: true}, nil
+				artifactPlaybackID: func(_ context.Context, req *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+					if tc.chapter && req.GetPlaybackId() != "chapter-public" {
+						t.Errorf("chapter resolver received %q instead of the public chapter ID", req.GetPlaybackId())
+					}
+					return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, ArtifactHash: hash, InternalName: "art", TenantId: "tenant-vod", ContentType: contentType, RequiresAuth: true}, nil
 				},
 				vodHash: func(context.Context, *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
 					return &commodorepb.ResolveVodHashResponse{Found: true, TenantId: "tenant-vod", Title: "Protected VOD"}, nil
@@ -78,7 +90,12 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 			c, w := playbackCtxArms(t, tc.path)
 			switch tc.transport {
 			case "query":
-				c.Request.URL.RawQuery = url.Values{"jwt": {token}, "unrelated": {"discard"}}.Encode()
+				query := url.Values{"jwt": {token}, "unrelated": {"discard"}}
+				if tc.chapter {
+					query.Set("start", "2")
+					query.Set("stop", "6")
+				}
+				c.Request.URL.RawQuery = query.Encode()
 			case "invalid":
 				c.Request.URL.RawQuery = "jwt=invalid-viewer-token"
 			case "header":
@@ -97,6 +114,12 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 			if tc.status == http.StatusForbidden {
 				if w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "PLAYBACK_ACCESS_DENIED") {
 					t.Fatal("denied VOD request disclosed a playback destination")
+				}
+				return
+			}
+			if tc.status == http.StatusNotFound {
+				if w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), "PROTOCOL_NOT_AVAILABLE") {
+					t.Fatal("unavailable native output did not return a protocol-specific 404")
 				}
 				return
 			}
@@ -120,8 +143,11 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 					t.Fatal(err)
 				}
 				session := mist.ViewerSessionID(location)
-				if u.Host != "vod.example" || session == "" || u.Query().Has("jwt") || u.Query().Has("unrelated") {
+				if u.Host != "vod.example" || session == "" || session == token || u.Query().Has("jwt") || u.Query().Has("unrelated") {
 					t.Fatal("VOD destination or distinct playback session was lost")
+				}
+				if tc.chapter && (u.Path != "/view/chapter-public.mkv" || u.Query().Get("start") != "2" || u.Query().Get("stop") != "6") {
+					t.Fatal("Matroska redirect lost the public chapter identity or requested interval")
 				}
 				if tc.transport != "query" {
 					if u.Query().Has(mist.ViewerJWTParam) || strings.Contains(location, token) {
@@ -132,7 +158,11 @@ func TestVODViewerHTTPCredentialHandoff(t *testing.T) {
 				if u.Query().Get(mist.ViewerJWTParam) != token {
 					t.Fatal("VOD edge URL lost the query playback JWT")
 				}
-				viewer := &ipcpb.ViewerConnectTrigger{StreamName: "vod+art", ViewerToken: session, RequestUrl: location, Connector: "HLS"}
+				connector := "HLS"
+				if tc.chapter {
+					connector = "EBML"
+				}
+				viewer := &ipcpb.ViewerConnectTrigger{StreamName: "vod+art", ViewerToken: session, RequestUrl: location, Connector: connector}
 				if triggers.EvaluatePlaybackPolicy(t.Context(), logger, "art", viewer, policy) != "true" {
 					t.Fatal("VOD edge policy rejected the forwarded credential")
 				}
