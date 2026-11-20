@@ -44,7 +44,7 @@ func TestPlacementMembershipRevisionIgnoresReadInstant(t *testing.T) {
 			AddRow("own", true, "b", admission, at).
 			AddRow("retired", false, "", false, at)
 	}
-	mock.ExpectQuery(`(?s)FROM quartermaster.infrastructure_clusters ic.*LEFT JOIN quartermaster.infrastructure_nodes n.*node_type = 'edge'.*control_cell_id.*LIMIT 8193`).
+	mock.ExpectQuery("GetPlacementMembership").
 		WithArgs("cell").WillReturnRows(rows(now, true))
 	mock.ExpectQuery("GetPlacementMembership").WithArgs("cell").WillReturnRows(rows(now.Add(time.Minute), true))
 	mock.ExpectQuery("GetPlacementMembership").WithArgs("cell").WillReturnRows(rows(now, false))

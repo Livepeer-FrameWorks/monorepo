@@ -98,8 +98,8 @@ type Querier interface {
 	GetOwnedMediaCapacityConsentChange(ctx context.Context, arg GetOwnedMediaCapacityConsentChangeParams) (QuartermasterMediaCapacityConsentChange, error)
 	GetPendingInviteByToken(ctx context.Context, inviteToken string) (GetPendingInviteByTokenRow, error)
 	GetPendingInviteWithClusterPolicy(ctx context.Context, inviteToken string) (GetPendingInviteWithClusterPolicyRow, error)
-	// Tenant-independent membership of one canonical control cell. Inactive
-	// clusters stay listed with their flag so a deactivation is observable.
+	// Tenant-independent membership of one canonical control cell. Materialize the
+	// cell's edge-node set once so a small cluster set cannot cause repeated scans.
 	GetPlacementMembership(ctx context.Context, controlCellID string) ([]GetPlacementMembershipRow, error)
 	GetSubscriptionOwner(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerRow, error)
 	GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerPolicyRow, error)

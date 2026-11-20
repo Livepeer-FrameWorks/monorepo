@@ -305,7 +305,8 @@ func (b *binder) valueFor(qname, col, op, typ string) (boundValue, bool) {
 		if t.uniqueCols[col] && !b.upsert {
 			return boundValue{}, false
 		}
-		if fi, ok := t.fkColumns[col]; ok && !t.fks[fi].soft {
+		// Rebinding an existing upsert key to another parent would turn its conflict path into an insert.
+		if fi, ok := t.fkColumns[col]; ok && !t.fks[fi].soft && (!b.upsert || len(b.s.samples[qname]) == 0) {
 			fk := t.fks[fi]
 			for k, name := range fk.columns {
 				if name == col && fk.parent != qname {

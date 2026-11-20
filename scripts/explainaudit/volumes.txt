@@ -12,6 +12,7 @@ quartermaster.edge_releases 50
 quartermaster.cluster_release_targets 20
 quartermaster.tls_bundles 60
 quartermaster.infrastructure_nodes 300
+quartermaster.infrastructure_node_capacity 300
 quartermaster.mesh_node_configs 300
 quartermaster.node_fingerprints 300
 quartermaster.service_instances 1500
