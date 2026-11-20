@@ -64,6 +64,9 @@ func PlaybackOutputCatalog(reported, inventory map[string]any) (map[string]any, 
 	}
 	catalog := make(map[string]any, len(reported))
 	for name, value := range reported {
+		if strings.EqualFold(name, nativeMatroskaOutput) {
+			continue
+		}
 		if owner, known := owners[strings.ToLower(name)]; known && !enabled[owner] {
 			continue
 		}
@@ -88,7 +91,7 @@ func PlaybackOutputCatalog(reported, inventory map[string]any) (map[string]any, 
 	}
 
 	for name, raw := range connectors {
-		if !enabled[strings.ToLower(name)] || hasReportedListener(catalog, name) {
+		if !enabled[strings.ToLower(name)] {
 			continue
 		}
 		connector, valid := raw.(map[string]any)
@@ -97,6 +100,18 @@ func PlaybackOutputCatalog(reported, inventory map[string]any) (map[string]any, 
 		}
 		dependency, dependent := connector["deps"].(string)
 		if !dependent || (!strings.EqualFold(dependency, "HTTP") && !strings.EqualFold(dependency, "HTTPS")) {
+			continue
+		}
+		if strings.EqualFold(name, "EBML") {
+			matches, _ := connector["url_match"].([]any)
+			for _, match := range matches {
+				if match == "/$.mkv" {
+					catalog[nativeMatroskaOutput] = playbackMethodURL(httpBase, "/$.mkv", "http")
+					break
+				}
+			}
+		}
+		if hasReportedListener(catalog, name) {
 			continue
 		}
 		methods, declared := connector["methods"].([]any)
@@ -111,7 +126,7 @@ func PlaybackOutputCatalog(reported, inventory map[string]any) (map[string]any, 
 			label, named := method["hrn"].(string)
 			relative, located := method["url_rel"].(string)
 			handler, handled := method["handler"].(string)
-			if !named || !located || !handled {
+			if !named || !located || !handled || strings.EqualFold(label, nativeMatroskaOutput) {
 				continue
 			}
 			endpoint := playbackMethodURL(httpBase, relative, handler)

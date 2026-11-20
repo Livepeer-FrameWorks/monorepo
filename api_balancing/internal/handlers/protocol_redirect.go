@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -12,6 +13,14 @@ import (
 func resolvedViewerProtocolURL(endpoint *sharedpb.ViewerEndpoint, protocol string) string {
 	if endpoint == nil {
 		return ""
+	}
+	if protocol == "mkv" || protocol == "matroska" {
+		raw := endpoint.GetOutputs()["MKV"].GetUrl()
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || !strings.HasSuffix(u.Path, ".mkv") {
+			return ""
+		}
+		return raw
 	}
 	if raw := findProtocolURL(endpoint.Outputs, protocol); raw != "" {
 		return raw

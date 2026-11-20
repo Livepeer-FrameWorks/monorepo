@@ -52,6 +52,55 @@ func TestPlaybackOutputCatalogProductionMethods(t *testing.T) {
 	}
 }
 
+func TestPlaybackOutputCatalogRequiresDeclaredNativeMatroska(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		matches  []any
+		want     string
+		disabled string
+	}{
+		{name: "existing EBML WebM advertisement"},
+		{name: "similar but non-native route", matches: []any{"/$.webm", "/$.mkv?other=1"}},
+		{name: "native route", matches: []any{"/$.webm", "/$.mkv"}, want: "https://edge.example/view/chapter.mkv"},
+		{name: "disabled EBML connector", matches: []any{"/$.mkv"}, disabled: "EBML"},
+		{name: "disabled HTTP listener", matches: []any{"/$.mkv"}, disabled: "HTTP"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reported, inventory := productionOutputFixture(t)
+			reported[nativeMatroskaOutput] = "https://stale.example/$.mkv"
+			connector := inventory["capabilities"].(map[string]any)["connectors"].(map[string]any)["EBML"].(map[string]any)
+			connector["url_match"] = tc.matches
+			base := "https://edge.example/view"
+			wantWebM := base + "/chapter.webm"
+			if tc.disabled != "" {
+				config := inventory["config_backup"].(map[string]any)["config"].(map[string]any)
+				for _, raw := range config["protocols"].([]any) {
+					protocol := raw.(map[string]any)
+					if protocol["connector"] == tc.disabled {
+						protocol["disabled"] = true
+					}
+				}
+				if tc.disabled == "EBML" {
+					wantWebM = ""
+				}
+			}
+			catalog, err := PlaybackOutputCatalog(reported, inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ResolveNativeMatroskaPlaybackURL(catalog, base, "chapter"); got != tc.want {
+				t.Errorf("MKV resolved to %q, want %q", got, tc.want)
+			}
+			if got := ResolvePlaybackURL(catalog, base, "webm", "chapter"); got != wantWebM {
+				t.Errorf("WebM resolved to %q, want %q", got, wantWebM)
+			}
+			if got := ResolvePlaybackURL(catalog, base, "mkv", "chapter"); got != wantWebM {
+				t.Errorf("EBML placement resolved to %q, want %q", got, wantWebM)
+			}
+		})
+	}
+}
+
 func TestResolvePlaybackSeparatesMP4Transports(t *testing.T) {
 	outputs := map[string]any{"MP4 progressive": "https://media/view/$.mp4", "MP4 WebSocket": "wss://media/view/$.mp4"}
 	for protocol, want := range map[string]string{"mp4": "https://media/view/live+stream.mp4", "wsmp4": "wss://media/view/live+stream.mp4"} {

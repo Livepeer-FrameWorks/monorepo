@@ -13,6 +13,10 @@ import (
 // not choose or constrain the protocol used by the eventual viewer.
 const AutoPlaybackProtocol = "auto"
 
+// This catalog key is projected from enabled connector inventory. Mist's
+// generic EBML listener can denote WebM and is not proof of native Matroska.
+const nativeMatroskaOutput = "frameworks:native-matroska"
+
 // PlaybackProtocol normalizes a requested playback format, not a trusted Mist
 // connector observation. Listener support must still be checked separately.
 func PlaybackProtocol(requested string) string {
@@ -38,9 +42,6 @@ func PlaybackProtocol(requested string) string {
 // player output catalog, it does not infer HLS, WHEP or progressive support from
 // a public HTTP hostname alone. Identity is escaped as one path/query component.
 func ResolvePlaybackURL(outputs map[string]any, publicBase, protocol, streamName string) string {
-	if streamName == "" || strings.TrimSpace(streamName) != streamName || strings.IndexFunc(streamName, unicode.IsControl) >= 0 || streamName == "." || streamName == ".." {
-		return ""
-	}
 	if protocol == AutoPlaybackProtocol {
 		for _, candidate := range []string{"hls", "whep", "webrtc", "dash", "cmaf", "mp4", "wsmp4", "webm"} {
 			if endpoint := ResolvePlaybackURL(outputs, publicBase, candidate, streamName); endpoint != "" {
@@ -49,7 +50,23 @@ func ResolvePlaybackURL(outputs map[string]any, publicBase, protocol, streamName
 		}
 		return ""
 	}
-	template := playbackTemplate(outputs, protocol)
+	return resolvePlaybackTemplateURL(playbackTemplate(outputs, protocol), publicBase, protocol, streamName)
+}
+
+// ResolveNativeMatroskaPlaybackURL selects the explicitly advertised HTTP
+// Matroska route without changing the shared EBML placement aliases.
+func ResolveNativeMatroskaPlaybackURL(outputs map[string]any, publicBase, streamName string) string {
+	template := ingestTemplate(outputs, nativeMatroskaOutput)
+	if !strings.HasSuffix(template, "/$.mkv") {
+		return ""
+	}
+	return resolvePlaybackTemplateURL(template, publicBase, "mkv", streamName)
+}
+
+func resolvePlaybackTemplateURL(template, publicBase, protocol, streamName string) string {
+	if streamName == "" || strings.TrimSpace(streamName) != streamName || strings.IndexFunc(streamName, unicode.IsControl) >= 0 || streamName == "." || streamName == ".." {
+		return ""
+	}
 	if protocol == "srt" {
 		return resolveIngestTemplate(template, publicBase, streamName, "srt")
 	}
