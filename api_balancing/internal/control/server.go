@@ -8878,6 +8878,12 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		return failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	case "retryable":
+		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseInsufficientMemory {
+			return failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		}
+		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseMemoryPressure {
+			return requeueCapacityDeferredProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		}
 		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseSourceStall {
 			return requeueStalledProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 		}
@@ -8893,6 +8899,19 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 // ProcessingMaxRetries is the retry budget of a processing job: stale-lease
 // recovery, lost-job recovery and retryable node failures all draw from it.
 const ProcessingMaxRetries = 3
+
+func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, reportingNode string, logger logging.Logger, fields logging.Fields) error {
+	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{WaitWindow: ProcessingProgressStallTimeout.String(), ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: sql.NullString{String: reportingNode, Valid: true}})
+	if err != nil {
+		return fmt.Errorf("defer processing for memory capacity: %w", err)
+	}
+	if n > 0 {
+		NotifyCatalogDirty()
+		logger.WithFields(fields).Info("Processing job returned to queue while memory is occupied")
+		return nil
+	}
+	return failProcessingJobAtomic(ctx, jobID, "processing memory remained unavailable for more than "+ProcessingProgressStallTimeout.String()+": "+reason, reportingNode, logger, fields)
+}
 
 // retryProcessingJob requeues a job its node reported as failed in a way a new
 // attempt avoids (a producer replaced after the recording header, renditions

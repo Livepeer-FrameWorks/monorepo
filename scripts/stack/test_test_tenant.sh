@@ -519,5 +519,15 @@ purge_installed_before_first_credential() {
 }
 expect "verify-target purges credentials on every exit and a killed run's leftovers at start" purge_installed_before_first_credential
 
+retention_policy_uses_billing_session() {
+  (
+    session_token() { echo qa-billing-session; }
+    gql() { [ "${3:-}" = qa-billing-session ] || return 1; echo '{"data":{"setVodOriginalPolicy":{"effectiveKeepVodOriginals":false}}}'; }
+    eval "$(sed -n '/^set_policy() {/,/^}/p' "$here/scenarios/68-vod-original-retention.sh")"
+    set_policy false >/dev/null
+  )
+}
+expect 'original-retention billing writes use the tenant session rather than the restricted run token' retention_policy_uses_billing_session
+
 [ "$failures" = 0 ] && echo "test tenant checks: ok"
 exit "$failures"

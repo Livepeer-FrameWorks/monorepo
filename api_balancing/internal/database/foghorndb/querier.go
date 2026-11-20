@@ -805,6 +805,9 @@ type Querier interface {
 	ReleaseSigningKeyUseLease(ctx context.Context, arg ReleaseSigningKeyUseLeaseParams) (int64, error)
 	RepairAdmissionPushTargetRevision(ctx context.Context, arg RepairAdmissionPushTargetRevisionParams) (int64, error)
 	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
+	// Capacity backpressure is not a failed processing attempt. Only the assigned
+	// node can return an active job, and the queue delay bounds redispatch traffic.
+	RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error)
 	// Requeues a job its node reported as failed in a retryable way, while the
 	// retry budget lasts. Bound to the reporting node like every result. The job
 	// keeps processes_json, so the next attempt runs the persisted ladder.

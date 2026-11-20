@@ -440,6 +440,53 @@ func (q *Queries) ProjectProcessingArtifactStatus(ctx context.Context, arg Proje
 	return err
 }
 
+const requeueCapacityDeferredProcessingJob = `-- name: RequeueCapacityDeferredProcessingJob :one
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+        error_message = $1,
+        progress_last_ms = 0, progress_advanced_at = NULL,
+        source_stalled_since = COALESCE(job.source_stalled_since, job.started_at, NOW()),
+        next_attempt_at = NOW() + INTERVAL '30 seconds'
+    WHERE job.job_id = $2
+      AND job.processing_node_id = $3
+      AND job.status IN ('dispatched', 'processing')
+      AND COALESCE(job.source_stalled_since, job.started_at, NOW()) > NOW() - CAST($4 AS text)::interval
+    RETURNING artifact_hash, tenant_id
+), artifact AS (
+    UPDATE foghorn.artifacts AS a
+    SET status = 'queued', updated_at = NOW()
+    FROM requeued AS r
+    WHERE a.artifact_hash = r.artifact_hash
+      AND a.tenant_id = r.tenant_id
+      AND a.artifact_type IN ('clip', 'vod')
+      AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+    RETURNING a.artifact_hash
+)
+SELECT COUNT(*)::int AS requeued FROM requeued
+`
+
+type RequeueCapacityDeferredProcessingJobParams struct {
+	ErrorMessage sql.NullString `db:"error_message" json:"error_message"`
+	JobID        string         `db:"job_id" json:"job_id"`
+	NodeID       sql.NullString `db:"node_id" json:"node_id"`
+	WaitWindow   string         `db:"wait_window" json:"wait_window"`
+}
+
+// Capacity backpressure is not a failed processing attempt. Only the assigned
+// node can return an active job, and the queue delay bounds redispatch traffic.
+func (q *Queries) RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, requeueCapacityDeferredProcessingJob,
+		arg.ErrorMessage,
+		arg.JobID,
+		arg.NodeID,
+		arg.WaitWindow,
+	)
+	var requeued int32
+	err := row.Scan(&requeued)
+	return requeued, err
+}
+
 const requeueRetryableProcessingJob = `-- name: RequeueRetryableProcessingJob :one
 WITH requeued AS (
     UPDATE foghorn.processing_jobs AS job
