@@ -35,6 +35,10 @@ COPY source/ /src/
 ARG MIST_SOURCE_REVISION=unknown
 RUN --mount=type=cache,id=fw-stack-mist-work,target=/work,sharing=locked \
     set -eu; \
+    wrap_contract="$(find /src/subprojects -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f 1)"; \
+    if [ ! -f /work/subprojects.sha256 ] || [ "$(cat /work/subprojects.sha256)" != "$wrap_contract" ]; then \
+      rm -rf /work/src/subprojects /work/build; \
+    fi; \
     mkdir -p /work/src; \
     rsync -rlpD --checksum --delete --filter='P /subprojects/*/' /src/ /work/src/; \
     reconfigure=; \
@@ -49,9 +53,11 @@ RUN --mount=type=cache,id=fw-stack-mist-work,target=/work,sharing=locked \
     ninja -C /work/build; \
     rm -rf /opt/mist-install; \
     meson install -C /work/build --no-rebuild >/dev/null; \
+    for bin in /opt/mist-install/bin/Mist*; do [ -x "$bin" ] || continue; objcopy --strip-debug --strip-unneeded "$bin"; done; \
     test -x /opt/mist-install/bin/MistController; \
     test -x /opt/mist-install/bin/MistProcAV; \
-    test -x /opt/mist-install/bin/MistProcThumbs
+    test -x /opt/mist-install/bin/MistProcThumbs; \
+    printf '%s\n' "$wrap_contract" > /work/subprojects.sha256
 
 # Same staging as scripts/verify-mist-current-source.sh: carry every shared
 # library the binaries load from outside the C runtime in lib/.

@@ -18,7 +18,7 @@
 
 need ffmpeg jq curl python3 || finish
 render_mp4 "$STACK_STATE_DIR/vod-xcell-processing.mp4" 640x360 15 30 || { fail "render VOD source"; finish; }
-V=$(upload_vod "$STACK_STATE_DIR/vod-xcell-processing.mp4" "stack cross-cell read while processing")
+V=$(upload_vod "$STACK_STATE_DIR/vod-xcell-processing.mp4" "stack cross-cell read while processing" '{"keepOriginal":false}')
 VID=$(echo "$V" | jq -r '.id // empty')
 VHASH=$(echo "$V" | jq -r '.artifactHash // empty')
 VPB=$(echo "$V" | jq -r '.playbackId // empty')

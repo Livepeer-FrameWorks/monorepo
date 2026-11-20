@@ -30,6 +30,8 @@ CUT_SECONDS=${STACK_CONTROL_CUT_SECONDS:-60}
 LOST_AFTER=300
 FOGHORNS_A=(foghorn foghorn-2)
 EDGE_PUB="$COMPOSE_PROJECT_NAME-edge-local-encoder"
+PULL_SOURCE_PID=''
+PULL_PLAYER='' PRIVATE_BEFORE='' RESTORE_PRIVATE=0
 need ffmpeg jq curl python3 docker || finish
 webhook_endpoint >/dev/null || fail "webhook endpoint at $RECEIVER_HOOK_URL"
 netfault_start "$EDGE_SERVICE" || finish
@@ -39,10 +41,22 @@ cleanup() {
   local p s
   netfault_stop "$EDGE_SERVICE"
   docker rm -f "$EDGE_PUB" >/dev/null 2>&1
+  [ -z "$PULL_PLAYER" ] || kill "$PULL_PLAYER" 2>/dev/null || true
+  [ -z "$PULL_SOURCE_PID" ] || kill "$PULL_SOURCE_PID" 2>/dev/null || true
   for p in "${PUBS[@]}"; do kill "$p" 2>/dev/null; done
   for s in "${STREAMS[@]}"; do delete_stream "$s"; done
+  [ "$RESTORE_PRIVATE" = 0 ] || set_private "$PRIVATE_BEFORE" || fail 'restore local pull source capability'
 }
 trap cleanup EXIT
+
+rpc_cluster() {
+  printf '%s' "$2" | stack_exec commodore sh -c \
+    'grpcurl -plaintext -max-time 10 -H "authorization: Bearer $SERVICE_TOKEN" -d @ "$QUARTERMASTER_GRPC_ADDR" "quartermaster.ClusterService/$1"' sh "$1"
+}
+set_private() {
+  rpc_cluster UpdateCluster "$(jq -cn --arg id "$CELL_A_CLUSTER" --argjson allowed "$1" '{clusterId:$id,allowPrivatePullSources:$allowed}')" |
+    jq -e --argjson allowed "$1" '.cluster.allowPrivatePullSources // false | .==$allowed' >/dev/null
+}
 
 reconciled_after() { # reconciled_after <since>: Foghorn reconciled a registration of the edge
   logs_since "$1" "${FOGHORNS_A[@]}" | grep 'Reconciled node ingest sessions' | grep -q "$EDGE_NODE"
@@ -66,6 +80,12 @@ eventually 90 "stream live" media_at "$FOGHORN_A_URL" "$PB"
 G1=$(open_generation "$FOGHORN_A_DB" "$IN" | head -1)
 echo "    generation $G1"
 [ -n "$G1" ] || { fail "no open generation before the cut"; finish; }
+public_ingest_matches() {
+  local stream=$1 state=$2 session=$3 response
+  response=$(gql 'query($id:ID!){stream(id:$id){ingest{state sessionId}}}' "$(jq -cn --arg id "$stream" '{id:$id}')") || return 1
+  json_has "$response" ".errors==null and .data.stream.ingest.state==\"$state\" and .data.stream.ingest.sessionId==\"$session\""
+}
+eventually 30 'the public ingest state identifies the publisher before control loss' public_ingest_matches "$SID" LIVE "$G1"
 # One viewer session on the publishing edge itself, opened before the cut: a
 # viewer redirect may name another cell's edge that relays the stream.
 MASTER="http://$EDGE_A_HOST:8082/hls/live+$IN/index.m3u8"
@@ -98,6 +118,7 @@ done
 check "session $G1 stayed open through the cut ($open_ok of $samples samples)" [ "$open_ok" = "$samples" ]
 check "the edge kept serving the viewer session advancing HLS through the cut ($serve_ok of $samples samples, ${first:-none} -> ${last:-none})" [ "$serve_ok" = "$samples" ]
 check "publisher still connected at the end of the cut" kill -0 "$PUB"
+check 'control-only loss preserves the public live session' public_ingest_matches "$SID" LIVE "$G1"
 
 RESTORE_TS=$(utc_now)
 netfault_clear "$EDGE_SERVICE" || fail "clear the control-port rules"
@@ -143,6 +164,36 @@ G2=$(open_generation "$FOGHORN_A_DB" "$IN" | head -1)
 echo "    generation $G2"
 [ -n "$G2" ] || { fail "no open generation before the uplink loss"; finish; }
 
+# The node is unreachable while its pull loses the external upstream too.
+# Foghorn receives neither terminal triggers nor reports, so the durable row
+# must retire through the lost-node window rather than stay live indefinitely.
+snapshot=$(rpc_cluster GetCluster "$(jq -cn --arg id "$CELL_A_CLUSTER" '{clusterId:$id}')") || { fail 'read local pull capability'; finish; }
+PRIVATE_BEFORE=$(jq -r '.cluster.allowPrivatePullSources // false' <<<"$snapshot")
+RESTORE_PRIVATE=1
+set_private true || { fail 'enable isolated edge-local source'; finish; }
+WORK="$STACK_STATE_DIR/control-loss-pull-$(date +%s)"
+mkdir -p "$WORK"
+render_mp4 "$WORK/loop.mp4" 320x180 10 12 || { fail 'render local pull source'; finish; }
+python3 "$STACK_LIB_DIR/native-source.py" "$WORK/loop.mp4" >"$WORK/source.log" 2>&1 &
+PULL_SOURCE_PID=$!
+response=$(gql 'mutation($i:CreateStreamInput!){createStream(input:$i){__typename ... on Stream{id streamId playbackId} ... on ValidationError{message}}}' \
+  "$(jq -cn --arg name "control-loss-pull-$(date +%s)" --arg source "http://stack-runner:18948/loop.ts" --arg cluster "$CELL_A_CLUSTER" '{i:{name:$name,record:false,liveVideoAbr:"OFF",ingestMode:"PULL",pullSource:{sourceUri:$source,enabled:true},sourceLocation:{mode:"RESTRICTED",clusters:[{clusterId:$cluster}]}}}')")
+PULL_ID=$(jq -r '.data.createStream.id // empty' <<<"$response")
+PULL_UUID=$(jq -r '.data.createStream.streamId // empty' <<<"$response")
+PULL_PUBLIC=$(jq -r '.data.createStream.playbackId // empty' <<<"$response")
+[ -n "$PULL_ID" ] || { fail 'create edge-local pull'; finish; }
+STREAMS+=("$PULL_ID")
+sweep_ledger created "$PULL_ID" "$PULL_UUID"
+pull_opens() { PULL_MEDIA=$(hls_session_url "http://$EDGE_A_HOST:8082/hls/$PULL_PUBLIC/index.m3u8") && [ -n "$PULL_MEDIA" ]; }
+eventually 120 'edge-local pull starts before uplink loss' pull_opens || finish
+hls_poll "$PULL_MEDIA" >"$WORK/player.log" &
+PULL_PLAYER=$!
+pull_live() {
+  PULL_SESSION=$(pg "$FOGHORN_A_DB" "SELECT id FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$PULL_UUID' AND ended_at IS NULL AND admission_state='active' AND node_id='$EDGE_NODE'")
+  [ -n "$PULL_SESSION" ] && [ "$(hls_poll_state "$WORK/player.log" 0)" = ok ]
+}
+eventually 60 'edge-local pull has real media and a durable session' pull_live || finish
+
 SINCE=$(date +%s)
 netfault "$EDGE_SERVICE" sh -c 'iptables -A FW_FAULT_IN ! -i lo -j DROP && iptables -A FW_FAULT_OUT ! -o lo -j DROP' ||
   fail "install the uplink-loss rules"
@@ -176,6 +227,14 @@ else
 fi
 check "the edge-local encoder kept publishing through the isolation" encoder_running
 eventually 60 "stream.idle emitted for the node_lost session" idle_for "$SINCE" "$UUID"
+pull_lost() {
+  [ "$(pg "$FOGHORN_A_DB" "SELECT ended_reason FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND id='$PULL_SESSION' AND ended_at IS NOT NULL")" = node_lost ]
+}
+eventually 60 'unreachable pull session ends as node_lost' pull_lost
+eventually 60 'unreachable pull reaches IDLE in its cell' idle_for "$SINCE" "$PULL_UUID"
+eventually 30 'node loss makes the public push session idle' public_ingest_matches "$SID" IDLE "$G2"
+eventually 30 'node loss makes the public pull session idle' public_ingest_matches "$PULL_ID" IDLE "$PULL_SESSION"
+check 'the external pull fixture stays running through the isolation' kill -0 "$PULL_SOURCE_PID"
 
 RESTORE_TS=$(utc_now)
 netfault_clear "$EDGE_SERVICE" || fail "clear the uplink-loss rules"
@@ -226,4 +285,5 @@ else
 fi
 check "a reconnect was admitted as a new generation (${G3:-none}, attempt $attempt)" new_generation
 eventually 90 "the new generation serves media" media_at "$FOGHORN_A_URL" "$PB"
+eventually 30 'the public ingest state exposes the replacement generation' public_ingest_matches "$SID" LIVE "$G3"
 finish

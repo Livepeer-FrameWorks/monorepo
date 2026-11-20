@@ -74,6 +74,64 @@ expect "a 403 for another stream than the refused one still fails" \
   fails "0 foghorn ${refusal//abcDEF123/otherStream9}
 0 edge $mist_403"
 
+rotation_routed='{"routing":"source_rotated","stream_name":"processing+portrait1"}'
+rotation_exit='WARN|MistInBuffer|12|input.cpp:1|processing+portrait1|Process `Livepeer` (PID 14) exited with unrecoverable error (code 2: Source requires 90 degree display rotation or reflection; local AV must rotate or reflect it), disabling restart'
+rotation_fail='FAIL|MistProcLivepeer|14|config.cpp:113|processing+portrait1|Logging unclean exit reason: Source requires 90 degree display rotation or reflection; local AV must rotate or reflect it'
+expect "a rotated source routed by Helmsman passes the signature and Mist failure checks" \
+  passes "0 edge $rotation_routed
+0 edge $rotation_exit
+0 edge $rotation_fail"
+expect "a mirror-only source routed by Helmsman passes" \
+  passes "0 edge $rotation_routed
+0 edge ${rotation_exit//90 degree/0 degree}
+0 edge ${rotation_fail//90 degree/0 degree}"
+expect "a mirror-only source without a Helmsman route still fails" \
+  fails "0 edge ${rotation_exit//90 degree/0 degree}"
+expect "a processing-job rotation route is correlated by artifact hash" \
+  passes '0 edge {"routing":"source_rotated","artifact_hash":"portrait1"}
+0 edge '"$rotation_exit"'
+0 edge '"$rotation_fail"
+expect "a rotated source without a Helmsman route still fails" fails "0 edge $rotation_exit"
+expect "a rotation refusal for another stream still fails" \
+  fails "0 edge ${rotation_routed//portrait1/other1}
+0 edge $rotation_exit"
+expect "a failed AV process is not covered by the Livepeer rotation route" \
+  fails "0 edge $rotation_routed
+0 edge ${rotation_fail//MistProcLivepeer/MistProcAV}"
+
+codec_routed='{"msg":"PROCESS_REPLACE: local MistProcAV decodes the source codec","routing":"source_codec_unsupported","stream":"processing+part2","reason":"SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source","replacement_count":2}'
+codec_exit='WARN|MistInBuffer|12|input.cpp:1|processing+part2|Process `Livepeer` (PID 14) exited with unrecoverable error (code 2: SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source), disabling restart'
+codec_fail='FAIL|MistProcLivepeer|14|config.cpp:113|processing+part2|Logging unclean exit reason: SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source'
+expect "an unsupported transport codec with a confirmed local replacement passes" \
+  passes "0 edge $codec_routed
+0 edge $codec_exit
+0 edge $codec_fail"
+expect "an unsupported transport codec without replacement still fails" fails "0 edge $codec_exit"
+expect "a codec replacement for a different source does not cover the failure" \
+  fails "0 edge ${codec_routed//part2/other2}
+0 edge $codec_exit"
+expect "a refusal with no available replacement still fails" \
+  fails "0 edge ${codec_routed//PROCESS_REPLACE: local MistProcAV decodes the source codec/PROCESS_REPLACE: no replacement for failed process; it stays disabled}
+0 edge $codec_exit"
+
+rejected_reason='Livepeer rejected segment 0 (422); stopping so the local fallback transcodes the whole source'
+rejected_routed=${codec_routed//SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source/$rejected_reason}
+rejected_routed=${rejected_routed//PROCESS_REPLACE: local MistProcAV decodes the source codec/PROCESS_REPLACE: replacing failed Livepeer transcode with local MistProcAV renditions}
+rejected_routed=${rejected_routed//\"routing\":\"source_codec_unsupported\",/}
+rejected_exit=${codec_exit//SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source/$rejected_reason}
+expect "a decoder refusal with a confirmed local replacement passes" \
+  passes "0 edge $rejected_routed
+0 edge $rejected_exit"
+expect "a decoder refusal without replacement still fails" fails "0 edge $rejected_exit"
+expect "a decoder refusal on another source still fails" \
+  fails "0 edge ${rejected_routed//part2/other2}
+0 edge $rejected_exit"
+
+expect "a failed replacement remains a defect after a decoder refusal" \
+  fails "0 edge $rejected_routed
+0 edge $rejected_exit
+0 edge WARN|MistInBuffer|12|input.cpp:1|processing+part2|Process AV exited with unrecoverable error"
+
 inconsistent='{"level":"warning","msg":"Ingest front door: resolution failed","code":"INGEST_RESOLUTION_FAILED","error":"placement authority is inconsistent"}'
 expect "a resolution refused on an inconsistent placement pair fails the check" \
   fails "0 foghorn $inconsistent"

@@ -34,7 +34,7 @@ class Connection:
         # so the connection stays open while the supervised service is restarted.
         self.process = subprocess.Popen([
             'docker', 'exec', '-i', container, 'bash', '-c',
-            'exec 3<>/dev/tcp/127.0.0.1/8080; cat <&3 & reader=$!; cat >&3; kill "$reader" 2>/dev/null; wait "$reader"'
+            'exec 3<>/dev/tcp/127.0.0.1/8080; exec 4<&0; cat <&4 >&3 & writer=$!; cat <&3 & reader=$!; trap \'kill "$writer" "$reader" 2>/dev/null || true; wait "$writer" "$reader" 2>/dev/null || true\' EXIT; trap \'exit 0\' TERM INT; while kill -0 "$writer" 2>/dev/null && kill -0 "$reader" 2>/dev/null; do sleep 0.05; done'
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.buffer = b''
 
@@ -97,12 +97,23 @@ def angel(container, previous=None):
                  and pid != previous), None)
 
 
+
+def http_connection_when_ready(container):
+    connection = Connection(container)
+    try:
+        connection.request('/crossdomain.xml')
+        return connection
+    except (OSError, AssertionError, subprocess.SubprocessError):
+        connection.close()
+        return None
+
+
 def exercise(container, stream, action):
     pid, group = eventually(lambda: angel(container), 30, 'supervised Mist angel is missing')
     before = table(container)
-    http, viewer = Connection(container), Connection(container)
+    http = eventually(lambda: http_connection_when_ready(container), 30, "Mist HTTP listener is not ready")
+    viewer = Connection(container)
     try:
-        http.request('/crossdomain.xml')
         handlers = {p for p, row in table(container).items()
                     if p not in before and row[1] == group and row[3] == 'MistOutHTTP'}
         assert handlers, 'persistent HTTP request has no connection handler in the supervised group'
@@ -113,7 +124,7 @@ def exercise(container, stream, action):
             http.request('/crossdomain.xml')
             assert handlers <= set(table(container)), 'USR1 replaced the existing connection handler'
         elif action == 'restart':
-            execute(container, 's6-svc', '-r', '/run/service/mistserver')
+            execute(container, '/command/s6-svc', '-r', '/run/service/mistserver')
         else:
             execute(container, 'kill', '-KILL', str(pid))
         if action != 'reload':
@@ -122,11 +133,9 @@ def exercise(container, stream, action):
             http.eof()
             viewer.eof()
             eventually(lambda: angel(container, pid), 30, 's6 did not start a new Mist angel')
-            fresh = Connection(container)
-            try:
-                fresh.request('/crossdomain.xml')
-            finally:
-                fresh.close()
+            fresh = eventually(lambda: http_connection_when_ready(container), 30,
+                               'replacement Mist HTTP listener is not ready')
+            fresh.close()
         print('PASS edge Mist group lifecycle:', action, flush=True)
     finally:
         http.close()

@@ -247,13 +247,14 @@ netfault_image() {
   done
   return 1
 }
-netfault_start() { # netfault_start <service>
+netfault_start() { # netfault_start <service> [disposable-container]
   local cid name deadline
   command -v docker >/dev/null 2>&1 && [ -S /var/run/docker.sock ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || {
     blocked "network faults on $1 need docker access in stack-runner"
     return 1
   }
-  cid=$(container_of "$1")
+  cid=${2:-}
+  [ -n "$cid" ] || cid=$(container_of "$1")
   [ -n "$cid" ] || { blocked "no running container for $1"; return 1; }
   name=$(netfault_name "$1")
   docker rm -f "$name" >/dev/null 2>&1
@@ -359,10 +360,10 @@ gql_ok() { # gql_ok <response> <jq path to typename> <wanted typename>
   echo "$1" | jq -e --arg t "$3" "(.errors == null) and ($2 == \$t)" >/dev/null 2>&1
 }
 
-create_stream() { # create_stream <name> <record:true|false> -> JSON {id streamId playbackId streamKey}
+create_stream() { # create_stream <name> <record:true|false> [liveVideoAbr] -> JSON {id streamId playbackId streamKey}
   local r
   r=$(gql 'mutation($i:CreateStreamInput!){createStream(input:$i){__typename ... on Stream{id streamId playbackId streamKey record dvrChapterMode} ... on ValidationError{message}}}' \
-    "$(jq -cn --arg n "$1" --argjson r "$2" '{i:{name:$n,record:$r}}')" | jq -c '.data.createStream // .')
+    "$(jq -cn --arg n "$1" --argjson r "$2" --arg abr "${3:-}" '{i:({name:$n,record:$r} + (if $abr=="" then {} else {liveVideoAbr:$abr} end))}')" | jq -c '.data.createStream // .')
   sweep_ledger created "$(echo "$r" | jq -r '.id // empty')" "$(echo "$r" | jq -r '.streamId // empty')"
   printf '%s\n' "$r"
 }
@@ -531,9 +532,8 @@ wait_publisher() { # wait_publisher <pid> [timeout_seconds]
 # internal_name_of_key <stream key>: the internal name of the tenant's stream
 # that the key publishes to.
 internal_name_of_key() {
-  pg commodore "SELECT s.internal_name FROM commodore.streams s WHERE s.tenant_id='$STACK_TENANT_ID'
-      AND (s.stream_key='$1' OR s.id IN (SELECT k.stream_id FROM commodore.stream_keys k
-        WHERE k.tenant_id='$STACK_TENANT_ID' AND k.key_value='$1' AND k.is_active))"
+  pg commodore "SELECT internal_name FROM commodore.streams WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_key='$1' AND deleted_at IS NULL"
 }
 # admitted_generation <foghorn db> <internal name> <since epoch>: the open,
 # projected ingest session Foghorn admitted since then. A session from an
@@ -737,16 +737,18 @@ every_replica() {
   done
 }
 
-# upload_vod <file> <title>: multipart upload through presigned parts. Prints the
+# upload_vod <file> <title> [input-options-json]: multipart upload through presigned parts. Prints the
 # completed VodAsset JSON. Presigned URLs are signed for their Host, so an
 # address the runner cannot reach is redirected with STORAGE_CONNECT_TO
 # ("host:port:target:port", curl --connect-to syntax) instead of being rewritten.
 upload_vod() {
+  local options='{}'
+  [ "$#" -lt 3 ] || options=$3
   local file=$1 title=$2 size r upload parts='[]' pn url etag connect=()
   size=$(stat -c %s "$file" 2>/dev/null || stat -f %z "$file")
   [ -n "${STORAGE_CONNECT_TO:-}" ] && connect=(--connect-to "$STORAGE_CONNECT_TO")
   r=$(gql 'mutation($i:CreateVodUploadInput!){createVodUpload(input:$i){__typename ... on VodUploadSession{id artifactHash playbackId parts{partNumber presignedUrl}} ... on ValidationError{message}}}' \
-    "$(jq -cn --argjson sz "$size" --arg f "$(basename "$file")" --arg t "$title" '{i:{filename:$f,sizeBytes:$sz,contentType:"video/mp4",title:$t}}')")
+    "$(jq -cn --argjson sz "$size" --arg f "$(basename "$file")" --arg t "$title" --argjson options "$options" '{i:({filename:$f,sizeBytes:$sz,contentType:"video/mp4",title:$t} + $options)}')")
   upload=$(echo "$r" | jq -r '.data.createVodUpload.id // empty')
   [ -n "$upload" ] || { echo "createVodUpload: $r" >&2; return 1; }
   for pn in $(echo "$r" | jq -r '.data.createVodUpload.parts[].partNumber'); do
