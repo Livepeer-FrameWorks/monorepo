@@ -36,7 +36,7 @@ func TestRenderCanonicalCatalog(t *testing.T) {
 		t.Errorf("free storage = %+v limits %+v, want 10 GiB-months and a 10 GiB cap", free.Storage, free.Limits)
 	}
 	// Plan cards quote the live rewind window from this field.
-	for id, wantSeconds := range map[string]float64{"supporter": 21600, "developer": 43200, "production": 86400} {
+	for id, wantSeconds := range map[string]float64{"payg": 86400, "supporter": 21600, "developer": 43200, "production": 86400} {
 		if got := byID[id].Limits.DvrMaxWindowSeconds; got != wantSeconds {
 			t.Errorf("%s dvrMaxWindowSeconds = %v, want %v", id, got, wantSeconds)
 		}
@@ -131,6 +131,31 @@ func TestPlanCardsUseTheAllowedLadderCeiling(t *testing.T) {
 		}
 		if tier["maxVideoHeight"] != want {
 			t.Fatalf("%s maxVideoHeight=%v, want %v", tier["id"], tier["maxVideoHeight"], want)
+		}
+	}
+}
+
+func TestPublishedPAYGDVRIsAtLeastEverySelfServeTier(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "website_marketing", "src", "data", "pricing-catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog output
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	var payg float64
+	for _, tier := range catalog.Tiers {
+		if tier.ID == "payg" {
+			payg = tier.Limits.DvrMaxWindowSeconds
+		}
+	}
+	if payg == 0 {
+		t.Fatal("published catalog has no PAYG DVR window")
+	}
+	for _, tier := range catalog.Tiers {
+		if payg < tier.Limits.DvrMaxWindowSeconds {
+			t.Errorf("published PAYG DVR maximum=%v is lower than %s=%v", payg, tier.ID, tier.Limits.DvrMaxWindowSeconds)
 		}
 	}
 }
