@@ -80,23 +80,38 @@ trap 'rm -rf "$work"' EXIT
 # The refusing side logs before it answers, so its line is read after every
 # service's candidate hits: a refusal that lands while the check runs, as a
 # scenario's teardown settles, is then never missing from its allowlist.
-stream_names_logged_by() { # stream_names_logged_by <service regex> <fixed text> <stream regex>
+stream_names_logged_by() { # stream_names_logged_by <service regex> <fixed text> <stream regex> [additional fixed text]
   stack_services | grep -E "$1" | while IFS= read -r svc; do
     stack_logs ${since_args[@]+"${since_args[@]}"} "$svc"
-  done | grep -F "$2" | grep -oE "$3" | sort -u
+  done | grep -F "$2" | { if [ -n "${4:-}" ]; then grep -F "$4"; else cat; fi; } | grep -oE "$3" | sort -u
 }
 drop_designed_refusals() { # stdin: log lines; drops each allowlisted refusal of the streams named below
-  ENDED_SESSION_STREAMS="$ended_session_streams" NO_ORCHESTRATOR_STREAMS="$no_orchestrator_streams" awk '
+  ENDED_SESSION_STREAMS="$ended_session_streams" NO_ORCHESTRATOR_STREAMS="$no_orchestrator_streams" \
+    ROUTED_ROTATION_STREAMS="$routed_rotation_streams" REPLACED_CODEC_STREAMS="$replaced_codec_streams" \
+    REPLACED_REFUSED_STREAMS="$replaced_refused_streams" awk '
     BEGIN {
       n403 = split(ENVIRON["ENDED_SESSION_STREAMS"], s403, "\n")
       n503 = split(ENVIRON["NO_ORCHESTRATOR_STREAMS"], s503, "\n")
+      nrot = split(ENVIRON["ROUTED_ROTATION_STREAMS"], srot, "\n")
+      ncodec = split(ENVIRON["REPLACED_CODEC_STREAMS"], scodec, "\n")
+      nrefused = split(ENVIRON["REPLACED_REFUSED_STREAMS"], srefused, "\n")
+      rotation = "Source requires (0|90|180|270) degree display rotation or reflection; local AV must rotate or reflect it([)]|$)"
+      codec = "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry [A-Za-z0-9_]+; local AV must decode this source([)]|$)"
     }
     function names(line, list, n,    i) {
-      for (i = 1; i <= n; i++) if (list[i] != "" && index(line, list[i] "→") + index(line, list[i] " (") > 0) return 1
+      for (i = 1; i <= n; i++) if (list[i] != "" && index(line, list[i] "→") + index(line, list[i] " (") + index(line, "|" list[i] "|") > 0) return 1
       return 0
     }
     /Livepeer upload fatal HTTP status 403 Forbidden/ && names($0, s403, n403) { next }
     /Livepeer upload fatal HTTP status 503 Service Unavailable/ && names($0, s503, n503) { next }
+    $0 ~ rotation && names($0, srot, nrot) &&
+      (/Process `Livepeer` \(PID [0-9]+\) exited with unrecoverable error \(code 2:/ ||
+       /FAIL[|]MistProcLivepeer[|].*Logging unclean exit reason:/) { next }
+    $0 ~ codec && names($0, scodec, ncodec) &&
+      (/Process `Livepeer` \(PID [0-9]+\) exited with unrecoverable error \(code 2:/ ||
+       /FAIL[|]MistProcLivepeer[|].*Logging unclean exit reason:/) { next }
+    /Livepeer rejected segment [0-9]+ [(]422[)]; stopping so the local fallback transcodes the whole source/ &&
+      names($0, srefused, nrefused) && /Process `Livepeer` [(]PID [0-9]+[)] exited with unrecoverable error [(]code 2:/ { next }
     { print }'
 }
 
@@ -138,6 +153,19 @@ ended_session_streams="$(stream_names_logged_by '^foghorn' 'livepeer auth: refus
 # The gateway's manifest ID is the stream name plus a per-process suffix after the last '-'.
 no_orchestrator_streams="$(stream_names_logged_by '^livepeer-gateway' 'err="ErrNoOrchs"' \
   'manifestID=[A-Za-z0-9_+]+-[A-Za-z0-9]+' | sed -E 's/^manifestID=//; s/-[A-Za-z0-9]+$//' | sort -u)"
+# A rotation refusal is normal only when Helmsman actually routed the same source to local AV.
+routed_rotation_streams="$(stream_names_logged_by '^edge' '"routing":"source_rotated"' \
+  '"(stream(_name)?|artifact_hash)":"[A-Za-z0-9_+.-]+"' |
+  awk -F'"' '{if ($2 == "artifact_hash") print "processing+" $4; else print $4}' | sort -u)"
+# A transport codec refusal is expected only after the same source gets local replacements.
+replaced_codec_streams="$(stream_names_logged_by '^edge' 'SOURCE_CODEC_UNSUPPORTED:' \
+  '"stream":"[A-Za-z0-9_+.-]+"' \
+  'PROCESS_REPLACE: local MistProcAV decodes the source codec' | cut -d'"' -f4)"
+
+# A decoder's 422 refusal is recovered only if Helmsman confirms the same source's local replacement.
+replaced_refused_streams="$(stream_names_logged_by '^edge' 'Livepeer rejected segment' \
+  '"stream":"[A-Za-z0-9_+.-]+"' \
+  'PROCESS_REPLACE: replacing failed Livepeer transcode with local MistProcAV renditions' | cut -d'"' -f4)"
 
 for svc in ${read_services[@]+"${read_services[@]}"}; do
   hits="$(drop_designed_refusals <"$work/$svc.hits")"

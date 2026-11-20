@@ -608,6 +608,65 @@ tenant_flow_rejects_a_second_admission() (
 expect 'the private flow makes one denied and one correct connection' tenant_flow_rejects_a_second_admission
 expect 'a second admission on the correct connection fails the private flow' tenant_flow_rejects_a_second_admission 1
 
+capacity_health_uses_service_auth() (
+  local STACK_API_TOKEN=tenant-credential SERVICE_TOKEN=service-for-health
+  local node_body='{"nodeId":"edge-capacity"}' FOGHORN_INTERNAL_GRPC_PORT=18019
+  local fixture_bin="$work/capacity-rpc-bin"
+  mkdir -p "$fixture_bin"
+  cat >"$fixture_bin/grpcurl" <<'GRPC'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ "$arg" = 'authorization: Bearer service-for-health' ]; then
+    printf '{"isHealthy":true}\n'
+    exit 0
+  fi
+done
+echo 'Unauthenticated: internal listener requires service credentials' >&2
+exit 16
+GRPC
+  chmod +x "$fixture_bin/grpcurl"
+  export PATH="$fixture_bin:$PATH"
+  stack_exec() { shift; "$@"; }
+  eval "$(sed -n '/^rpc() {$/,/^}$/p' "$here/scenarios/70-node-capacity.sh")"
+  eval "$(sed -n '/^node_health()/p' "$here/scenarios/70-node-capacity.sh")"
+  node_health | jq -e '.isHealthy' >/dev/null
+)
+expect 'capacity health probe authenticates to the internal Foghorn listener' capacity_health_uses_service_auth
+
+rotation_degradation_is_scoped() (
+  eval "$(sed -n '/^no_upload_degradation() {$/,/^}$/p' "$here/scenarios/79-rotated-upload.sh")"
+  logs_since() { printf '%s\n' '{"msg":"Stream transcode degraded to local processing","stream":"processing+another-upload"}'; }
+  no_upload_degradation this-upload now || return 1
+  logs_since() { printf '%s\n' '{"msg":"Stream transcode degraded to local processing","stream":"processing+this-upload"}'; }
+  ! no_upload_degradation this-upload now || return 1
+  logs_since() { return 1; }
+  ! no_upload_degradation this-upload now
+)
+expect 'rotation checks ignore other uploads and fail on unreadable degradation logs' rotation_degradation_is_scoped
+
+ladder_downgrade_uses_tier_model() (
+  local STACK_REPO="$work/tier-model" tenant=fixture-tenant
+  mkdir -p "$STACK_REPO/bin"
+  cat >"$STACK_REPO/bin/cli" <<'TIERCLI'
+#!/usr/bin/env bash
+case "$*" in *'--tier free --billing-model prepaid'*) exit 1 ;; esac
+TIERCLI
+  chmod +x "$STACK_REPO/bin/cli"
+  eval "$(sed -n '/^set_tier() /p' "$here/scenarios/67-transcode-ladder-downgrade.sh")"
+  set_tier free
+)
+expect 'ladder downgrade uses the tier model instead of forcing Free into prepaid' ladder_downgrade_uses_tier_model
+
+original_attachment_uses_runner_tools() (
+  local STACK_STATE_DIR="$work/attachment"
+  mkdir -p "$STACK_STATE_DIR"
+  printf 'Content-Disposition: attachment; filename="phone.mov"\r\n' >"$STACK_STATE_DIR/original-headers"
+  rg() { return 127; }
+  check() { shift; "$@"; }
+  eval "$(sed -n '/check .*original is an attachment/p' "$here/scenarios/68-vod-original-retention.sh")"
+)
+expect 'original attachment check works with the runner toolchain' original_attachment_uses_runner_tools
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1

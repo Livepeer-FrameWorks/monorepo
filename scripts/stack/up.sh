@@ -77,6 +77,7 @@ if [ ! -s "$ENV_FILE" ]; then
     # .env leaves off for cell A (cell B's compose service hardcodes it on).
     # Edges advertise in-network addresses: the other cell's Mist pulls DTSC
     # from the public URL's host, and the runner follows viewer redirects.
+    printf 'CHANDLER_BASE_URL=http://chandler:18020\n'
     printf 'EDGE_PUBLIC_URL=http://edge:8082\n'
     printf 'FEDERATION_ENABLED=true\n'
     printf 'FEDERATION_ALLOW_INSECURE_DEV=true\n'
@@ -181,8 +182,8 @@ for section in 'quartermaster bootstrap tenants' 'purser bootstrap customer_bill
 done
 rm -f "$bootstrap_log"
 
-live_processes="$(awk '/processes_live: &standard_live/ { getline; sub(/^[[:space:]]+/, ""); print; exit }' api_billing/internal/bootstrap/catalog/billing_tiers.yaml)"
-[ -n "$live_processes" ] || fail "could not read standard_live from the billing tier catalog"
+live_processes="$(stack_compose exec -T purser /app/purser bootstrap tier-processes --tier payg --lifecycle live)"
+[ -n "$live_processes" ] || fail "could not compose the default live ladder from the billing tier catalog"
 psql_db purser -q -v live="$live_processes" -v window="${STACK_DVR_WINDOW_SECONDS:-120}" < scripts/stack/seed-purser.sql >/dev/null
 stack_compose up -d --no-deps storage-init storage-init-b >/dev/null
 # Both cells' buckets exist before any Foghorn mints a presigned URL into them.

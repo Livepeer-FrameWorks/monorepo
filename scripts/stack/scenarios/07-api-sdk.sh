@@ -12,7 +12,7 @@
 . "$(dirname "$0")/../lib.sh"
 
 REPO=${STACK_REPO:-/repo}
-need jq curl python3 || finish
+need jq curl python3 ffmpeg || finish
 SINCE=$(date +%s)
 webhook_endpoint >/dev/null || fail "webhook endpoint at $RECEIVER_HOOK_URL"
 
@@ -69,17 +69,55 @@ else
   blocked "Go SDK smoke needs a Go toolchain in stack-runner"
 fi
 
-log "stream key rotation webhook"
+log "live ingest controls and key rotation webhooks"
+API_PUB='' API_SID=''
+cleanup_api_ingest() {
+  [ -z "$API_PUB" ] || kill "$API_PUB" 2>/dev/null || true
+  [ -z "$API_SID" ] || delete_stream "$API_SID"
+}
+trap cleanup_api_ingest EXIT
 S=$(create_stream "stack-api-$(date +%s)" false)
 SID=$(echo "$S" | jq -r '.id // empty')
+API_SID=$SID
 if [ -n "$SID" ]; then
-  R=$(gql 'mutation($id:ID!){refreshStreamKey(id:$id){__typename ... on Stream{streamKey}}}' "$(jq -cn --arg id "$SID" '{id:$id}')")
-  check "refreshStreamKey returns a new key" json_has "$R" ".data.refreshStreamKey.streamKey != \"$(echo "$S" | jq -r .streamKey)\""
+  vars=$(jq -cn --arg id "$SID" '{id:$id}')
+  key=$(echo "$S" | jq -r .streamKey)
+  raw_stream=$(echo "$S" | jq -r .streamId)
+  ingest() { gql 'query($id:ID!){stream(id:$id){ingest{state isLive sessionId}}}' "$vars"; }
+  ingest_live() { json_has "$(ingest)" '.data.stream.ingest.isLive == true and .data.stream.ingest.sessionId != null'; }
+  publisher_gone() { ! kill -0 "$API_PUB" 2>/dev/null; }
+  before=$(monotonic_ms)
+  API_PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$key" 640x360 15 600) || { fail 'publisher admitted for API controls'; finish; }
+  eventually 60 'Stream.ingest becomes LIVE' ingest_live || finish
+  session=$(ingest | jq -r '.data.stream.ingest.sessionId')
+  R=$(gql 'mutation($id:ID!){refreshStreamKey(id:$id){__typename ... on Stream{streamKey}}}' "$vars")
+  next_key=$(echo "$R" | jq -r '.data.refreshStreamKey.streamKey // empty')
+  check "refreshStreamKey returns a new key" [ -n "$next_key" ]
+  check "refreshStreamKey replaces the credential" [ "$key" != "$next_key" ]
+  check 'default rotation keeps the current publisher' kill -0 "$API_PUB"
+  check 'default rotation keeps the same session' json_has "$(ingest)" ".data.stream.ingest.sessionId == \"$session\" and .data.stream.ingest.isLive == true"
   eventually 60 "stream.key_rotated webhook" saw_event "$SINCE" stream.key_rotated
-  delete_stream "$SID"
+  R=$(gql 'mutation($id:ID!){disconnectIngest(streamId:$id){__typename ... on IngestDisconnectSuccess{stopRequested}}}' "$vars")
+  check 'disconnect persists a stop request' json_has "$R" '.data.disconnectIngest.stopRequested == true'
+  eventually 90 'disconnect ends the running publisher before its lifetime expires' publisher_stopped_before_deadline "$((before+585000))" publisher_gone || finish
+  eventually 60 'disconnect event carries the stopped session' saw_event "$SINCE" stream.ingest_disconnected ".streamId == \"$raw_stream\" and .sessionId == \"$session\" and .reason == \"requested\""
+
+  before=$(monotonic_ms)
+  API_PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$next_key" 640x360 15 600) || { fail 'encoder reconnects with the retained key'; finish; }
+  eventually 60 'reconnected publisher becomes LIVE' ingest_live || finish
+  session=$(ingest | jq -r '.data.stream.ingest.sessionId')
+  R=$(gql 'mutation($id:ID!){refreshStreamKey(id:$id,endActiveSession:true){__typename ... on Stream{streamKey}}}' "$vars")
+  newest_key=$(echo "$R" | jq -r '.data.refreshStreamKey.streamKey // empty')
+  check 'rotate-and-end returns its new credential' [ -n "$newest_key" ]
+  check 'rotate-and-end replaces the retained key' [ "$newest_key" != "$next_key" ]
+  eventually 90 'rotate-and-end ends the current publisher' publisher_stopped_before_deadline "$((before+585000))" publisher_gone || finish
+  eventually 60 'rotate-and-end event identifies the captured session' saw_event "$SINCE" stream.ingest_disconnected ".streamId == \"$raw_stream\" and .sessionId == \"$session\" and .reason == \"key_rotated\""
+  cleanup_api_ingest
+  API_PUB='' API_SID=''
 else
   fail "createStream: $S"
 fi
+trap - EXIT
 
 log "API token webhooks"
 T=$(gql_session 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue}}}' \

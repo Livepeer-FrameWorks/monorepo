@@ -79,8 +79,8 @@ full_eight() { full_length "$1" "$2" 8 1; }
 work="$STACK_STATE_DIR/rotation"
 mkdir -p "$work"
 ffmpeg -v error -y -f lavfi -i 'color=blue:size=854x480:rate=10:duration=8' \
-  -vf 'drawbox=x=0:y=0:w=160:h=160:color=red:t=fill' -c:v libx265 -preset ultrafast \
-  -x265-params 'log-level=error:pools=1:frame-threads=1' -tag:v hvc1 -pix_fmt yuv420p -g 10 -bf 0 "$work/coded-landscape.mp4" || { fail 'render rotated HEVC source'; finish; }
+  -vf 'drawbox=x=0:y=0:w=160:h=160:color=red:t=fill' -c:v libx264 -preset ultrafast \
+  -pix_fmt yuv420p -g 10 -bf 0 "$work/coded-landscape.mp4" || { fail 'render rotated H264 source'; finish; }
 if ffmpeg -hide_banner -h full 2>&1 | grep -F -- '-display_rotation' >/dev/null; then
   ffmpeg -v error -y -display_rotation -90 -i "$work/coded-landscape.mp4" -c copy "$work/portrait-flag.mp4"
 else
@@ -113,8 +113,8 @@ for fixture in portrait-flag.mp4 coded-portrait.mp4; do
 done
 # A mirror-only source below every standard rung still needs a source-size encode.
 ffmpeg -v error -y -f lavfi -i 'color=blue:size=320x180:rate=10:duration=8' \
-  -vf 'drawbox=x=0:y=0:w=80:h=80:color=red:t=fill' -c:v libx265 -preset ultrafast \
-  -x265-params 'log-level=error:pools=1:frame-threads=1' -tag:v hvc1 -pix_fmt yuv420p -g 10 -bf 0 "$work/mirror-only.mp4" || { fail 'render mirror-only HEVC'; finish; }
+  -vf 'drawbox=x=0:y=0:w=80:h=80:color=red:t=fill' -c:v libx264 -preset ultrafast \
+  -pix_fmt yuv420p -g 10 -bf 0 "$work/mirror-only.mp4" || { fail 'render mirror-only H264'; finish; }
 python3 - "$work/mirror-only.mp4" <<'PYMIRROR'
 import struct,sys
 from pathlib import Path

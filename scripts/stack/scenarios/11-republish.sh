@@ -22,6 +22,8 @@ SID=$(echo "$S" | jq -r '.id // empty')
 UUID=$(echo "$S" | jq -r '.streamId // empty')
 KEY=$(echo "$S" | jq -r '.streamKey // empty')
 [ -n "$SID" ] || { fail "createStream: $S"; finish; }
+ingest() { gql 'query($id:ID!){stream(id:$id){ingest{state sessionId connectedAt liveSince endedAt resumableUntil}}}' "$(jq -cn --arg id "$SID" '{id:$id}')"; }
+ingest_live() { json_has "$(ingest)" '.errors==null and .data.stream.ingest.state=="LIVE" and .data.stream.ingest.sessionId!=null and .data.stream.ingest.liveSince!=null'; }
 
 dvr_hashes() { pg commodore "SELECT dvr_hash FROM commodore.dvr_recordings WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' ORDER BY created_at"; }
 # Numeric reads default to 0 so an empty answer retries instead of making `[`
@@ -42,6 +44,8 @@ PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
 trap 'kill "$PUB" 2>/dev/null' EXIT
 first_recording() { FIRST=$(dvr_hashes | head -1); [ -n "$FIRST" ] && [ "$(segments_of "$FIRST")" -ge 1 ]; }
 eventually 60 "the first session records a segment" first_recording
+eventually 30 'the public ingest state exposes the first live session' ingest_live
+FIRST_SESSION=$(ingest | jq -r '.data.stream.ingest.sessionId // empty')
 wait_publisher "$PUB" 100 || fail "first publisher still running after 100 s"
 
 # Inside Mist's resume window the buffer is still loaded: the publisher resumes
@@ -54,6 +58,8 @@ SEGMENTS_AT_STOP=$(segments_of "$FIRST")
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
 continues() { [ "$(segments_of "$FIRST")" -ge $((SEGMENTS_AT_STOP + 2)) ]; }
 eventually 30 "the resumed publish continues the same recording within 30 s" continues
+same_ingest() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"LIVE\" and .data.stream.ingest.sessionId==\"$FIRST_SESSION\""; }
+eventually 15 'the resumed publisher keeps its public session ID' same_ingest
 one_recording() { [ "$(dvr_hashes | wc -l | tr -d ' ')" = 1 ]; }
 check "the resumed publish does not start a second recording" one_recording
 wait_publisher "$PUB" 100 || fail "resumed publisher still running after 100 s"
@@ -62,10 +68,15 @@ wait_publisher "$PUB" 100 || fail "resumed publisher still running after 100 s"
 # (a segment within 30 s) and announce recording.started.
 log "republish 30 s after the stop, after the buffer unloaded"
 sleep 30
+ingest_idle() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"IDLE\" and .data.stream.ingest.sessionId==\"$FIRST_SESSION\" and .data.stream.ingest.endedAt!=null and .data.stream.ingest.resumableUntil!=null"; }
+eventually 15 'the ended publisher exposes its final session timestamps' ingest_idle
+eventually 60 'stream.ended identifies the unloaded session' saw_event "$SINCE" stream.ended ".streamId==\"$UUID\" and .sessionId==\"$FIRST_SESSION\""
 REPUB_AT=$(date +%s)
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 60)
 new_dvr() { SECOND=$(dvr_hashes | tail -1); [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ]; }
 eventually 30 "the republish starts a new recording" new_dvr
+new_ingest() { ingest_live && json_has "$(ingest)" ".data.stream.ingest.sessionId!=\"$FIRST_SESSION\""; }
+eventually 15 'a new broadcast has a new public ingest session' new_ingest
 # Only a recording distinct from the first session counts: without a new DVR,
 # SECOND still names the first recording and its segments would pass this.
 second_records() { [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ] && [ "$(segments_of "$SECOND")" -ge 1 ]; }

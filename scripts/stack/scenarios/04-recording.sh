@@ -46,11 +46,31 @@ else
 fi
 
 dvr_id() { pg commodore "SELECT id FROM commodore.dvr_recordings WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' ORDER BY created_at DESC LIMIT 1"; }
-chapters() { gql 'query($d:ID!){dvrChapters(dvrId:$d){chapters{chapterId mode state isCurrent playbackId segmentCount startMs endMs}}}' "$(jq -cn --arg d "$DVR" '{d:$d}')" | jq -c '.data.dvrChapters.chapters // []'; }
+chapters() {
+  local after="" next="" response page all='[]' count=0
+  while :; do
+    response=$(gql 'query($d:ID!,$a:String){dvrRecording(id:$d){chapters(page:{first:1,after:$a}){nodes{chapterId mode state isCurrent playbackId segmentCount startMs endMs}pageInfo{hasNextPage endCursor}}}}' "$(jq -cn --arg d "$DVR" --arg a "$after" '{d:$d,a:(if $a=="" then null else $a end)}')")
+    echo "$response" | jq -e '.data.dvrRecording.chapters != null and ((.errors // []) | length)==0' >/dev/null || return 1
+    page=$(echo "$response" | jq -c '.data.dvrRecording.chapters.nodes')
+    all=$(jq -cn --argjson old "$all" --argjson page "$page" '$old+$page')
+    [ "$(echo "$response" | jq -r '.data.dvrRecording.chapters.pageInfo.hasNextPage')" = true ] || break
+    next=$(echo "$response" | jq -r '.data.dvrRecording.chapters.pageInfo.endCursor // empty')
+    [ -n "$next" ] && [ "$next" != "$after" ] || return 1
+    after=$next; count=$((count+1)); [ "$count" -lt 1000 ] || return 1
+  done
+  echo "$all"
+}
 
 has_dvr() { DVR=$(dvr_id); [ -n "$DVR" ]; }
 eventually 60 "recording started automatically" has_dvr
 eventually 60 "recording.started webhook" saw_event "$SINCE" recording.started
+stream_recording_catalog() {
+  local result
+  result=$(gql 'query($s:ID!){stream(id:$s){recordings(page:{first:1}){nodes{id hash status}totalCount}}}' "$(jq -cn --arg s "$SID" '{s:$s}')")
+  echo "$result" | jq -e --arg id "$DVR" '.data.stream.recordings.nodes | any(.id==$id and .hash!="" and .status!="registry" and .status!="unknown")' >/dev/null
+}
+eventually 60 "Stream.recordings returns the recording catalog without a metrics join" stream_recording_catalog
+
 
 log "open chapter while live"
 open_chapter() { OPEN_ID=$(chapters | jq -r '[.[] | select(.state=="OPEN")][0].chapterId // empty'); [ -n "$OPEN_ID" ]; }
@@ -143,6 +163,14 @@ eventually 60 "recording.ready with a chapter's playback id" saw_event "$SINCE" 
   ".artifact.playbackId as \$p | $CHAPTER_PBS | any(. == \$p)"
 ready_count=$(webhook_events "$SINCE" | awk -v s="$UUID" '$1=="recording.ready" && $3=="valid" && index($0, s) {print $2}' | sort -u | wc -l | tr -d ' ')
 check "exactly one recording.ready event for this recording (got $ready_count)" [ "$ready_count" = 1 ]
+for chapter in $(echo "$C" | jq -r '.[].chapterId'); do
+  eventually 60 "recording.chapter_ready for $chapter" saw_event "$SINCE" recording.chapter_ready ".chapterId == \"$chapter\""
+done
+recording_capture_times() {
+  gql 'query($d:ID!){dvrRecording(id:$d){id startedAt endedAt}}' "$(jq -cn --arg d "$DVR" '{d:$d}')" | jq -e '.data.dvrRecording | .startedAt != null and .endedAt != null and .endedAt >= .startedAt' >/dev/null
+}
+eventually 90 "the recording catalog projects its capture lifetime" recording_capture_times
+
 
 log "replay"
 [ -n "$FIRST_PB" ] && every_replica "chapter replays" "$FIRST_PB" media_at
