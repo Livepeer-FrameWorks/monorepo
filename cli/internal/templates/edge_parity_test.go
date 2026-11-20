@@ -1,7 +1,9 @@
 package templates
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -322,4 +324,51 @@ func repositoryPath(t *testing.T, name string) string {
 	}
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(thisFile))))
 	return filepath.Join(repoRoot, name)
+}
+
+func TestEdgeMistFinishOwnsProcessGroupCleanup(t *testing.T) {
+	t.Parallel()
+	base := "edge/rootfs/etc/s6-overlay/s6-rc.d/mistserver/"
+	finishPath := repositoryPath(t, base+"finish")
+	finish := readFile(t, finishPath)
+	for _, wanted := range []string{`kill -TERM -"$pg"`, `kill -0 -"$pg"`, `kill -KILL -"$pg"`, `/dev/shm/Mst*`, `/dev/shm/sem.Mst*`} {
+		if !strings.Contains(finish, wanted) {
+			t.Errorf("Mist finish is missing %q", wanted)
+		}
+	}
+	if strings.Contains(finish, " -- -") {
+		t.Fatal("s6 finish must use shell-compatible negative process-group arguments")
+	}
+	if strings.Index(finish, "kill -KILL") > strings.Index(finish, "rm -f") {
+		t.Fatal("shared memory must be removed after the old process group is killed")
+	}
+	if got := strings.TrimSpace(readFile(t, repositoryPath(t, base+"timeout-finish"))); got != "12000" {
+		t.Fatalf("finish timeout = %q, want 12000 ms", got)
+	}
+	info, err := os.Stat(finishPath)
+	if err != nil || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("finish must be executable: %v", err)
+	}
+	if !strings.Contains(readFile(t, repositoryPath(t, base+"run")), "rm -f /dev/shm/Mst*") {
+		t.Fatal("Mist run must retain its cold-start shared-memory wipe")
+	}
+}
+
+func TestEdgeMistFinishWipesSharedMemoryWithoutSafeGroup(t *testing.T) {
+	finish := readFile(t, repositoryPath(t, "edge/rootfs/etc/s6-overlay/s6-rc.d/mistserver/finish"))
+	for _, group := range []string{"", "0", "1"} {
+		t.Run("group="+group, func(t *testing.T) {
+			dir := t.TempDir()
+			page := filepath.Join(dir, "MstStale")
+			if err := os.WriteFile(page, []byte("stale"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.CommandContext(context.Background(), "sh", "-s", "--", "0", "0", "0", group)
+			command.Stdin = strings.NewReader(strings.ReplaceAll(finish, "/dev/shm/", dir+"/"))
+			output, err := command.CombinedOutput()
+			if _, statErr := os.Stat(page); !os.IsNotExist(statErr) {
+				t.Fatalf("unsafe group %q skipped shared-memory wipe: err=%v output=%s stat=%v", group, err, output, statErr)
+			}
+		})
+	}
 }
