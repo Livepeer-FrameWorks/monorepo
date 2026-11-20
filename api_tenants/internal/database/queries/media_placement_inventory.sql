@@ -19,17 +19,25 @@ ORDER BY ic.cluster_id, n.node_id
 LIMIT 8193;
 
 -- name: GetPlacementMembership :many
--- Tenant-independent membership of one canonical control cell. Inactive
--- clusters stay listed with their flag so a deactivation is observable.
+-- Tenant-independent membership of one canonical control cell. Materialize the
+-- cell's edge-node set once so a small cluster set cannot cause repeated scans.
+WITH member_clusters AS MATERIALIZED (
+    SELECT cluster_id, is_active
+    FROM quartermaster.infrastructure_clusters
+    WHERE COALESCE(NULLIF(control_cell_id, ''), NULLIF(cell_id, ''), cluster_id) = sqlc.arg(control_cell_id)::text
+), member_nodes AS MATERIALIZED (
+    SELECT cluster_id, node_id, status
+    FROM quartermaster.infrastructure_nodes
+    WHERE node_type = 'edge'
+      AND cluster_id = ANY(ARRAY(SELECT cluster_id FROM member_clusters))
+)
 SELECT ic.cluster_id,
        COALESCE(ic.is_active, false)::boolean AS is_active,
        COALESCE(n.node_id, '')::text AS node_id,
        COALESCE(n.status = 'active', false)::boolean AS admission_enabled,
        CURRENT_TIMESTAMP::timestamptz AS observed_at
-FROM quartermaster.infrastructure_clusters ic
-LEFT JOIN quartermaster.infrastructure_nodes n
-       ON n.cluster_id = ic.cluster_id AND n.node_type = 'edge'
-WHERE COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id) = sqlc.arg(control_cell_id)::text
+FROM member_clusters ic
+LEFT JOIN member_nodes n ON n.cluster_id = ic.cluster_id
 ORDER BY ic.cluster_id, n.node_id
 LIMIT 8193;
 
