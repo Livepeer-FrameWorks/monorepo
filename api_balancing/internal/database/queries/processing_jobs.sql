@@ -296,7 +296,7 @@ WITH requeued AS (
         next_attempt_at = NOW() + INTERVAL '30 seconds',
         required_memory_bytes = GREATEST(required_memory_bytes, sqlc.arg(required_memory_bytes)::bigint),
         processes_json = COALESCE(NULLIF(sqlc.arg(processes_json)::text, ''), processes_json),
-        wait_reason = CASE WHEN sqlc.arg(node_too_small)::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
+        wait_reason = CASE WHEN sqlc.arg(node_too_small)::boolean OR sqlc.arg(node_unavailable)::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
         wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC'),
         memory_rejected_nodes = CASE WHEN sqlc.arg(node_too_small)::boolean AND NOT (sqlc.arg(node_id)::text=ANY(memory_rejected_nodes)) THEN array_append(memory_rejected_nodes,sqlc.arg(node_id)::text) ELSE memory_rejected_nodes END
     WHERE job.job_id = sqlc.arg(job_id)

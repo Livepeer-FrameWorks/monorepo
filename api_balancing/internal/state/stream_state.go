@@ -1962,16 +1962,11 @@ func (sm *StreamStateManager) updateNodeMetrics(nodeID string, metrics NodeMetri
 		sm.nodes[nodeID] = n
 	}
 
-	capacityAvailable := !n.CapProcessing && metrics.CapProcessing
+	capacityAvailable := (!n.CapProcessing && metrics.CapProcessing) || processingClassesFreed(n.ProcessingClasses, metrics.ProcessingClasses)
 	if processingBudget != nil && (n.ProcessingMemoryBudgetBytes == nil || *n.ProcessingMemoryBudgetBytes != *processingBudget) {
 		capacityAvailable = capacityAvailable || n.ProcessingMemoryBudgetBytes == nil || *processingBudget > *n.ProcessingMemoryBudgetBytes
 		value := *processingBudget
 		n.ProcessingMemoryBudgetBytes = &value
-	}
-	if old, ok := n.ProcessingClasses["video_transcode"]; ok {
-		if current, present := metrics.ProcessingClasses["video_transcode"]; present && current.Used < old.Used {
-			capacityAvailable = true
-		}
 	}
 	n.CPU = metrics.CPU
 	n.RAMMax = metrics.RAMMax

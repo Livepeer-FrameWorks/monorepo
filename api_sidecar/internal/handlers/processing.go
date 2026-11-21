@@ -1764,6 +1764,11 @@ type processingTrackPresence struct {
 // lets short VOD inputs reach EOF and tear down before any file output exists.
 func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context, log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, livepeerSegmentCh <-chan LivepeerSegmentCompleteEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(processesJSON)
+	if req.GetDeadlineUnixMs() > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.UnixMilli(req.GetDeadlineUnixMs()))
+		defer cancel()
+	}
 	deadline := time.Now().Add(processingReadinessWindow)
 	var lastPresence processingTrackPresence
 	var lastErr error

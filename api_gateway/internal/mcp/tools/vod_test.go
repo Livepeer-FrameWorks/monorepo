@@ -99,7 +99,7 @@ func TestMCPUploadReportsUnavailableOriginalRetention(t *testing.T) {
 	wantOriginal := true
 	result, data, err = handleCreateVodUpload(clientstest.AuthedCtx("retention-policy"), CreateVodUploadInput{Filename: "phone.mov", SizeBytes: 1024, KeepOriginal: &wantOriginal}, resolver, checker, clientstest.DiscardLogger())
 	encoded, marshalErr = json.Marshal(data)
-	if err != nil || marshalErr != nil || result == nil || result.IsError || !strings.Contains(string(encoded), "Original retention is temporarily unavailable") {
+	if err != nil || marshalErr != nil || result == nil || result.IsError || (!strings.Contains(string(encoded), "Only the processed video will be kept") || strings.Contains(string(encoded), "temporarily unavailable")) {
 		t.Fatalf("explicit retention downgrade was not explained: %s %v %v", encoded, err, marshalErr)
 	}
 }

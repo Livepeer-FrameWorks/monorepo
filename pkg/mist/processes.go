@@ -47,6 +47,7 @@ const (
 	ProcessingRetryCauseSourceStall        = "source_stall"
 	ProcessingRetryCauseMemoryPressure     = "memory_pressure"
 	ProcessingRetryCauseMemoryNodeTooSmall = "memory_node_too_small"
+	ProcessingRetryCauseNodeUnavailable    = "processing_node_unavailable"
 	ProcessingRequiredMemoryBytes          = "required_memory_bytes"
 	ProcessingMemoryPolicy                 = "memory_processes_json"
 	ProcessingNodeMemoryBudget             = "processing_memory_budget_bytes"

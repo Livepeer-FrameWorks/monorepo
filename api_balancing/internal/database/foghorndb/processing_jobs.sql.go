@@ -512,12 +512,12 @@ WITH requeued AS (
         next_attempt_at = NOW() + INTERVAL '30 seconds',
         required_memory_bytes = GREATEST(required_memory_bytes, $2::bigint),
         processes_json = COALESCE(NULLIF($3::text, ''), processes_json),
-        wait_reason = CASE WHEN $4::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
+        wait_reason = CASE WHEN $4::boolean OR $5::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
         wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC'),
-        memory_rejected_nodes = CASE WHEN $4::boolean AND NOT ($5::text=ANY(memory_rejected_nodes)) THEN array_append(memory_rejected_nodes,$5::text) ELSE memory_rejected_nodes END
-    WHERE job.job_id = $6
-      AND job.processing_node_id = $5
-      AND job.tenant_id::text = $7
+        memory_rejected_nodes = CASE WHEN $4::boolean AND NOT ($6::text=ANY(memory_rejected_nodes)) THEN array_append(memory_rejected_nodes,$6::text) ELSE memory_rejected_nodes END
+    WHERE job.job_id = $7
+      AND job.processing_node_id = $6
+      AND job.tenant_id::text = $8
       AND job.status IN ('dispatched', 'processing')
       AND EXISTS (SELECT 1 FROM foghorn.artifacts AS owned WHERE owned.artifact_hash=job.artifact_hash AND owned.tenant_id=job.tenant_id AND owned.status NOT IN ('deleted','expired','aborted','failed'))
     RETURNING artifact_hash, tenant_id
@@ -539,6 +539,7 @@ type RequeueCapacityDeferredProcessingJobParams struct {
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
 	ProcessesJson       string         `db:"processes_json" json:"processes_json"`
 	NodeTooSmall        bool           `db:"node_too_small" json:"node_too_small"`
+	NodeUnavailable     bool           `db:"node_unavailable" json:"node_unavailable"`
 	NodeID              string         `db:"node_id" json:"node_id"`
 	JobID               string         `db:"job_id" json:"job_id"`
 	TenantID            string         `db:"tenant_id" json:"tenant_id"`
@@ -552,6 +553,7 @@ func (q *Queries) RequeueCapacityDeferredProcessingJob(ctx context.Context, arg 
 		arg.RequiredMemoryBytes,
 		arg.ProcessesJson,
 		arg.NodeTooSmall,
+		arg.NodeUnavailable,
 		arg.NodeID,
 		arg.JobID,
 		arg.TenantID,

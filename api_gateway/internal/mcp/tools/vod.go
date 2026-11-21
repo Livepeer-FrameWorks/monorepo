@@ -35,7 +35,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 			return toolError("Original download unavailable")
 		}
 	})
-	addTool(server, &mcp.Tool{Name: "delete_vod_original", Description: "Permanently delete only a VOD's original upload, keeping its processed video. Cannot be undone."}, func(ctx context.Context, _ *mcp.CallToolRequest, args DeleteVodOriginalInput) (*mcp.CallToolResult, any, error) {
+	addTool(server, &mcp.Tool{Name: "delete_vod_original", Description: "Remove access to a VOD's retained original and schedule its permanent storage deletion. Processed playback is kept. Cannot be undone."}, func(ctx context.Context, _ *mcp.CallToolRequest, args DeleteVodOriginalInput) (*mcp.CallToolResult, any, error) {
 		if result, meta, err := requireConfirmation(args.Confirm, "DELETE ORIGINAL"); result != nil || meta != nil || err != nil {
 			return result, meta, err
 		}
@@ -214,7 +214,7 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 			Message:      fmt.Sprintf("Upload session created. Upload %d parts using the presigned URLs, then call complete_vod_upload.", len(parts)),
 		}
 		if r.KeepOriginal != nil && !*r.KeepOriginal && args.KeepOriginal != nil && *args.KeepOriginal {
-			output.Message += " Original retention is temporarily unavailable; this upload keeps only the processed video."
+			output.Message += " Only the processed video will be kept; this upload will not retain the original."
 		}
 		if r.KeepOriginal != nil && !*r.KeepOriginal && (args.KeepOriginal == nil || !*args.KeepOriginal) {
 			output.Message += " This upload keeps only the processed video; no original upload will be retained."

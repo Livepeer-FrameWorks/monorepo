@@ -650,7 +650,7 @@
       const data = result.data?.deleteVodOriginal;
       if (data?.__typename === "DeleteSuccess") {
         originalToDelete = null;
-        toast.success("Original deleted; processed video kept");
+        toast.success("Original deletion scheduled; processed video kept");
         await reloadArtifacts({ policy: "NetworkOnly" });
       } else if (data && "message" in data) toast.error(String(data.message));
     } catch (error) {
@@ -1261,7 +1261,7 @@
           true;
         if (wantedOriginal && createResult.keepOriginal === false) {
           toast.warning(
-            "Original retention is temporarily unavailable. This upload will keep only its processed video."
+            "Only the processed video will be kept. This upload will not retain the original."
           );
         }
         session = {
@@ -3153,7 +3153,8 @@
   <DialogContent>
     <DialogHeader
       ><DialogTitle>Delete original upload</DialogTitle><DialogDescription
-        >This permanently deletes the original file. The processed video stays available.</DialogDescription
+        >This removes original download access and schedules permanent deletion. The processed video
+        stays available. This cannot be undone.</DialogDescription
       ></DialogHeader
     >
     <DialogFooter

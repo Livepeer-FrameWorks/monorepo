@@ -25,7 +25,7 @@ func TestHistoricalAndCurrentNodeMemoryHaveSameByteUnits_RealClickHouse(t *testi
 	}
 	s := NewPeriscopeServer(db, logging.NewLoggerWithService("memory-units"))
 	for _, id := range []string{"old", "new"} {
-		response, err := s.GetNodeMetrics(serviceTestContext(), &periscopepb.GetNodeMetricsRequest{NodeId: &id, TimeRange: &commonpb.TimeRange{Start: timestamppb.New(now.Add(-time.Minute)), End: timestamppb.New(now.Add(time.Minute))}})
+		response, err := s.GetNodeMetrics(serviceTestContext(), &periscopepb.GetNodeMetricsRequest{TenantId: queryPackTenantID, NodeId: &id, TimeRange: &commonpb.TimeRange{Start: timestamppb.New(now.Add(-time.Minute)), End: timestamppb.New(now.Add(time.Minute))}})
 		if err != nil {
 			t.Fatal(err)
 		}

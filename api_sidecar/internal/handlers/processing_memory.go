@@ -108,6 +108,10 @@ type processingCapacityError struct {
 
 func (e *processingCapacityError) Error() string { return e.reason }
 func processingMemoryFailureOutputs(err error) map[string]string {
+	var admission *processingAdmissionError
+	if errors.As(err, &admission) {
+		return map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseNodeUnavailable}
+	}
 	var capacity *processingCapacityError
 	if errors.As(err, &capacity) {
 		cause := mist.ProcessingRetryCauseMemoryPressure
