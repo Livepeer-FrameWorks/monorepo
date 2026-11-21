@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	"github.com/lib/pq"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -109,14 +111,14 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 // materialized rows so the player can address future boundaries
 // before the sweeper opens them.
 func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
-	if req.GetDvrArtifactId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
-	}
 	if req.GetMode() == foghorncontrolpb.ArchivedClipCoverageMode {
 		if ctxkeys.GetAuthType(ctx) != "service" || req.GetTenantId() == "" {
 			return nil, status.Error(codes.PermissionDenied, "archived clip lookup requires service and tenant identity")
 		}
 		return s.listArchivedClipCoverage(ctx, req)
+	}
+	if req.GetDvrArtifactId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
 	}
 	if err := s.assertChapterTenant(ctx, req.GetDvrArtifactId(), req.GetTenantId()); err != nil {
 		return nil, err
@@ -197,10 +199,10 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncon
 // Query materialized media directly. Viewer listings can clamp their range to
 // the start of the final segment or skip chapters under a former policy.
 const findArchivedClipCoverage = `-- name: FindArchivedClipCoverage
-SELECT c.chapter_id, c.state, c.playback_artifact_hash, c.actual_media_start_ms, c.actual_media_end_ms
+SELECT a.artifact_hash, c.chapter_id, c.state, c.playback_artifact_hash, c.actual_media_start_ms, c.actual_media_end_ms
 FROM foghorn.dvr_chapters c
 JOIN foghorn.artifacts a ON a.artifact_hash = c.artifact_hash
-WHERE a.artifact_type = 'dvr' AND a.tenant_id = $1 AND a.artifact_hash = $2
+WHERE a.artifact_type = 'dvr' AND a.tenant_id = $1 AND a.artifact_hash = ANY($2::varchar[])
   AND c.state IN ('finalized', 'frozen', 'reclaimed') AND NOT c.is_current
   AND c.playback_artifact_hash IS NOT NULL
   AND c.actual_media_start_ms > 0 AND c.actual_media_start_ms <= $3 AND c.actual_media_end_ms >= $4
@@ -212,7 +214,11 @@ func (s *FoghornGRPCServer) listArchivedClipCoverage(ctx context.Context, req *f
 	if startMs <= 0 || endMs <= startMs {
 		return nil, status.Error(codes.InvalidArgument, "archived clip lookup requires a positive wall-clock range")
 	}
-	rows, err := s.db.QueryContext(ctx, findArchivedClipCoverage, req.GetTenantId(), req.GetDvrArtifactId(), startMs, endMs)
+	ids := req.GetArchiveDvrArtifactIds()
+	if len(ids) == 0 || len(ids) > foghorncontrolpb.ArchivedClipCoverageBatchSize || slices.Contains(ids, "") {
+		return nil, status.Error(codes.InvalidArgument, "archived clip lookup requires a bounded batch of DVR IDs")
+	}
+	rows, err := s.db.QueryContext(ctx, findArchivedClipCoverage, req.GetTenantId(), pq.Array(ids), startMs, endMs)
 	if err != nil {
 		s.logger.WithError(err).Warn("Archived clip coverage query failed")
 		return nil, status.Error(codes.Internal, "failed to read archived clip coverage")
@@ -221,7 +227,7 @@ func (s *FoghornGRPCServer) listArchivedClipCoverage(ctx context.Context, req *f
 	response := &foghorncontrolpb.ListDVRChaptersResponse{}
 	for rows.Next() {
 		chapter := &foghorncontrolpb.ChapterRef{}
-		if err := rows.Scan(&chapter.ChapterId, &chapter.State, &chapter.PlaybackArtifactHash,
+		if err := rows.Scan(&chapter.ArchiveDvrArtifactId, &chapter.ChapterId, &chapter.State, &chapter.PlaybackArtifactHash,
 			&chapter.ActualMediaStartMs, &chapter.ActualMediaEndMs); err != nil {
 			return nil, status.Error(codes.Internal, "failed to read archived clip chapter")
 		}
@@ -233,7 +239,7 @@ func (s *FoghornGRPCServer) listArchivedClipCoverage(ctx context.Context, req *f
 	if err := rows.Err(); err != nil {
 		return nil, status.Error(codes.Internal, "failed to read archived clip coverage")
 	}
-	grpc.SetTrailer(ctx, metadata.Pairs(foghorncontrolpb.ArchivedClipCoverageTrailer, "1"))
+	grpc.SetTrailer(ctx, metadata.Pairs(foghorncontrolpb.ArchivedClipCoverageTrailer, foghorncontrolpb.ArchivedClipCoverageVersion))
 	return response, nil
 }
 

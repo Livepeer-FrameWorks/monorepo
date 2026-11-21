@@ -298,17 +298,18 @@ func (x *RetrieveDVRChapterResponse) GetActualMediaEndMs() int64 {
 }
 
 type ListDVRChaptersRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	DvrArtifactId   string                 `protobuf:"bytes,1,opt,name=dvr_artifact_id,json=dvrArtifactId,proto3" json:"dvr_artifact_id,omitempty"`
-	Mode            string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"` // restrict to chapters of this mode; empty = all
-	IntervalSeconds int32                  `protobuf:"varint,3,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
-	RangeStartMs    int64                  `protobuf:"varint,4,opt,name=range_start_ms,json=rangeStartMs,proto3" json:"range_start_ms,omitempty"` // 0 = no lower bound
-	RangeEndMs      int64                  `protobuf:"varint,5,opt,name=range_end_ms,json=rangeEndMs,proto3" json:"range_end_ms,omitempty"`       // 0 = no upper bound
-	PageSize        int32                  `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`               // default 200, max 1000
-	PageToken       string                 `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`             // keyset cursor (start_ms as decimal text)
-	TenantId        string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	DvrArtifactId         string                 `protobuf:"bytes,1,opt,name=dvr_artifact_id,json=dvrArtifactId,proto3" json:"dvr_artifact_id,omitempty"`
+	Mode                  string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"` // restrict to chapters of this mode; empty = all
+	IntervalSeconds       int32                  `protobuf:"varint,3,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
+	RangeStartMs          int64                  `protobuf:"varint,4,opt,name=range_start_ms,json=rangeStartMs,proto3" json:"range_start_ms,omitempty"` // 0 = no lower bound
+	RangeEndMs            int64                  `protobuf:"varint,5,opt,name=range_end_ms,json=rangeEndMs,proto3" json:"range_end_ms,omitempty"`       // 0 = no upper bound
+	PageSize              int32                  `protobuf:"varint,6,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`               // default 200, max 1000
+	PageToken             string                 `protobuf:"bytes,7,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`             // keyset cursor (start_ms as decimal text)
+	TenantId              string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ArchiveDvrArtifactIds []string               `protobuf:"bytes,9,rep,name=archive_dvr_artifact_ids,json=archiveDvrArtifactIds,proto3" json:"archive_dvr_artifact_ids,omitempty"` // Internal archive clip coverage mode only.
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ListDVRChaptersRequest) Reset() {
@@ -397,6 +398,13 @@ func (x *ListDVRChaptersRequest) GetTenantId() string {
 	return ""
 }
 
+func (x *ListDVRChaptersRequest) GetArchiveDvrArtifactIds() []string {
+	if x != nil {
+		return x.ArchiveDvrArtifactIds
+	}
+	return nil
+}
+
 type ChapterRef struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	ChapterId            string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
@@ -413,6 +421,7 @@ type ChapterRef struct {
 	PlaybackId           string                 `protobuf:"bytes,12,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"` // Commodore-minted public playback key; empty until the finalization queue dispatches.
 	ActualMediaStartMs   int64                  `protobuf:"varint,13,opt,name=actual_media_start_ms,json=actualMediaStartMs,proto3" json:"actual_media_start_ms,omitempty"`
 	ActualMediaEndMs     int64                  `protobuf:"varint,14,opt,name=actual_media_end_ms,json=actualMediaEndMs,proto3" json:"actual_media_end_ms,omitempty"`
+	ArchiveDvrArtifactId string                 `protobuf:"bytes,15,opt,name=archive_dvr_artifact_id,json=archiveDvrArtifactId,proto3" json:"archive_dvr_artifact_id,omitempty"` // Parent DVR for internal archive clip coverage results.
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -543,6 +552,13 @@ func (x *ChapterRef) GetActualMediaEndMs() int64 {
 		return x.ActualMediaEndMs
 	}
 	return 0
+}
+
+func (x *ChapterRef) GetArchiveDvrArtifactId() string {
+	if x != nil {
+		return x.ArchiveDvrArtifactId
+	}
+	return ""
 }
 
 type ListDVRChaptersResponse struct {
@@ -1822,7 +1838,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"playbackId\x121\n" +
 	"\x15actual_media_start_ms\x18\f \x01(\x03R\x12actualMediaStartMs\x12-\n" +
 	"\x13actual_media_end_ms\x18\r \x01(\x03R\x10actualMediaEndMsJ\x04\b\n" +
-	"\x10\vR\x0fmanifest_s3_keyR\fmanifest_urlR\x05error\"\xa0\x02\n" +
+	"\x10\vR\x0fmanifest_s3_keyR\fmanifest_urlR\x05error\"\xd9\x02\n" +
 	"\x16ListDVRChaptersRequest\x12&\n" +
 	"\x0fdvr_artifact_id\x18\x01 \x01(\tR\rdvrArtifactId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12)\n" +
@@ -1833,7 +1849,8 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\tpage_size\x18\x06 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\a \x01(\tR\tpageToken\x12\x1b\n" +
-	"\ttenant_id\x18\b \x01(\tR\btenantId\"\xfa\x03\n" +
+	"\ttenant_id\x18\b \x01(\tR\btenantId\x127\n" +
+	"\x18archive_dvr_artifact_ids\x18\t \x03(\tR\x15archiveDvrArtifactIds\"\xb1\x04\n" +
 	"\n" +
 	"ChapterRef\x12\x1d\n" +
 	"\n" +
@@ -1853,7 +1870,8 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\vplayback_id\x18\f \x01(\tR\n" +
 	"playbackId\x121\n" +
 	"\x15actual_media_start_ms\x18\r \x01(\x03R\x12actualMediaStartMs\x12-\n" +
-	"\x13actual_media_end_ms\x18\x0e \x01(\x03R\x10actualMediaEndMs\"z\n" +
+	"\x13actual_media_end_ms\x18\x0e \x01(\x03R\x10actualMediaEndMs\x125\n" +
+	"\x17archive_dvr_artifact_id\x18\x0f \x01(\tR\x14archiveDvrArtifactId\"z\n" +
 	"\x17ListDVRChaptersResponse\x127\n" +
 	"\bchapters\x18\x01 \x03(\v2\x1b.foghorn_control.ChapterRefR\bchapters\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"X\n" +

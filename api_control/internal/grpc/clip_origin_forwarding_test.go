@@ -2,7 +2,9 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type clipOriginOwner struct {
@@ -35,19 +38,31 @@ func (o *clipOriginOwner) CreateClip(_ context.Context, req *sharedpb.CreateClip
 type clipOriginChapterReader struct {
 	foghornpb.UnimplementedDVRControlServiceServer
 	requests chan *foghorncontrolpb.ListDVRChaptersRequest
-	chapter  *foghorncontrolpb.ChapterRef
+	chapters map[string]*foghorncontrolpb.ChapterRef
 	legacy   bool
+	delay    time.Duration
 }
 
 func (r *clipOriginChapterReader) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
 	r.requests <- req
+	if r.delay > 0 {
+		timer := time.NewTimer(r.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		case <-timer.C:
+		}
+	}
 	response := &foghorncontrolpb.ListDVRChaptersResponse{}
 	if r.legacy {
 		return response, nil
 	}
-	grpc.SetTrailer(ctx, metadata.Pairs(foghorncontrolpb.ArchivedClipCoverageTrailer, "1"))
-	if r.chapter != nil {
-		response.Chapters = []*foghorncontrolpb.ChapterRef{r.chapter}
+	grpc.SetTrailer(ctx, metadata.Pairs(foghorncontrolpb.ArchivedClipCoverageTrailer, foghorncontrolpb.ArchivedClipCoverageVersion))
+	for _, dvrID := range req.GetArchiveDvrArtifactIds() {
+		if chapter := r.chapters[dvrID]; chapter != nil {
+			response.Chapters = append(response.Chapters, chapter)
+		}
 	}
 	return response, nil
 }
@@ -87,12 +102,32 @@ func TestCreateClipForwardsResolvedOriginToPooledFoghorn(t *testing.T) {
 		StartMs: startMs - 4000, EndMs: stopMs + 4000,
 		ActualMediaStartMs: startMs, ActualMediaEndMs: stopMs - 1000,
 	}
+	retiredArchive := differentArchive
+	retiredArchive.cluster = "retired-archive"
+	otherParent := clipOriginArchive{
+		dvrHash: "archive-dvr-other", cluster: reclaimedArchive.cluster, catalogHash: "different-chapter",
+	}
+	wrongParentArchive := reclaimedArchive
+	wrongParentArchive.chapter = proto.CloneOf(reclaimedArchive.chapter)
+	wrongParentArchive.chapter.ArchiveDvrArtifactId = otherParent.dvrHash
+	history := make([]clipOriginArchive, 60)
+	history[0] = reclaimedArchive
+	history[0].dvrHash = "archive-dvr-00"
+	for i := 1; i < len(history); i++ {
+		history[i] = clipOriginArchive{
+			dvrHash: fmt.Sprintf("archive-dvr-%02d", i), cluster: reclaimedArchive.cluster,
+			catalogHash: fmt.Sprintf("old-chapter-%02d", i),
+		}
+	}
 	for _, tc := range []struct {
 		name, wantCluster string
 		activeAt          any
 		archives          []clipOriginArchive
 		absolute          bool
 		legacyCluster     string
+		offlineCluster    string
+		expiredCluster    string
+		readDelay         time.Duration
 		wantErr           codes.Code
 	}{
 		{name: "active private ingest", wantCluster: "private-edge", activeAt: time.Now()},
@@ -116,27 +151,64 @@ func TestCreateClipForwardsResolvedOriginToPooledFoghorn(t *testing.T) {
 			name: "legacy archive origin rejects before create", activeAt: time.Now().Add(-time.Hour),
 			archives: []clipOriginArchive{reclaimedArchive}, legacyCluster: reclaimedArchive.cluster, wantErr: codes.Unavailable,
 		},
+		{
+			name: "stale ingest skips de-entitled archive origin", wantCluster: "archive-a",
+			activeAt: time.Now().Add(-time.Hour), archives: []clipOriginArchive{retiredArchive, reclaimedArchive},
+		},
+		{
+			name: "stale ingest skips an expired cached grant", wantCluster: "archive-a",
+			activeAt: time.Now().Add(-time.Hour), archives: []clipOriginArchive{reclaimedArchive, differentArchive}, expiredCluster: differentArchive.cluster,
+		},
+		{
+			name:     "expired cached default cannot receive a fallback create",
+			activeAt: time.Now().Add(-time.Hour), archives: []clipOriginArchive{partialArchive}, expiredCluster: "platform-cell", wantErr: codes.PermissionDenied,
+		},
+		{
+			name: "stale ingest batches sixty DVRs on one origin", wantCluster: "archive-a",
+			activeAt: time.Now().Add(-time.Hour), archives: history, readDelay: 100 * time.Millisecond,
+		},
+		{
+			name: "eligible archive without endpoint fails closed", activeAt: time.Now().Add(-time.Hour),
+			archives: []clipOriginArchive{reclaimedArchive, differentArchive}, offlineCluster: differentArchive.cluster, wantErr: codes.Unavailable,
+		},
+		{
+			name: "returned chapter must match its registered parent", wantCluster: "platform-cell",
+			activeAt: time.Now().Add(-time.Hour), archives: []clipOriginArchive{wrongParentArchive, otherParent},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, mock, closeDB := newMockServer(t)
 			t.Cleanup(closeDB)
 			owners := make(map[string]*clipOriginOwner)
 			readers := make(map[string]*clipOriginChapterReader)
-			expectedReads := make(map[string]clipOriginArchive)
+			expectedReads := make(map[string][]clipOriginArchive)
 			for _, archive := range tc.archives {
-				expectedReads[archive.cluster] = archive
+				if archive.cluster != retiredArchive.cluster && archive.cluster != tc.offlineCluster && archive.cluster != tc.expiredCluster {
+					expectedReads[archive.cluster] = append(expectedReads[archive.cluster], archive)
+				}
 			}
-			route := &clusterRoute{clusterID: "platform-cell", resolvedAt: time.Now()}
-			for _, cluster := range []string{"platform-cell", "private-edge", "archive-a", "archive-b", "untrusted-caller-cluster"} {
+			route := &clusterRoute{clusterID: "platform-cell", resolvedAt: time.Now(), admissionResolvedAt: time.Now()}
+			for _, cluster := range []string{"platform-cell", "private-edge", "archive-a", "archive-b", "untrusted-caller-cluster", retiredArchive.cluster} {
 				listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 				if err != nil {
 					t.Fatal(err)
 				}
 				owner := &clipOriginOwner{requests: make(chan *sharedpb.CreateClipRequest, 8)}
 				reader := &clipOriginChapterReader{
-					requests: make(chan *foghorncontrolpb.ListDVRChaptersRequest, 8),
-					chapter:  expectedReads[cluster].chapter,
+					requests: make(chan *foghorncontrolpb.ListDVRChaptersRequest, max(8, len(tc.archives))),
+					chapters: make(map[string]*foghorncontrolpb.ChapterRef),
 					legacy:   tc.legacyCluster == cluster,
+					delay:    tc.readDelay,
+				}
+				for _, archive := range expectedReads[cluster] {
+					if archive.chapter == nil {
+						continue
+					}
+					chapter := proto.CloneOf(archive.chapter)
+					if chapter.GetArchiveDvrArtifactId() == "" {
+						chapter.ArchiveDvrArtifactId = archive.dvrHash
+					}
+					reader.chapters[archive.dvrHash] = chapter
 				}
 				owners[cluster], readers[cluster] = owner, reader
 				rpc := grpc.NewServer()
@@ -144,12 +216,27 @@ func TestCreateClipForwardsResolvedOriginToPooledFoghorn(t *testing.T) {
 				foghornpb.RegisterDVRControlServiceServer(rpc, reader)
 				go func() { _ = rpc.Serve(listener) }()
 				t.Cleanup(func() { rpc.Stop(); _ = listener.Close() })
+				if cluster == retiredArchive.cluster {
+					continue
+				}
+				peer := &clusterpeerpb.TenantClusterPeer{
+					ClusterId: cluster, FoghornGrpcAddr: listener.Addr().String(), HealthStatus: "healthy",
+					AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER, AccessActive: true,
+				}
+				if cluster == tc.expiredCluster {
+					peer.AccessExpiresAt = timestamppb.New(time.Now().Add(-time.Second))
+				}
+				if cluster == tc.offlineCluster {
+					peer.FoghornGrpcAddr = ""
+					peer.HealthStatus = "offline"
+					route.admissionPeers = append(route.admissionPeers, peer)
+					continue
+				}
+				route.admissionPeers = append(route.admissionPeers, peer)
 				if cluster == route.clusterID {
 					route.foghornAddr = listener.Addr().String()
 				} else {
-					route.clusterPeers = append(route.clusterPeers, &clusterpeerpb.TenantClusterPeer{
-						ClusterId: cluster, FoghornGrpcAddr: listener.Addr().String(),
-					})
+					route.clusterPeers = append(route.clusterPeers, peer)
 				}
 			}
 			pool := foghornclient.NewPool(foghornclient.PoolConfig{AllowInsecure: true, Timeout: time.Second, Logger: logrus.New()})
@@ -197,7 +284,7 @@ func TestCreateClipForwardsResolvedOriginToPooledFoghorn(t *testing.T) {
 			}
 
 			for cluster, reader := range readers {
-				archive, shouldRead := expectedReads[cluster]
+				archives, shouldRead := expectedReads[cluster]
 				if !shouldRead {
 					if len(reader.requests) != 0 {
 						t.Errorf("%s unexpectedly received %d archive reads", cluster, len(reader.requests))
@@ -209,8 +296,14 @@ func TestCreateClipForwardsResolvedOriginToPooledFoghorn(t *testing.T) {
 					continue
 				}
 				got := <-reader.requests
+				wantIDs := make([]string, 0, len(archives))
+				for _, archive := range archives {
+					wantIDs = append(wantIDs, archive.dvrHash)
+				}
+				slices.Sort(wantIDs)
 				if got.GetMode() != foghorncontrolpb.ArchivedClipCoverageMode ||
-					got.GetTenantId() != tenant || got.GetDvrArtifactId() != archive.dvrHash ||
+					got.GetTenantId() != tenant || got.GetDvrArtifactId() != "" ||
+					!slices.Equal(got.GetArchiveDvrArtifactIds(), wantIDs) ||
 					got.GetRangeStartMs() != startMs || got.GetRangeEndMs() != stopMs {
 					t.Errorf("%s received incorrect archive lookup: %v", cluster, got)
 				}

@@ -49,6 +49,7 @@ message ListDVRChaptersRequest {
   int32 page_size = 6;               // default 200, max 1000
   string page_token = 7;             // keyset cursor (start_ms as decimal text)
   string tenant_id = 8;
+  repeated string archive_dvr_artifact_ids = 9; // Internal archive clip coverage mode only.
 }
 
 message ChapterRef {
@@ -66,6 +67,7 @@ message ChapterRef {
   string playback_id = 12;           // Commodore-minted public playback key; empty until the finalization queue dispatches.
   int64 actual_media_start_ms = 13;
   int64 actual_media_end_ms   = 14;
+  string archive_dvr_artifact_id = 15; // Parent DVR for internal archive clip coverage results.
 }
 
 message ListDVRChaptersResponse {

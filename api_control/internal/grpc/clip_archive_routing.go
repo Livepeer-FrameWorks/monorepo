@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -93,41 +95,107 @@ func (s *CommodoreServer) resolveArchivedClipOrigin(ctx context.Context, tenantI
 		s.logger.WithError(err).Warn("Archived clip catalog lookup failed")
 		return nil, "", status.Error(codes.Unavailable, "archived clip catalog lookup failed")
 	}
+	if len(recordings) == 0 {
+		return nil, "", nil
+	}
+	route, err := s.resolveAdmissionRouteForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, "", err
+	}
+	recordingsByOrigin := make(map[string][]archivedClipDVR)
+	for _, dvr := range recordings {
+		recordingsByOrigin[dvr.origin] = append(recordingsByOrigin[dvr.origin], dvr)
+	}
+
 	var selected *foghornclient.GRPCClient
 	var selectedOrigin, selectedHash string
-	for _, dvr := range recordings {
-		client, err := s.resolveFoghornForCluster(ctx, dvr.origin, tenantID)
+	for _, origin := range slices.Sorted(maps.Keys(recordingsByOrigin)) {
+		if !archiveClipOriginEntitled(route, origin) {
+			continue
+		}
+		client, err := s.resolveFoghornForCluster(ctx, origin, tenantID)
 		if err != nil {
 			return nil, "", err
 		}
-		req := &foghorncontrolpb.ListDVRChaptersRequest{
-			DvrArtifactId: dvr.hash,
-			TenantId:      tenantID,
-			Mode:          foghorncontrolpb.ArchivedClipCoverageMode,
-			RangeStartMs:  startMs,
-			RangeEndMs:    endMs,
-		}
-		resp, trailers, err := client.ListDVRChapters(ctx, req)
-		if err != nil {
-			s.logger.WithError(err).Warn("Archived clip chapter lookup failed")
-			return nil, "", status.Error(codes.Unavailable, "archived clip chapter lookup failed")
-		}
-		capability := trailers.Get(foghorncontrolpb.ArchivedClipCoverageTrailer)
-		if len(capability) != 1 || capability[0] != "1" {
-			return nil, "", status.Error(codes.Unavailable, "archive origin does not support clip coverage lookup")
-		}
-		for _, chapter := range resp.GetChapters() {
-			if !dvr.covers(chapter, startMs, endMs) {
-				continue
+		for batch := range slices.Chunk(recordingsByOrigin[origin], foghorncontrolpb.ArchivedClipCoverageBatchSize) {
+			hashes, err := s.archivedClipCoverage(ctx, client, tenantID, startMs, endMs, batch)
+			if err != nil {
+				return nil, "", err
 			}
-			hash := chapter.GetPlaybackArtifactHash()
-			if selected != nil && (selectedHash != hash || selectedOrigin != dvr.origin) {
-				return nil, "", status.Error(codes.FailedPrecondition, "multiple archived chapters cover the clip range")
+			for _, hash := range hashes {
+				if selected != nil && (selectedHash != hash || selectedOrigin != origin) {
+					return nil, "", status.Error(codes.FailedPrecondition, "multiple archived chapters cover the clip range")
+				}
+				selected, selectedOrigin, selectedHash = client, origin, hash
 			}
-			selected, selectedOrigin, selectedHash = client, dvr.origin, hash
 		}
 	}
-	return selected, selectedOrigin, nil
+	if selected != nil {
+		if !archiveClipOriginEntitled(route, selectedOrigin) {
+			return nil, "", status.Error(codes.PermissionDenied, "archive origin entitlement expired during clip lookup")
+		}
+		return selected, selectedOrigin, nil
+	}
+
+	// Admission refresh can leave the cached default address unchanged.
+	// A de-entitled default must not get the create through the fallback.
+	if !archiveClipOriginEntitled(route, route.clusterID) {
+		return nil, "", status.Error(codes.PermissionDenied, "tenant default is not entitled for historical clips")
+	}
+	client, fallbackRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, "", err
+	}
+	if !archiveClipOriginEntitled(route, fallbackRoute.clusterID) {
+		return nil, "", status.Error(codes.PermissionDenied, "tenant default is not entitled for historical clips")
+	}
+	return client, fallbackRoute.clusterID, nil
+}
+
+func archiveClipOriginEntitled(route *clusterRoute, origin string) bool {
+	// Admission peers include eligible clusters whose control endpoint is
+	// unhealthy. Those coverage lookups remain mandatory.
+	peer := findPeerByClusterID(route.admissionPeers, origin)
+	if peer == nil {
+		return false
+	}
+	expiry := peer.GetAccessExpiresAt()
+	return expiry == nil || expiry.AsTime().After(time.Now())
+}
+
+func (s *CommodoreServer) archivedClipCoverage(ctx context.Context, client *foghornclient.GRPCClient, tenantID string, startMs, endMs int64, batch []archivedClipDVR) ([]string, error) {
+	req := &foghorncontrolpb.ListDVRChaptersRequest{
+		TenantId:              tenantID,
+		Mode:                  foghorncontrolpb.ArchivedClipCoverageMode,
+		RangeStartMs:          startMs,
+		RangeEndMs:            endMs,
+		ArchiveDvrArtifactIds: make([]string, 0, len(batch)),
+	}
+	byHash := make(map[string]archivedClipDVR, len(batch))
+	for _, dvr := range batch {
+		req.ArchiveDvrArtifactIds = append(req.ArchiveDvrArtifactIds, dvr.hash)
+		byHash[dvr.hash] = dvr
+	}
+	resp, trailers, err := client.ListDVRChapters(ctx, req)
+	if err != nil {
+		s.logger.WithError(err).Warn("Archived clip chapter lookup failed")
+		return nil, status.Error(codes.Unavailable, "archived clip chapter lookup failed")
+	}
+	capability := trailers.Get(foghorncontrolpb.ArchivedClipCoverageTrailer)
+	if len(capability) != 1 || capability[0] != foghorncontrolpb.ArchivedClipCoverageVersion {
+		return nil, status.Error(codes.Unavailable, "archive origin does not support batched clip coverage lookup")
+	}
+	var hashes []string
+	for _, chapter := range resp.GetChapters() {
+		dvr, found := byHash[chapter.GetArchiveDvrArtifactId()]
+		if !found {
+			return nil, status.Error(codes.Unavailable, "archive origin returned coverage for a DVR outside the batch")
+		}
+		if dvr.covers(chapter, startMs, endMs) {
+			hashes = append(hashes, chapter.GetPlaybackArtifactHash())
+		}
+	}
+	return hashes, nil
 }
 
 func (dvr archivedClipDVR) covers(chapter *foghorncontrolpb.ChapterRef, startMs, endMs int64) bool {
