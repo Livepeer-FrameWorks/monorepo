@@ -162,8 +162,8 @@ window.fetch = async (input, options = {}) => {
   }
   return originalFetch(input, options);
 };
-const until = async (check, message) => {
-  const end = Date.now() + 5000;
+const until = async (check, message, timeout = 5000) => {
+  const end = Date.now() + timeout;
   while (!check()) {
     if (Date.now() > end) throw new Error(typeof message === "function" ? message() : message);
     await sleep(10);
@@ -187,7 +187,8 @@ try {
   for (let cycle = 0; cycle < 10; cycle++) {
     root = createRoot(host);
     root.render(createElement(MemoryRouter, null, createElement(StreamTest)));
-    await until(() => button("Publish"), "real tester did not mount");
+    // Only the first mount compiles the lazy SDK graph on a cold Vite server.
+    await until(() => button("Publish"), "real tester did not mount", cycle === 0 ? 30_000 : 5000);
     button("Publish").click();
     await until(() => host.querySelector('.fwt-publish input[type="url"]'), "publish form missing");
     fillWhip(`${location.origin}/fixture-whip/${cycle}`);
