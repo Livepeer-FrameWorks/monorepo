@@ -42,9 +42,9 @@ eval "$(sed -n '/^no_upload_degradation() {/,/^}/p' "$here/scenarios/79-rotated-
 FIXTURE_LOGS=''
 log_json() { printf '%s\n' "$FIXTURE_LOGS" | jq -c "$2"; }
 if no_upload_degradation hash now; then echo 'empty logs falsely proved no degradation' >&2; exit 1; fi
-FIXTURE_LOGS='{"msg":"Stream transcode failed; local replacement awaits job admission","stream":"processing+hash"}'
+FIXTURE_LOGS='{"msg":"Stream transcode failed; local replacement awaits job admission","stream":"processing+hash","artifact_hash":"hash"}'
 if no_upload_degradation hash now; then echo 'deferred fallback escaped degradation assertion' >&2; exit 1; fi
-FIXTURE_LOGS='{"msg":"ordinary processing event","stream":"processing+hash"}'
+FIXTURE_LOGS='{"msg":"ordinary processing event","stream":"processing+hash","artifact_hash":"hash"}'
 no_upload_degradation hash now || { echo 'ordinary processing event refused' >&2; exit 1; }
 echo 'rotation degradation assertion requires readable logs and detects deferred failures'
 
