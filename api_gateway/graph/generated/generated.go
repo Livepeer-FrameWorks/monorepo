@@ -30070,9 +30070,9 @@ type SystemHealthEvent {
   cpuTenths: Int! # CPU usage 0-1000 (divide by 10 for %)
   isHealthy: Boolean!
 
-  # Resource metrics (RAM in MiB; disk/shm in bytes)
-  ramMax: Float # Max RAM in MiB
-  ramCurrent: Float # Current RAM usage in MiB
+  # Resource metrics (RAM/disk/shm in bytes)
+  ramMax: Float # Max RAM in bytes
+  ramCurrent: Float # Current RAM usage in bytes
   diskTotalBytes: Float
   diskUsedBytes: Float
   shmTotalBytes: Float
