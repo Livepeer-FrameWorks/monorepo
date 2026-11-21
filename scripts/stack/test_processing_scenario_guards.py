@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import json
 import subprocess
+import shlex
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -15,6 +16,37 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def vod_webhook_result(self, event, artifact):
+        source = (ROOT / "scenarios" / "03-livepeer-vod.sh").read_text()
+        invocation = next(line.strip() for line in source.replace("\\\n", "").splitlines()
+                          if ' saw_event "$SINCE" ' + event in line)
+        lib = (ROOT / "lib.sh").read_text()
+        predicate = re.search(r"^saw_event\(\) \{\n.*?^\}", lib, re.M | re.S).group(0)
+        payload = json.dumps({"artifact": {"artifactId": artifact},
+                              "reason": "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE"})
+        delivery = shlex.quote(event + " fixture valid " + payload)
+        script = predicate + '\n' + '''
+eventually() { shift 2; "$@"; }
+SINCE=0
+VHASH=expected
+MHASH=expected
+''' + 'webhook_events() { printf "%s\\n" ' + delivery + '; }\n' + invocation
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def test_vod_ready_webhook_belongs_to_the_livepeer_upload(self):
+        unrelated = self.vod_webhook_result("upload.ready", "fallback-upload")
+        self.assertNotEqual(unrelated.returncode, 0,
+                            "the fallback upload's ready event falsely proves the Livepeer upload succeeded")
+        matching = self.vod_webhook_result("upload.ready", "expected")
+        self.assertEqual(matching.returncode, 0, matching.stderr)
+
+    def test_missing_source_webhook_belongs_to_the_import(self):
+        unrelated = self.vod_webhook_result("upload.failed", "other-upload")
+        self.assertNotEqual(unrelated.returncode, 0,
+                            "another upload's failure falsely proves the missing-source import emitted its event")
+        matching = self.vod_webhook_result("upload.failed", "expected")
+        self.assertEqual(matching.returncode, 0, matching.stderr)
+
     def test_rotation_absence_requires_positive_job_logs(self):
         predicate = function("79-rotated-upload.sh", "no_upload_degradation")
         result = subprocess.run(["bash", "-c", predicate + '\nlog_json() { return 0; }; no_upload_degradation fixture now'])

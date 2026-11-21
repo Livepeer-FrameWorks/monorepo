@@ -176,18 +176,21 @@ log "import of a missing source fails fast"
 R=$(gql 'mutation($i:ImportVodAssetInput!){importVodAsset(input:$i){__typename ... on VodAsset{id artifactHash status} ... on ValidationError{message}}}' \
   "$(jq -cn --arg u "$MISSING_URL" '{i:{url:$u,filename:"missing.mp4",title:"stack missing"}}')")
 MID=$(echo "$R" | jq -r '.data.importVodAsset.id // empty')
-sweep_allow artifacts "vod $(echo "$R" | jq -r '.data.importVodAsset.artifactHash // empty')" '^status failed' \
+MHASH=$(echo "$R" | jq -r '.data.importVodAsset.artifactHash // empty')
+sweep_allow artifacts "vod $MHASH" '^status failed' \
   'the import of a missing source must fail'
 if [ -n "$MID" ]; then
   failed_fast() { local s; s=$(vod_status "$MID"); [ "$s" = FAILED ] && return 0; [ "$s" = READY ] && return 2; return 1; }
   eventually 60 "missing-source import reaches FAILED within 60 s" failed_fast
-  eventually 60 "upload.failed webhook with SOURCE_UNAVAILABLE" saw_event "$SINCE" upload.failed '.reason == "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE"'
+  eventually 60 "upload.failed webhook with SOURCE_UNAVAILABLE" saw_event "$SINCE" upload.failed \
+    ".artifact.artifactId == \"$MHASH\" and .reason == \"MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE\""
 elif echo "$R" | grep -qiE "private|resolve|dns|network"; then
   blocked "the stack cannot reach $MISSING_URL (set STACK_MISSING_VOD_URL): $(echo "$R" | jq -c '.data.importVodAsset // .errors')"
 else
   fail "importVodAsset: $R"
 fi
-eventually 60 "upload.ready webhook for the Livepeer VOD" saw_event "$SINCE" upload.ready
+eventually 60 "upload.ready webhook for the Livepeer VOD" saw_event "$SINCE" upload.ready \
+  ".artifact.artifactId == \"$VHASH\""
 check "node ownership does not conflict with processing media ownership" log_absent "$LOG_SINCE" \
   'Trigger tenant assertion conflicts with server-resolved resource owner; using resolved owner' foghorn foghorn-2 foghorn-b foghorn-b-2
 finish
