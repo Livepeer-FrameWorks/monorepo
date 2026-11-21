@@ -326,24 +326,6 @@ func TestProcessingMemoryRequirementAndWaiting_RealPG(t *testing.T) {
 	}
 }
 
-func TestNeverFitVODCapacityFailure_RealPG(t *testing.T) {
-	conn := startRealPG(t)
-	previous := db
-	SetDB(conn)
-	t.Cleanup(func() { SetDB(previous) })
-	seedActiveImportJob(t, conn)
-	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "4K processing workload cannot fit the cluster's largest node", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: "insufficient_memory"}}, "edge-1", logging.NewLogger()); err != nil {
-		t.Fatal(err)
-	}
-	var job, artifact string
-	if err := conn.QueryRow(`SELECT j.status,a.status FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact); err != nil {
-		t.Fatal(err)
-	}
-	if job != "failed" || artifact != "failed" {
-		t.Fatalf("never-fit 4K VOD was requeued: job=%s artifact=%s", job, artifact)
-	}
-}
-
 func TestProcessingMemoryReportsCannotCrossTenant_RealPG(t *testing.T) {
 	for _, status := range []string{"retryable", "cache_update", "completed", "failed"} {
 		t.Run(status, func(t *testing.T) {

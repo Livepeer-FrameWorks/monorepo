@@ -976,7 +976,7 @@ func TestProjectCommodoreArtifactState_OrdersByProjectionAge(t *testing.T) {
 	r.batchSize = 5
 	r.clusterID = "c1"
 
-	mock.ExpectQuery(`ORDER BY catalog_synced_rev ASC, catalog_revision ASC`).
+	mock.ExpectQuery(`ORDER BY a\.catalog_synced_rev ASC, a\.catalog_revision ASC`).
 		WithArgs(5, "c1").
 		WillReturnRows(sqlmock.NewRows(projectionRowCols))
 

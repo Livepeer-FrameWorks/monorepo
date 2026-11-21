@@ -29,7 +29,7 @@ WHERE s.id = o.id;
 -- clip's creation outcome is unconsumed: the Commodore convergence sweep reads the fulfilled range
 -- from its source params until then.
 WITH old_terminal AS (
-    SELECT j.job_id
+    SELECT j.job_id, j.tenant_id
     FROM foghorn.processing_jobs j
     WHERE j.status IN ('completed', 'failed')
       AND j.updated_at < NOW() - sqlc.arg(retention_seconds)::bigint * INTERVAL '1 second'
@@ -45,10 +45,18 @@ WITH old_terminal AS (
     ORDER BY j.updated_at
     LIMIT sqlc.arg(batch_limit)
     FOR UPDATE OF j SKIP LOCKED
+), cleared_reservations AS (
+    UPDATE foghorn.processing_node_reservations r
+    SET job_id = NULL, tenant_id = NULL, required_memory_bytes = 0,
+        revision = nextval('foghorn.processing_reservation_revision')
+    FROM old_terminal o
+    WHERE r.job_id = o.job_id AND r.tenant_id = o.tenant_id
 )
 DELETE FROM foghorn.processing_jobs j
 USING old_terminal o
-WHERE j.job_id = o.job_id;
+WHERE j.job_id = o.job_id
+  -- A page-level owner filter keeps the primary-key join batchable in Yugabyte.
+  AND j.tenant_id IN (SELECT tenant_id FROM old_terminal);
 
 -- name: PurgeCompletedArtifactEvents :execrows
 WITH old_completed AS (
