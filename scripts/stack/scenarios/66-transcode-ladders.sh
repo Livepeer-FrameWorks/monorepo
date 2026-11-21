@@ -48,13 +48,16 @@ livepeer_produced() {
   rows=$(log_json "$2" "select(.trigger_type==\"LIVEPEER_SEGMENT_COMPLETE\" and .stream_name==$quoted and (.rendition_count|tonumber)>0)" edge edge-b) || return 1
   [ -n "$rows" ]
 }
+local_first_running() {
+  [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='${local_hashes[0]}' AND status='processing' AND memory_reserved_bytes>0")" = 1 ]
+}
 local_job_waited_for_memory() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT EXISTS (
     SELECT 1 FROM foghorn.processing_jobs AS waiting
     JOIN foghorn.processing_jobs AS running ON running.tenant_id=waiting.tenant_id AND running.job_id<>waiting.job_id
     WHERE waiting.tenant_id='$STACK_TENANT_ID'
-      AND waiting.artifact_hash IN ('${local_hashes[0]}','${local_hashes[1]}')
-      AND running.artifact_hash IN ('${local_hashes[0]}','${local_hashes[1]}')
+      AND waiting.artifact_hash='${local_hashes[1]}'
+      AND running.artifact_hash='${local_hashes[0]}'
       AND waiting.status='queued' AND waiting.wait_reason='memory' AND waiting.retry_count=0
       AND running.status IN ('dispatched','processing') AND running.memory_reserved_bytes>0)")" = t ]
 }
@@ -106,6 +109,9 @@ for job in first second; do
   [ -n "$id" ] && [ -n "$hash" ] || { fail "create local 4K $job: $result"; finish; }
   local_jobs+=("$id")
   local_hashes+=("$hash")
+  if [ "$job" = first ]; then
+    eventually 120 'first local 4K job reserves memory before the second upload' local_first_running || finish
+  fi
 done
 eventually 300 'one local 4K upload queues behind the running job without spending retries' local_job_waited_for_memory || finish
 for job in 0 1; do
