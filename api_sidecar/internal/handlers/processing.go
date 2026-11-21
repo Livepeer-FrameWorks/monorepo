@@ -666,7 +666,7 @@ func reconcileProcessingOverridePersistence(mistServerURL string, logger logging
 		logger.WithError(err).Warn("Could not reconcile expired processing policies with Mist; preserving local authority")
 		return
 	}
-	activeStreams, ok := response["active_streams"].(map[string]interface{})
+	activeStreams, ok := activeStreamsFromResponse(response)
 	if !ok {
 		logger.Warn("Mist active-stream response was incomplete; preserving expired processing policies")
 		return
