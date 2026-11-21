@@ -137,7 +137,7 @@ func EstimateProcessingMemory(raw string, source SourceMediaInfo) (uint64, error
 				}
 				// Fit from the 12 catalog/source/CPU cases in testdata/processing_memory_20261120.json.
 				// Include each decoder's source-sized surfaces and retain 15% allocation margin.
-				bytes += (48*processingMiB + pixels*(14+3*(decodeThreads-1)) + outputPixels*(8+6*(encodeThreads-1)) + outputPixels*2*lookahead/5) * 115 / 100
+				bytes += (40*processingMiB + pixels*(14+3*(decodeThreads-1)) + outputPixels*(8+6*(encodeThreads-1)) + outputPixels*2*lookahead/5) * 115 / 100
 			}
 			if codec, ok := process["codec"].(string); ok && (strings.EqualFold(codec, "AAC") || strings.EqualFold(codec, "opus")) {
 				bytes += 32 * processingMiB
