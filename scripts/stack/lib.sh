@@ -744,16 +744,33 @@ every_replica() {
 upload_vod() {
   local options='{}'
   [ "$#" -lt 3 ] || options=$3
-  local file=$1 title=$2 size r upload parts='[]' pn url etag connect=()
+  local file=$1 title=$2 size r upload part_size parts='[]' pn url etag connect=()
   size=$(stat -c %s "$file" 2>/dev/null || stat -f %z "$file")
   [ -n "${STORAGE_CONNECT_TO:-}" ] && connect=(--connect-to "$STORAGE_CONNECT_TO")
-  r=$(gql 'mutation($i:CreateVodUploadInput!){createVodUpload(input:$i){__typename ... on VodUploadSession{id artifactHash playbackId parts{partNumber presignedUrl}} ... on ValidationError{message}}}' \
+  r=$(gql 'mutation($i:CreateVodUploadInput!){createVodUpload(input:$i){__typename ... on VodUploadSession{id artifactHash playbackId partSize parts{partNumber presignedUrl}} ... on ValidationError{message}}}' \
     "$(jq -cn --argjson sz "$size" --arg f "$(basename "$file")" --arg t "$title" --argjson options "$options" '{i:({filename:$f,sizeBytes:$sz,contentType:"video/mp4",title:$t} + $options)}')")
   upload=$(echo "$r" | jq -r '.data.createVodUpload.id // empty')
   [ -n "$upload" ] || { echo "createVodUpload: $r" >&2; return 1; }
+  part_size=$(echo "$r" | jq -er '.data.createVodUpload.partSize | select(type == "number" and . > 0 and floor == .)') || { echo 'createVodUpload returned no valid part size' >&2; return 1; }
   for pn in $(echo "$r" | jq -r '.data.createVodUpload.parts[].partNumber'); do
     url=$(echo "$r" | jq -r --argjson pn "$pn" '.data.createVodUpload.parts[]|select(.partNumber==$pn).presignedUrl')
-    etag=$(curl -s -m 120 "${connect[@]}" -X PUT --data-binary "@$file" -D - -o /dev/null "$url" | awk 'tolower($1)=="etag:"{print $2}' | tr -d '\r"')
+    etag=$(python3 - "$file" "$part_size" "$pn" <<'PY' |
+import os, sys
+path, part_size, number = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+with open(path, 'rb') as source:
+    offset = (number - 1) * part_size
+    remaining = min(part_size, os.fstat(source.fileno()).st_size - offset)
+    if offset < 0 or remaining <= 0:
+        raise SystemExit('upload part is outside the source file')
+    source.seek(offset)
+    while remaining:
+        chunk = source.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise SystemExit('source file ended while reading upload part')
+        sys.stdout.buffer.write(chunk)
+        remaining -= len(chunk)
+PY
+      curl -fsS -m 120 "${connect[@]}" -X PUT --data-binary @- -D - -o /dev/null "$url" | awk 'tolower($1)=="etag:"{print $2}' | tr -d '\r"') || { echo "part $pn upload failed" >&2; return 1; }
     [ -n "$etag" ] || { echo "part $pn upload returned no ETag" >&2; return 1; }
     parts=$(echo "$parts" | jq -c --argjson pn "$pn" --arg e "$etag" '. + [{partNumber:$pn,etag:$e}]')
   done

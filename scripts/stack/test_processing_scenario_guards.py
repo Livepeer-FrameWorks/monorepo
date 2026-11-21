@@ -5,6 +5,7 @@ import re
 import json
 import subprocess
 import shlex
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -16,6 +17,48 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_vod_multipart_upload_sends_each_source_byte_once(self):
+        lib = (ROOT / "lib.sh").read_text()
+        upload = re.search(r"^upload_vod\(\) \{\n.*?^\}", lib, re.M | re.S).group(0)
+        for size in (4, 8, 16, 20):
+            with self.subTest(size=size), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                source = bytes(range(size))
+                (directory / "source.mp4").write_bytes(source)
+                count = (size + 7) // 8
+                response = {"data": {"createVodUpload": {"id": "upload", "partSize": 8,
+                            "parts": [{"partNumber": i, "presignedUrl": "mock://parts/" + str(i)}
+                                      for i in range(1, count + 1)]}}}
+                script = "set -uo pipefail\n" + upload + '\nFIXTURE_DIR=' + shlex.quote(tmp) + '\n'
+                script += '''
+gql() {
+  case "$1" in
+    *createVodUpload*)
+      printf '%s' "$1" > "$FIXTURE_DIR/create-query"
+      printf '%s\\n' ''' + shlex.quote(json.dumps(response)) + ''' ;;
+    *) printf '%s\\n' '{"data":{"completeVodUpload":{"id":"asset"}}}' ;;
+  esac
+}
+curl() {
+  local body='' url="${!#}"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --data-binary ]; then body=$2; shift; fi
+    shift
+  done
+  if [ "$body" = @- ]; then cat > "$FIXTURE_DIR/part-${url##*/}"
+  else cat "${body#@}" > "$FIXTURE_DIR/part-${url##*/}"; fi
+  printf 'HTTP/1.1 200 OK\\r\\nETag: "%s"\\r\\n\\r\\n' "${url##*/}"
+}
+upload_vod "$FIXTURE_DIR/source.mp4" fixture
+'''
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bodies = [(directory / ("part-" + str(i))).read_bytes() for i in range(1, count + 1)]
+                self.assertEqual(b"".join(bodies), source,
+                                 "multipart upload repeats the whole source for every presigned part")
+                self.assertEqual([len(body) for body in bodies], [min(8, size - i * 8) for i in range(count)])
+                self.assertRegex((directory / "create-query").read_text(), r"\bpartSize\b")
+
     def vod_webhook_result(self, event, artifact):
         source = (ROOT / "scenarios" / "03-livepeer-vod.sh").read_text()
         invocation = next(line.strip() for line in source.replace("\\\n", "").splitlines()
