@@ -1593,7 +1593,13 @@ func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, te
 		return true
 	}
 	var overrideLookupErr error
-	defer func() { resolveErr = errors.Join(resolveErr, overrideLookupErr) }()
+	defer func() {
+		resolveErr = errors.Join(resolveErr, overrideLookupErr)
+		// A tenant-wide fallback cannot confirm a stream-specific live video choice.
+		if overrideLookupErr != nil && lifecycle == "live" && streamID == "" {
+			resolved = mist.StripLiveVideoRenditions(resolved)
+		}
+	}()
 	if streamID != "" {
 		override, err := s.getStreamProcessingOverride(ctx, tenantID, streamID, lifecycle)
 		overrideLookupErr = errors.Join(overrideLookupErr, err)
