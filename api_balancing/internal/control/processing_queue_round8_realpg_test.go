@@ -72,3 +72,28 @@ func TestProcessingAdmissionInvalidatesQueuedCatalogReason_RealPG(t *testing.T) 
 		t.Fatalf("admitted job left a stale queued reason in the catalog: revision %d -> %d", before, after)
 	}
 }
+
+func TestAdmissionInfrastructureOutagePreservesRetries_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	previous := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(previous) })
+	seedActiveImportJob(t, conn)
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET status='processing',processing_node_id='edge-1' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
+			t.Fatal(err)
+		}
+		err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "processing memory ledger temporarily unavailable", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: "processing_node_unavailable"}}, "edge-1", logging.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status, reason string
+		var retries, rejected int
+		if err = conn.QueryRow(`SELECT status,COALESCE(wait_reason,''),retry_count,cardinality(memory_rejected_nodes) FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &reason, &retries, &rejected); err != nil {
+			t.Fatal(err)
+		}
+		if status != "queued" || reason != "fitting_node_unavailable" || retries != 0 || rejected != 0 {
+			t.Fatalf("outage spent tenant retries or rejected node: status=%s reason=%s retries=%d rejected=%d", status, reason, retries, rejected)
+		}
+	}
+}

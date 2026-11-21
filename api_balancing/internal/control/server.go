@@ -8935,7 +8935,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 	case "retryable":
 
-		if cause := result.GetOutputs()[mist.ProcessingResultRetryCause]; cause == mist.ProcessingRetryCauseMemoryPressure || cause == mist.ProcessingRetryCauseMemoryNodeTooSmall {
+		if cause := result.GetOutputs()[mist.ProcessingResultRetryCause]; cause == mist.ProcessingRetryCauseMemoryPressure || cause == mist.ProcessingRetryCauseMemoryNodeTooSmall || cause == mist.ProcessingRetryCauseNodeUnavailable {
 			return requeueCapacityDeferredProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields, result.GetOutputs())
 		}
 		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseSourceStall {
@@ -8983,7 +8983,7 @@ func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, re
 		budget = &value
 	}
 
-	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{NodeTooSmall: tooSmall, RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: reportingNode})
+	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{NodeUnavailable: outputs[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseNodeUnavailable, NodeTooSmall: tooSmall, RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: reportingNode})
 	if err != nil {
 		return fmt.Errorf("defer processing for memory capacity: %w", err)
 	}
@@ -8996,7 +8996,7 @@ func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, re
 	}
 
 	NotifyCatalogDirty()
-	logger.WithFields(fields).Info("Processing job returned to queue while memory is occupied")
+	logger.WithFields(fields).Info("Processing job returned to queue pending node admission")
 	return nil
 }
 

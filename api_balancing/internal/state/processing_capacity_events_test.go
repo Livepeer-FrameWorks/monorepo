@@ -77,3 +77,31 @@ func TestReplicatedProcessingBudgetKeepsLatestMetricsObservation(t *testing.T) {
 		t.Fatalf("unchanged replicated heartbeat woke waiting jobs: events=%d", count)
 	}
 }
+
+func TestLocalProcessingCapacityExpansionWakesWaitingJobs(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after map[string]ClassCapacity
+	}{
+		{"larger class", map[string]ClassCapacity{"video_transcode": {Total: 2, Used: 2}}, map[string]ClassCapacity{"video_transcode": {Total: 3, Used: 2}}},
+		{"new class", map[string]ClassCapacity{}, map[string]ClassCapacity{"cpu_heavy": {Total: 1}}},
+		{"unlimited class", map[string]ClassCapacity{"video_transcode": {Total: 2, Used: 2}}, map[string]ClassCapacity{"video_transcode": {Total: 0, Used: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := NewStreamStateManager()
+			defer sm.Shutdown()
+			sm.UpdateNodeMetrics("edge", NodeMetrics{CapProcessing: true, ProcessingClasses: tc.before})
+			count := 0
+			sm.SetProcessingCapacityHandler(func(string) { count++ })
+			next := NodeMetrics{CapProcessing: true, ProcessingClasses: tc.after}
+			sm.UpdateNodeMetrics("edge", next)
+			if count != 1 {
+				t.Fatalf("additional processing capacity did not wake jobs: events=%d", count)
+			}
+			sm.UpdateNodeMetrics("edge", next)
+			if count != 1 {
+				t.Fatalf("unchanged capacity woke jobs: events=%d", count)
+			}
+		})
+	}
+}
