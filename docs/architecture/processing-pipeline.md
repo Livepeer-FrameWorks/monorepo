@@ -681,6 +681,12 @@ original deletion takes the artifact lock before rechecking and changing retenti
 
 The bundled Mist accepts explicit `encode_threads`, `decode_threads` and
 `lookahead` resource controls. Helmsman budgets those controls directly.
+The estimator is calibrated against twelve completed 30-second recordings: each catalog
+ladder at 1080p and 2160p, under four- and sixteen-CPU quotas. The versioned corpus in
+`pkg/mist/testdata/processing_memory_20261120.json` records the exact Mist source, native
+artifact hash, process policies and per-process anonymous/shared peaks. Every recording
+contains all planned renditions at full duration. The regression test requires estimates
+to retain a 10–50% margin; file-cache pages are excluded from measured process memory.
 Transient memory-read or reservation-persistence errors remain retryable; a missing
 `active_streams` response cannot prove that an old generation has stopped.
 

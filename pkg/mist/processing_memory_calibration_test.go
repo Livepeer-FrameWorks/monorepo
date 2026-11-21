@@ -1,6 +1,7 @@
 package mist
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -107,22 +108,41 @@ func TestProcessingMemoryEstimateCoversMeasuredCatalogWithoutWaste(t *testing.T)
 		t.Fatal(err)
 	}
 	var corpus struct {
-		Cases []struct {
-			Name      string          `json:"case"`
-			Width     int             `json:"source_width"`
-			Height    int             `json:"source_height"`
-			Processes json.RawMessage `json:"processes"`
-			Observed  uint64          `json:"observed_process_bytes"`
+		AllRecordingsValidated bool   `json:"all_recordings_validated"`
+		BinaryDistSHA256       string `json:"binary_dist_sha256"`
+		SourceCommit           string `json:"source_commit"`
+		Cases                  []struct {
+			Name               string          `json:"case"`
+			Width              int             `json:"source_width"`
+			Height             int             `json:"source_height"`
+			Processes          json.RawMessage `json:"processes"`
+			Observed           uint64          `json:"observed_process_bytes"`
+			RecordingValidated bool            `json:"recording_validated"`
 		} `json:"cases"`
 	}
 	if err = json.Unmarshal(encoded, &corpus); err != nil {
 		t.Fatal(err)
+	}
+	if !corpus.AllRecordingsValidated {
+		t.Fatal("calibration requires twelve completed recordings, not partial output")
+	}
+	for name, value := range map[string]string{"binary artifact": corpus.BinaryDistSHA256, "Mist source": corpus.SourceCommit} {
+		want := 64
+		if name == "Mist source" {
+			want = 40
+		}
+		if _, err := hex.DecodeString(value); err != nil || len(value) != want {
+			t.Fatalf("calibration must identify its exact %s: %q", name, value)
+		}
 	}
 	if len(corpus.Cases) != 12 {
 		t.Fatalf("incomplete catalog/source/CPU matrix: %d cases", len(corpus.Cases))
 	}
 	for _, sample := range corpus.Cases {
 		t.Run(sample.Name, func(t *testing.T) {
+			if !sample.RecordingValidated || sample.Observed == 0 {
+				t.Fatal("calibration case has no validated complete recording or memory measurement")
+			}
 			estimate, err := EstimateProcessingMemory(string(sample.Processes), SourceMediaInfo{VideoCodec: "H264", Width: sample.Width, Height: sample.Height})
 			if err != nil {
 				t.Fatal(err)

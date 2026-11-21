@@ -1,20 +1,18 @@
 {
-  "image": "sha256:36ea629f7b2df0639af3bd69c1b186a2e2b33ec9be98d84faa8f220175ec9714",
-  "source_commit": "0c3e30859452036b64563cb4dfeca8fb38b209f0",
-  "measured_at": "2026-11-20",
-  "source": "30s H264 AAC testsrc2 30fps CRF22 GOP60 bf2",
-  "cpu_control": "Docker --cpus 4 or 16, cpu.max retained",
-  "fit_coefficients": [
-    42.974079234556065, 13.038374785017243, 17.266494755627832, 5.596540932150619
-  ],
-  "max_positive_residual_bytes": 39972991.39681637,
+  "runtime_toolchain_image": "sha256:8b6d5a2626684f9171d3c718a0d79b63d343fa0cb71b3d222b4998ce6c18ac60",
+  "binary_dist_sha256": "ec3e447c358b244c3e3b2e8ca32c3d27c431b183c6fe30f3f13a24df9c6101a7",
+  "source_commit": "e75e154ddf037e6a138cfa6f1eec3817597dda6b",
+  "measured_at": "2026-11-21T09:29:16.082197+00:00",
+  "source": "30s H264 AAC testsrc2 30fps veryfast CRF22 GOP60 bf2",
+  "cpu_control": "Docker --cpus 4 or 16; cpu.max retained",
+  "all_recordings_validated": true,
   "cases": [
     {
       "case": "qhd_1080p_cpus16",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 16,
-      "container_peak_bytes": 850149376,
+      "container_peak_bytes": 692322304,
       "observed_processes": [
         {
           "process": "AV",
@@ -22,9 +20,10 @@
           "resolution": "x480",
           "encode_threads": 3,
           "decode_threads": 3,
-          "peak_anon_bytes": 76316672,
+          "peak_anon_bytes": 69693440,
           "peak_shared_bytes": 13238272,
-          "pid": "1004604"
+          "peak_file_bytes": 13488128,
+          "pid": "1496063"
         },
         {
           "process": "AV",
@@ -32,9 +31,10 @@
           "resolution": "x720",
           "encode_threads": 7,
           "decode_threads": 3,
-          "peak_anon_bytes": 119332864,
-          "peak_shared_bytes": 15429632,
-          "pid": "1004605"
+          "peak_anon_bytes": 104775680,
+          "peak_shared_bytes": 15138816,
+          "peak_file_bytes": 13864960,
+          "pid": "1496064"
         },
         {
           "process": "AV",
@@ -42,9 +42,10 @@
           "resolution": "x1080",
           "encode_threads": 16,
           "decode_threads": 3,
-          "peak_anon_bytes": 310829056,
-          "peak_shared_bytes": 13246464,
-          "pid": "1004606"
+          "peak_anon_bytes": 261701632,
+          "peak_shared_bytes": 13275136,
+          "peak_file_bytes": 13393920,
+          "pid": "1496065"
         },
         {
           "process": "AV",
@@ -52,33 +53,46 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 67497984,
-          "peak_shared_bytes": 11227136,
-          "pid": "1004607"
+          "peak_anon_bytes": 58855424,
+          "peak_shared_bytes": 11194368,
+          "peak_file_bytes": 13561856,
+          "pid": "1496066"
+        },
+        {
+          "process": "AV",
+          "codec": "AAC",
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 4284416,
+          "peak_shared_bytes": 147456,
+          "peak_file_bytes": 8654848,
+          "pid": "1496067"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19820544,
-          "peak_shared_bytes": 1294336,
-          "pid": "1004608"
+          "peak_anon_bytes": 9515008,
+          "peak_shared_bytes": 1286144,
+          "peak_file_bytes": 11108352,
+          "pid": "1496068"
         },
         {
           "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
+          "codec": null,
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 29999104,
-          "peak_shared_bytes": 8650752,
-          "pid": "1004609"
+          "peak_anon_bytes": 20160512,
+          "peak_shared_bytes": 8491008,
+          "peak_file_bytes": 12709888,
+          "pid": "1496069"
         }
       ],
-      "observed_process_bytes": 686882816,
-      "old_estimate_bytes": 1120434688,
+      "observed_process_bytes": 591757312,
       "processes": [
         {
           "bitrate": 900000,
@@ -152,14 +166,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "qhd_1080p_cpus4",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 4,
-      "container_peak_bytes": 631865344,
+      "container_peak_bytes": 538820608,
       "observed_processes": [
         {
           "process": "AV",
@@ -167,9 +182,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 70795264,
-          "peak_shared_bytes": 13721600,
-          "pid": "1005791"
+          "peak_anon_bytes": 64274432,
+          "peak_shared_bytes": 13733888,
+          "peak_file_bytes": 13656064,
+          "pid": "1499282"
         },
         {
           "process": "AV",
@@ -177,9 +193,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 83406848,
-          "peak_shared_bytes": 16052224,
-          "pid": "1005792"
+          "peak_anon_bytes": 69709824,
+          "peak_shared_bytes": 15831040,
+          "peak_file_bytes": 13365248,
+          "pid": "1499283"
         },
         {
           "process": "AV",
@@ -187,9 +204,10 @@
           "resolution": "x1080",
           "encode_threads": 4,
           "decode_threads": 3,
-          "peak_anon_bytes": 144437248,
-          "peak_shared_bytes": 14491648,
-          "pid": "1005793"
+          "peak_anon_bytes": 123166720,
+          "peak_shared_bytes": 14336000,
+          "peak_file_bytes": 13103104,
+          "pid": "1499284"
         },
         {
           "process": "AV",
@@ -197,33 +215,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 67502080,
-          "peak_shared_bytes": 12029952,
-          "pid": "1005794"
+          "peak_anon_bytes": 60981248,
+          "peak_shared_bytes": 11677696,
+          "peak_file_bytes": 13766656,
+          "pid": "1499285"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 20156416,
+          "peak_shared_bytes": 8744960,
+          "peak_file_bytes": 12537856,
+          "pid": "1499286"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 17829888,
-          "peak_shared_bytes": 1323008,
-          "pid": "1005795"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 29999104,
-          "peak_shared_bytes": 8970240,
-          "pid": "1005796"
+          "peak_anon_bytes": 11612160,
+          "peak_shared_bytes": 1314816,
+          "peak_file_bytes": 10964992,
+          "pid": "1499308"
         }
       ],
-      "observed_process_bytes": 480559104,
-      "old_estimate_bytes": 1026742528,
+      "observed_process_bytes": 415539200,
       "processes": [
         {
           "bitrate": 900000,
@@ -297,14 +317,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "qhd_2160p_cpus16",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 16,
-      "container_peak_bytes": 2130141184,
+      "container_peak_bytes": 1843343360,
       "observed_processes": [
         {
           "process": "AV",
@@ -312,9 +333,10 @@
           "resolution": "x1440",
           "encode_threads": 16,
           "decode_threads": 4,
-          "peak_anon_bytes": 598528000,
-          "peak_shared_bytes": 18821120,
-          "pid": "1007327"
+          "peak_anon_bytes": 546193408,
+          "peak_shared_bytes": 16945152,
+          "peak_file_bytes": 13635584,
+          "pid": "1501839"
         },
         {
           "process": "AV",
@@ -322,9 +344,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 213979136,
-          "peak_shared_bytes": 14815232,
-          "pid": "1007328"
+          "peak_anon_bytes": 206639104,
+          "peak_shared_bytes": 13848576,
+          "peak_file_bytes": 13516800,
+          "pid": "1501840"
         },
         {
           "process": "AV",
@@ -332,9 +355,10 @@
           "resolution": "x720",
           "encode_threads": 4,
           "decode_threads": 4,
-          "peak_anon_bytes": 245579776,
-          "peak_shared_bytes": 17416192,
-          "pid": "1007329"
+          "peak_anon_bytes": 231149568,
+          "peak_shared_bytes": 19292160,
+          "peak_file_bytes": 13684736,
+          "pid": "1501841"
         },
         {
           "process": "AV",
@@ -342,9 +366,10 @@
           "resolution": "x1080",
           "encode_threads": 9,
           "decode_threads": 4,
-          "peak_anon_bytes": 360718336,
-          "peak_shared_bytes": 17809408,
-          "pid": "1007330"
+          "peak_anon_bytes": 324263936,
+          "peak_shared_bytes": 18051072,
+          "peak_file_bytes": 13758464,
+          "pid": "1501842"
         },
         {
           "process": "AV",
@@ -352,33 +377,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 210620416,
-          "peak_shared_bytes": 13299712,
-          "pid": "1007331"
+          "peak_anon_bytes": 203542528,
+          "peak_shared_bytes": 12443648,
+          "peak_file_bytes": 13336576,
+          "pid": "1501843"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 45326336,
+          "peak_shared_bytes": 7426048,
+          "peak_file_bytes": 12853248,
+          "pid": "1501844"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 17846272,
-          "peak_shared_bytes": 1327104,
-          "pid": "1007332"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 48439296,
-          "peak_shared_bytes": 7929856,
-          "pid": "1007333"
+          "peak_anon_bytes": 9531392,
+          "peak_shared_bytes": 1363968,
+          "peak_file_bytes": 11149312,
+          "pid": "1501875"
         }
       ],
-      "observed_process_bytes": 1787129856,
-      "old_estimate_bytes": 3079438592,
+      "observed_process_bytes": 1656016896,
       "processes": [
         {
           "bitrate": 900000,
@@ -464,34 +491,26 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "qhd_2160p_cpus4",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 4,
-      "container_peak_bytes": 1645355008,
+      "container_peak_bytes": 1510649856,
       "observed_processes": [
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 57188352,
-          "peak_shared_bytes": 7573504,
-          "pid": "1029499"
-        },
         {
           "process": "AV",
           "codec": "H264",
           "resolution": "x1440",
           "encode_threads": 4,
           "decode_threads": 4,
-          "peak_anon_bytes": 340439040,
-          "peak_shared_bytes": 20664320,
-          "pid": "1029491"
+          "peak_anon_bytes": 316633088,
+          "peak_shared_bytes": 19787776,
+          "peak_file_bytes": 13697024,
+          "pid": "1505069"
         },
         {
           "process": "AV",
@@ -499,9 +518,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 213999616,
-          "peak_shared_bytes": 14950400,
-          "pid": "1029492"
+          "peak_anon_bytes": 206659584,
+          "peak_shared_bytes": 14745600,
+          "peak_file_bytes": 13717504,
+          "pid": "1505070"
         },
         {
           "process": "AV",
@@ -509,9 +529,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 227831808,
-          "peak_shared_bytes": 18968576,
-          "pid": "1029493"
+          "peak_anon_bytes": 215252992,
+          "peak_shared_bytes": 18903040,
+          "peak_file_bytes": 13553664,
+          "pid": "1505071"
         },
         {
           "process": "AV",
@@ -519,9 +540,10 @@
           "resolution": "x1080",
           "encode_threads": 2,
           "decode_threads": 4,
-          "peak_anon_bytes": 263946240,
-          "peak_shared_bytes": 19054592,
-          "pid": "1029495"
+          "peak_anon_bytes": 246165504,
+          "peak_shared_bytes": 18546688,
+          "peak_file_bytes": 13807616,
+          "pid": "1505072"
         },
         {
           "process": "AV",
@@ -529,23 +551,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 210591744,
-          "peak_shared_bytes": 13168640,
-          "pid": "1029496"
+          "peak_anon_bytes": 203415552,
+          "peak_shared_bytes": 12697600,
+          "peak_file_bytes": 13656064,
+          "pid": "1505073"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 55287808,
+          "peak_shared_bytes": 7589888,
+          "peak_file_bytes": 12673024,
+          "pid": "1505074"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 17842176,
+          "peak_anon_bytes": 9531392,
           "peak_shared_bytes": 1368064,
-          "pid": "1029498"
+          "peak_file_bytes": 11198464,
+          "pid": "1505107"
         }
       ],
-      "observed_process_bytes": 1427587072,
-      "old_estimate_bytes": 2894888192,
+      "observed_process_bytes": 1346584576,
       "processes": [
         {
           "bitrate": 900000,
@@ -631,34 +665,26 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "standard_1080p_cpus16",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 16,
-      "container_peak_bytes": 877289472,
+      "container_peak_bytes": 693948416,
       "observed_processes": [
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 27910144,
-          "peak_shared_bytes": 9097216,
-          "pid": "1046059"
-        },
         {
           "process": "AV",
           "codec": "H264",
           "resolution": "x480",
           "encode_threads": 3,
           "decode_threads": 3,
-          "peak_anon_bytes": 76271616,
-          "peak_shared_bytes": 14204928,
-          "pid": "1046053"
+          "peak_anon_bytes": 69726208,
+          "peak_shared_bytes": 14299136,
+          "peak_file_bytes": 13864960,
+          "pid": "1509462"
         },
         {
           "process": "AV",
@@ -666,9 +692,10 @@
           "resolution": "x720",
           "encode_threads": 7,
           "decode_threads": 3,
-          "peak_anon_bytes": 119377920,
-          "peak_shared_bytes": 15560704,
-          "pid": "1046054"
+          "peak_anon_bytes": 104845312,
+          "peak_shared_bytes": 15818752,
+          "peak_file_bytes": 13836288,
+          "pid": "1509463"
         },
         {
           "process": "AV",
@@ -676,9 +703,10 @@
           "resolution": "x1080",
           "encode_threads": 16,
           "decode_threads": 3,
-          "peak_anon_bytes": 304836608,
-          "peak_shared_bytes": 15413248,
-          "pid": "1046055"
+          "peak_anon_bytes": 261812224,
+          "peak_shared_bytes": 15560704,
+          "peak_file_bytes": 13258752,
+          "pid": "1509464"
         },
         {
           "process": "AV",
@@ -686,23 +714,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 65449984,
-          "peak_shared_bytes": 12021760,
-          "pid": "1046056"
+          "peak_anon_bytes": 60973056,
+          "peak_shared_bytes": 12066816,
+          "peak_file_bytes": 13828096,
+          "pid": "1509465"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 20242432,
+          "peak_shared_bytes": 9244672,
+          "peak_file_bytes": 12673024,
+          "pid": "1509466"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 17825792,
-          "peak_shared_bytes": 1286144,
-          "pid": "1046057"
+          "peak_anon_bytes": 9519104,
+          "peak_shared_bytes": 1323008,
+          "peak_file_bytes": 10887168,
+          "pid": "1509487"
         }
       ],
-      "observed_process_bytes": 679256064,
-      "old_estimate_bytes": 1120434688,
+      "observed_process_bytes": 595431424,
       "processes": [
         {
           "bitrate": 900000,
@@ -776,14 +816,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "standard_1080p_cpus4",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 4,
-      "container_peak_bytes": 632950784,
+      "container_peak_bytes": 540557312,
       "observed_processes": [
         {
           "process": "AV",
@@ -791,9 +832,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 70787072,
-          "peak_shared_bytes": 13193216,
-          "pid": "1055309"
+          "peak_anon_bytes": 62189568,
+          "peak_shared_bytes": 13795328,
+          "peak_file_bytes": 13238272,
+          "pid": "1513327"
         },
         {
           "process": "AV",
@@ -801,9 +843,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 82612224,
-          "peak_shared_bytes": 16183296,
-          "pid": "1055310"
+          "peak_anon_bytes": 70631424,
+          "peak_shared_bytes": 15388672,
+          "peak_file_bytes": 13733888,
+          "pid": "1513328"
         },
         {
           "process": "AV",
@@ -811,9 +854,10 @@
           "resolution": "x1080",
           "encode_threads": 4,
           "decode_threads": 3,
-          "peak_anon_bytes": 148488192,
-          "peak_shared_bytes": 13598720,
-          "pid": "1055311"
+          "peak_anon_bytes": 123322368,
+          "peak_shared_bytes": 14311424,
+          "peak_file_bytes": 13516800,
+          "pid": "1513329"
         },
         {
           "process": "AV",
@@ -821,33 +865,46 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 65490944,
-          "peak_shared_bytes": 11116544,
-          "pid": "1055312"
+          "peak_anon_bytes": 60973056,
+          "peak_shared_bytes": 11657216,
+          "peak_file_bytes": 13852672,
+          "pid": "1513330"
+        },
+        {
+          "process": "AV",
+          "codec": "AAC",
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 6385664,
+          "peak_shared_bytes": 147456,
+          "peak_file_bytes": 8421376,
+          "pid": "1513331"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19709952,
-          "peak_shared_bytes": 1310720,
-          "pid": "1055313"
+          "peak_anon_bytes": 11616256,
+          "peak_shared_bytes": 1323008,
+          "peak_file_bytes": 10936320,
+          "pid": "1513332"
         },
         {
           "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
+          "codec": null,
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 30003200,
-          "peak_shared_bytes": 8826880,
-          "pid": "1055314"
+          "peak_anon_bytes": 22257664,
+          "peak_shared_bytes": 8871936,
+          "peak_file_bytes": 12783616,
+          "pid": "1513333"
         }
       ],
-      "observed_process_bytes": 481320960,
-      "old_estimate_bytes": 1026742528,
+      "observed_process_bytes": 422871040,
       "processes": [
         {
           "bitrate": 900000,
@@ -921,14 +978,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "standard_2160p_cpus16",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 16,
-      "container_peak_bytes": 1491664896,
+      "container_peak_bytes": 1339715584,
       "observed_processes": [
         {
           "process": "AV",
@@ -936,9 +994,10 @@
           "resolution": "x480",
           "encode_threads": 3,
           "decode_threads": 4,
-          "peak_anon_bytes": 219414528,
-          "peak_shared_bytes": 10940416,
-          "pid": "1056571"
+          "peak_anon_bytes": 212111360,
+          "peak_shared_bytes": 12271616,
+          "peak_file_bytes": 13500416,
+          "pid": "1517671"
         },
         {
           "process": "AV",
@@ -946,9 +1005,10 @@
           "resolution": "x720",
           "encode_threads": 7,
           "decode_threads": 4,
-          "peak_anon_bytes": 263487488,
-          "peak_shared_bytes": 16363520,
-          "pid": "1056572"
+          "peak_anon_bytes": 246816768,
+          "peak_shared_bytes": 16519168,
+          "peak_file_bytes": 13434880,
+          "pid": "1517672"
         },
         {
           "process": "AV",
@@ -956,9 +1016,10 @@
           "resolution": "x1080",
           "encode_threads": 16,
           "decode_threads": 4,
-          "peak_anon_bytes": 459345920,
-          "peak_shared_bytes": 18362368,
-          "pid": "1056573"
+          "peak_anon_bytes": 403812352,
+          "peak_shared_bytes": 18702336,
+          "peak_file_bytes": 13848576,
+          "pid": "1517673"
         },
         {
           "process": "AV",
@@ -966,33 +1027,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 208621568,
-          "peak_shared_bytes": 10551296,
-          "pid": "1056574"
+          "peak_anon_bytes": 203350016,
+          "peak_shared_bytes": 11472896,
+          "peak_file_bytes": 13803520,
+          "pid": "1517674"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 43003904,
+          "peak_shared_bytes": 7634944,
+          "peak_file_bytes": 12611584,
+          "pid": "1517675"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19820544,
-          "peak_shared_bytes": 1327104,
-          "pid": "1056575"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 48431104,
-          "peak_shared_bytes": 7053312,
-          "pid": "1056576"
+          "peak_anon_bytes": 9519104,
+          "peak_shared_bytes": 1298432,
+          "peak_file_bytes": 10813440,
+          "pid": "1517742"
         }
       ],
-      "observed_process_bytes": 1283719168,
-      "old_estimate_bytes": 2420581888,
+      "observed_process_bytes": 1186512896,
       "processes": [
         {
           "bitrate": 900000,
@@ -1066,14 +1129,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "standard_2160p_cpus4",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 4,
-      "container_peak_bytes": 1300561920,
+      "container_peak_bytes": 1264324608,
       "observed_processes": [
         {
           "process": "AV",
@@ -1081,9 +1145,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 214016000,
-          "peak_shared_bytes": 15118336,
-          "pid": "1067200"
+          "peak_anon_bytes": 204529664,
+          "peak_shared_bytes": 14917632,
+          "peak_file_bytes": 13852672,
+          "pid": "1522322"
         },
         {
           "process": "AV",
@@ -1091,9 +1156,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 227811328,
-          "peak_shared_bytes": 19828736,
-          "pid": "1067201"
+          "peak_anon_bytes": 215138304,
+          "peak_shared_bytes": 19136512,
+          "peak_file_bytes": 13725696,
+          "pid": "1522323"
         },
         {
           "process": "AV",
@@ -1101,9 +1167,10 @@
           "resolution": "x1080",
           "encode_threads": 4,
           "decode_threads": 4,
-          "peak_anon_bytes": 295059456,
-          "peak_shared_bytes": 18710528,
-          "pid": "1067203"
+          "peak_anon_bytes": 266104832,
+          "peak_shared_bytes": 19058688,
+          "peak_file_bytes": 13500416,
+          "pid": "1522324"
         },
         {
           "process": "AV",
@@ -1111,33 +1178,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 210755584,
-          "peak_shared_bytes": 13066240,
-          "pid": "1067204"
+          "peak_anon_bytes": 203440128,
+          "peak_shared_bytes": 12808192,
+          "peak_file_bytes": 13799424,
+          "pid": "1522325"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 42999808,
+          "peak_shared_bytes": 7438336,
+          "peak_file_bytes": 12734464,
+          "pid": "1522326"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19767296,
-          "peak_shared_bytes": 1335296,
-          "pid": "1067205"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 48427008,
-          "peak_shared_bytes": 7262208,
-          "pid": "1067206"
+          "peak_anon_bytes": 9519104,
+          "peak_shared_bytes": 1331200,
+          "peak_file_bytes": 11026432,
+          "pid": "1522353"
         }
       ],
-      "observed_process_bytes": 1091158016,
-      "old_estimate_bytes": 2326889728,
+      "observed_process_bytes": 1016422400,
       "processes": [
         {
           "bitrate": 900000,
@@ -1211,14 +1280,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "uhd_1080p_cpus16",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 16,
-      "container_peak_bytes": 847466496,
+      "container_peak_bytes": 704397312,
       "observed_processes": [
         {
           "process": "AV",
@@ -1226,9 +1296,10 @@
           "resolution": "x480",
           "encode_threads": 3,
           "decode_threads": 3,
-          "peak_anon_bytes": 74289152,
-          "peak_shared_bytes": 13352960,
-          "pid": "1081633"
+          "peak_anon_bytes": 69660672,
+          "peak_shared_bytes": 13185024,
+          "peak_file_bytes": 13852672,
+          "pid": "1527912"
         },
         {
           "process": "AV",
@@ -1236,9 +1307,10 @@
           "resolution": "x720",
           "encode_threads": 7,
           "decode_threads": 3,
-          "peak_anon_bytes": 120356864,
-          "peak_shared_bytes": 15237120,
-          "pid": "1081634"
+          "peak_anon_bytes": 104722432,
+          "peak_shared_bytes": 15261696,
+          "peak_file_bytes": 13811712,
+          "pid": "1527913"
         },
         {
           "process": "AV",
@@ -1246,9 +1318,10 @@
           "resolution": "x1080",
           "encode_threads": 16,
           "decode_threads": 3,
-          "peak_anon_bytes": 308838400,
-          "peak_shared_bytes": 13217792,
-          "pid": "1081635"
+          "peak_anon_bytes": 257667072,
+          "peak_shared_bytes": 13303808,
+          "peak_file_bytes": 13369344,
+          "pid": "1527914"
         },
         {
           "process": "AV",
@@ -1256,33 +1329,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 67502080,
-          "peak_shared_bytes": 11317248,
-          "pid": "1081636"
+          "peak_anon_bytes": 60952576,
+          "peak_shared_bytes": 11227136,
+          "peak_file_bytes": 13791232,
+          "pid": "1527915"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 22253568,
+          "peak_shared_bytes": 8462336,
+          "peak_file_bytes": 12836864,
+          "pid": "1527916"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19873792,
+          "peak_anon_bytes": 9519104,
           "peak_shared_bytes": 1294336,
-          "pid": "1081637"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 29995008,
-          "peak_shared_bytes": 8581120,
-          "pid": "1081638"
+          "peak_file_bytes": 11194368,
+          "pid": "1527943"
         }
       ],
-      "observed_process_bytes": 683855872,
-      "old_estimate_bytes": 1120434688,
+      "observed_process_bytes": 587509760,
       "processes": [
         {
           "bitrate": 900000,
@@ -1356,14 +1431,15 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "uhd_1080p_cpus4",
       "source_width": 1920,
       "source_height": 1080,
       "cpu_quota": 4,
-      "container_peak_bytes": 635301888,
+      "container_peak_bytes": 528498688,
       "observed_processes": [
         {
           "process": "AV",
@@ -1371,9 +1447,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 70819840,
-          "peak_shared_bytes": 13045760,
-          "pid": "1090244"
+          "peak_anon_bytes": 62148608,
+          "peak_shared_bytes": 13656064,
+          "peak_file_bytes": 13246464,
+          "pid": "1533103"
         },
         {
           "process": "AV",
@@ -1381,9 +1458,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 83386368,
-          "peak_shared_bytes": 14659584,
-          "pid": "1090245"
+          "peak_anon_bytes": 70742016,
+          "peak_shared_bytes": 15949824,
+          "peak_file_bytes": 13336576,
+          "pid": "1533104"
         },
         {
           "process": "AV",
@@ -1391,9 +1469,10 @@
           "resolution": "x1080",
           "encode_threads": 4,
           "decode_threads": 3,
-          "peak_anon_bytes": 144441344,
-          "peak_shared_bytes": 14671872,
-          "pid": "1090248"
+          "peak_anon_bytes": 121012224,
+          "peak_shared_bytes": 14127104,
+          "peak_file_bytes": 12906496,
+          "pid": "1533105"
         },
         {
           "process": "AV",
@@ -1401,33 +1480,35 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 3,
-          "peak_anon_bytes": 67477504,
-          "peak_shared_bytes": 11952128,
-          "pid": "1090250"
+          "peak_anon_bytes": 58871808,
+          "peak_shared_bytes": 11587584,
+          "peak_file_bytes": 13615104,
+          "pid": "1533106"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 24354816,
+          "peak_shared_bytes": 8691712,
+          "peak_file_bytes": 12738560,
+          "pid": "1533107"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19820544,
-          "peak_shared_bytes": 1306624,
-          "pid": "1090252"
-        },
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 30003200,
-          "peak_shared_bytes": 9244672,
-          "pid": "1090253"
+          "peak_anon_bytes": 9515008,
+          "peak_shared_bytes": 1327104,
+          "peak_file_bytes": 11100160,
+          "pid": "1533160"
         }
       ],
-      "observed_process_bytes": 480829440,
-      "old_estimate_bytes": 1026742528,
+      "observed_process_bytes": 411983872,
       "processes": [
         {
           "bitrate": 900000,
@@ -1501,34 +1582,26 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "uhd_2160p_cpus16",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 16,
-      "container_peak_bytes": 2824376320,
+      "container_peak_bytes": 2580361216,
       "observed_processes": [
-        {
-          "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 4,
-          "peak_anon_bytes": 48439296,
-          "peak_shared_bytes": 8015872,
-          "pid": "1100345"
-        },
         {
           "process": "AV",
           "codec": "H264",
           "resolution": "x1440",
           "encode_threads": 7,
           "decode_threads": 4,
-          "peak_anon_bytes": 406904832,
-          "peak_shared_bytes": 19009536,
-          "pid": "1100338"
+          "peak_anon_bytes": 369979392,
+          "peak_shared_bytes": 18120704,
+          "peak_file_bytes": 13447168,
+          "pid": "1535974"
         },
         {
           "process": "AV",
@@ -1536,9 +1609,10 @@
           "resolution": "x2160",
           "encode_threads": 16,
           "decode_threads": 4,
-          "peak_anon_bytes": 1006268416,
-          "peak_shared_bytes": 18665472,
-          "pid": "1100339"
+          "peak_anon_bytes": 934207488,
+          "peak_shared_bytes": 19034112,
+          "peak_file_bytes": 13475840,
+          "pid": "1535975"
         },
         {
           "process": "AV",
@@ -1546,9 +1620,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 214016000,
-          "peak_shared_bytes": 13557760,
-          "pid": "1100340"
+          "peak_anon_bytes": 206651392,
+          "peak_shared_bytes": 12746752,
+          "peak_file_bytes": 13701120,
+          "pid": "1535976"
         },
         {
           "process": "AV",
@@ -1556,9 +1631,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 225652736,
-          "peak_shared_bytes": 18300928,
-          "pid": "1100341"
+          "peak_anon_bytes": 213008384,
+          "peak_shared_bytes": 17838080,
+          "peak_file_bytes": 13361152,
+          "pid": "1535977"
         },
         {
           "process": "AV",
@@ -1566,9 +1642,10 @@
           "resolution": "x1080",
           "encode_threads": 4,
           "decode_threads": 4,
-          "peak_anon_bytes": 292933632,
-          "peak_shared_bytes": 17866752,
-          "pid": "1100342"
+          "peak_anon_bytes": 265998336,
+          "peak_shared_bytes": 17457152,
+          "peak_file_bytes": 13926400,
+          "pid": "1535978"
         },
         {
           "process": "AV",
@@ -1576,23 +1653,46 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 210608128,
-          "peak_shared_bytes": 12070912,
-          "pid": "1100343"
+          "peak_anon_bytes": 201244672,
+          "peak_shared_bytes": 12656640,
+          "peak_file_bytes": 13656064,
+          "pid": "1535979"
+        },
+        {
+          "process": "AV",
+          "codec": "AAC",
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 4292608,
+          "peak_shared_bytes": 155648,
+          "peak_file_bytes": 8728576,
+          "pid": "1535980"
         },
         {
           "process": "AV",
           "codec": "opus",
-          "resolution": "",
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 1,
-          "peak_anon_bytes": 19935232,
-          "peak_shared_bytes": 1404928,
-          "pid": "1100344"
+          "peak_anon_bytes": 9539584,
+          "peak_shared_bytes": 1380352,
+          "peak_file_bytes": 11100160,
+          "pid": "1535985"
+        },
+        {
+          "process": "Thumbs",
+          "codec": null,
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 40878080,
+          "peak_shared_bytes": 8024064,
+          "peak_file_bytes": 12607488,
+          "pid": "1535986"
         }
       ],
-      "observed_process_bytes": 2533650432,
-      "old_estimate_bytes": 4036121856,
+      "observed_process_bytes": 2353213440,
       "processes": [
         {
           "bitrate": 900000,
@@ -1690,34 +1790,26 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     },
     {
       "case": "uhd_2160p_cpus4",
       "source_width": 3840,
       "source_height": 2160,
       "cpu_quota": 4,
-      "container_peak_bytes": 2069262336,
+      "container_peak_bytes": 1890648064,
       "observed_processes": [
-        {
-          "process": "AV",
-          "codec": "opus",
-          "resolution": "",
-          "encode_threads": 1,
-          "decode_threads": 1,
-          "peak_anon_bytes": 17854464,
-          "peak_shared_bytes": 1413120,
-          "pid": "1103598"
-        },
         {
           "process": "AV",
           "codec": "H264",
           "resolution": "x1440",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 274550784,
-          "peak_shared_bytes": 20623360,
-          "pid": "1103592"
+          "peak_anon_bytes": 254627840,
+          "peak_shared_bytes": 18124800,
+          "peak_file_bytes": 13713408,
+          "pid": "1544639"
         },
         {
           "process": "AV",
@@ -1725,9 +1817,10 @@
           "resolution": "x2160",
           "encode_threads": 4,
           "decode_threads": 4,
-          "peak_anon_bytes": 471240704,
-          "peak_shared_bytes": 19214336,
-          "pid": "1103593"
+          "peak_anon_bytes": 441999360,
+          "peak_shared_bytes": 20176896,
+          "peak_file_bytes": 13307904,
+          "pid": "1544640"
         },
         {
           "process": "AV",
@@ -1735,9 +1828,10 @@
           "resolution": "x480",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 211939328,
-          "peak_shared_bytes": 13557760,
-          "pid": "1103594"
+          "peak_anon_bytes": 206757888,
+          "peak_shared_bytes": 13897728,
+          "peak_file_bytes": 13697024,
+          "pid": "1544641"
         },
         {
           "process": "AV",
@@ -1745,9 +1839,10 @@
           "resolution": "x720",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 228012032,
-          "peak_shared_bytes": 19009536,
-          "pid": "1103595"
+          "peak_anon_bytes": 213094400,
+          "peak_shared_bytes": 19963904,
+          "peak_file_bytes": 13643776,
+          "pid": "1544642"
         },
         {
           "process": "AV",
@@ -1755,9 +1850,10 @@
           "resolution": "x1080",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 250200064,
-          "peak_shared_bytes": 17977344,
-          "pid": "1103596"
+          "peak_anon_bytes": 234504192,
+          "peak_shared_bytes": 18989056,
+          "peak_file_bytes": 13422592,
+          "pid": "1544643"
         },
         {
           "process": "AV",
@@ -1765,23 +1861,46 @@
           "resolution": "x360",
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 210677760,
-          "peak_shared_bytes": 13611008,
-          "pid": "1103597"
+          "peak_anon_bytes": 203530240,
+          "peak_shared_bytes": 12894208,
+          "peak_file_bytes": 13455360,
+          "pid": "1544644"
+        },
+        {
+          "process": "AV",
+          "codec": "AAC",
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 4284416,
+          "peak_shared_bytes": 155648,
+          "peak_file_bytes": 8527872,
+          "pid": "1544645"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": null,
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 9535488,
+          "peak_shared_bytes": 1404928,
+          "peak_file_bytes": 11022336,
+          "pid": "1544647"
         },
         {
           "process": "Thumbs",
-          "codec": "",
-          "resolution": "",
+          "codec": null,
+          "resolution": null,
           "encode_threads": 1,
           "decode_threads": 4,
-          "peak_anon_bytes": 60567552,
-          "peak_shared_bytes": 7888896,
-          "pid": "1103599"
+          "peak_anon_bytes": 55406592,
+          "peak_shared_bytes": 7544832,
+          "peak_file_bytes": 12828672,
+          "pid": "1544649"
         }
       ],
-      "observed_process_bytes": 1838338048,
-      "old_estimate_bytes": 3652505856,
+      "observed_process_bytes": 1736892416,
       "processes": [
         {
           "bitrate": 900000,
@@ -1879,7 +1998,8 @@
           "track_inhibit": "meta=thumbvtt",
           "track_select": "video=maxbps"
         }
-      ]
+      ],
+      "recording_validated": true
     }
   ]
 }
