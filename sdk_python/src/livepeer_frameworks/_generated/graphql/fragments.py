@@ -3373,6 +3373,11 @@ class ClipInNodeDefault(BaseModel):
         description="Processing status (queued, processing, ready, failed)."
     )
     "Processing status (queued, processing, ready, failed)."
+    processing_wait_reason: Optional[str] = Field(
+        alias="processingWaitReason",
+        description="Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.",
+    )
+    "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
     error_message: Optional[str] = Field(
         alias="errorMessage",
         description="Processing failure detail from the artifact catalog.",
@@ -7548,13 +7553,13 @@ class NodeMetricDefault(BaseModel):
     cluster_id: Optional[str] = Field(alias="clusterId")
     cpu_usage: float = Field(alias="cpuUsage")
     memory_total: Optional[float] = Field(
-        alias="memoryTotal", description="Total memory in MiB."
+        alias="memoryTotal", description="Total memory in bytes."
     )
-    "Total memory in MiB."
+    "Total memory in bytes."
     memory_used: Optional[float] = Field(
-        alias="memoryUsed", description="Used memory in MiB."
+        alias="memoryUsed", description="Used memory in bytes."
     )
-    "Used memory in MiB."
+    "Used memory in bytes."
     disk_total: Optional[float] = Field(
         alias="diskTotal", description="Total disk capacity in bytes."
     )
@@ -19522,6 +19527,11 @@ class VodAssetInNodeDefault(BaseModel):
         description="Current processing/storage status of the asset.",
     )
     "Current processing/storage status of the asset."
+    processing_wait_reason: Optional[str] = Field(
+        alias="processingWaitReason",
+        description="Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.",
+    )
+    "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
     vod_asset_storage_location: str = Field(
         alias="vodAssetStorageLocation",
         description="Where the asset is stored (s3, local, freezing).",

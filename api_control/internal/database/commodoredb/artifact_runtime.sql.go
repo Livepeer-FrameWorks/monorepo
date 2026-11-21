@@ -70,7 +70,7 @@ SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.descripti
             WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
             ELSE 'processing' END::text AS status,
        c.error_message, c.storage_location, c.sync_status, c.is_synced, c.is_finalized,
-       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id
+       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id,c.processing_wait_reason
 FROM commodore.clips c
 WHERE c.tenant_id = $1 AND c.clip_hash = $2
 `
@@ -81,30 +81,31 @@ type GetClipRegistryParams struct {
 }
 
 type GetClipRegistryRow struct {
-	ID               string         `db:"id" json:"id"`
-	ClipHash         string         `db:"clip_hash" json:"clip_hash"`
-	PlaybackID       string         `db:"playback_id" json:"playback_id"`
-	CStreamID        string         `db:"c_stream_id" json:"c_stream_id"`
-	Title            sql.NullString `db:"title" json:"title"`
-	Description      sql.NullString `db:"description" json:"description"`
-	StartTime        int64          `db:"start_time" json:"start_time"`
-	Duration         int64          `db:"duration" json:"duration"`
-	ClipMode         sql.NullString `db:"clip_mode" json:"clip_mode"`
-	RequestedParams  string         `db:"requested_params" json:"requested_params"`
-	SizeBytes        sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
-	RetentionUntil   sql.NullTime   `db:"retention_until" json:"retention_until"`
-	RetentionSource  string         `db:"retention_source" json:"retention_source"`
-	CreatedAt        sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt        sql.NullTime   `db:"updated_at" json:"updated_at"`
-	ThumbnailCluster string         `db:"thumbnail_cluster" json:"thumbnail_cluster"`
-	HasThumbnails    bool           `db:"has_thumbnails" json:"has_thumbnails"`
-	Status           string         `db:"status" json:"status"`
-	ErrorMessage     sql.NullString `db:"error_message" json:"error_message"`
-	StorageLocation  sql.NullString `db:"storage_location" json:"storage_location"`
-	SyncStatus       sql.NullString `db:"sync_status" json:"sync_status"`
-	IsSynced         sql.NullBool   `db:"is_synced" json:"is_synced"`
-	IsFinalized      sql.NullBool   `db:"is_finalized" json:"is_finalized"`
-	StorageClusterID string         `db:"storage_cluster_id" json:"storage_cluster_id"`
+	ID                   string         `db:"id" json:"id"`
+	ClipHash             string         `db:"clip_hash" json:"clip_hash"`
+	PlaybackID           string         `db:"playback_id" json:"playback_id"`
+	CStreamID            string         `db:"c_stream_id" json:"c_stream_id"`
+	Title                sql.NullString `db:"title" json:"title"`
+	Description          sql.NullString `db:"description" json:"description"`
+	StartTime            int64          `db:"start_time" json:"start_time"`
+	Duration             int64          `db:"duration" json:"duration"`
+	ClipMode             sql.NullString `db:"clip_mode" json:"clip_mode"`
+	RequestedParams      string         `db:"requested_params" json:"requested_params"`
+	SizeBytes            sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
+	RetentionUntil       sql.NullTime   `db:"retention_until" json:"retention_until"`
+	RetentionSource      string         `db:"retention_source" json:"retention_source"`
+	CreatedAt            sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt            sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ThumbnailCluster     string         `db:"thumbnail_cluster" json:"thumbnail_cluster"`
+	HasThumbnails        bool           `db:"has_thumbnails" json:"has_thumbnails"`
+	Status               string         `db:"status" json:"status"`
+	ErrorMessage         sql.NullString `db:"error_message" json:"error_message"`
+	StorageLocation      sql.NullString `db:"storage_location" json:"storage_location"`
+	SyncStatus           sql.NullString `db:"sync_status" json:"sync_status"`
+	IsSynced             sql.NullBool   `db:"is_synced" json:"is_synced"`
+	IsFinalized          sql.NullBool   `db:"is_finalized" json:"is_finalized"`
+	StorageClusterID     string         `db:"storage_cluster_id" json:"storage_cluster_id"`
+	ProcessingWaitReason sql.NullString `db:"processing_wait_reason" json:"processing_wait_reason"`
 }
 
 func (q *Queries) GetClipRegistry(ctx context.Context, arg GetClipRegistryParams) (GetClipRegistryRow, error) {
@@ -135,6 +136,7 @@ func (q *Queries) GetClipRegistry(ctx context.Context, arg GetClipRegistryParams
 		&i.IsSynced,
 		&i.IsFinalized,
 		&i.StorageClusterID,
+		&i.ProcessingWaitReason,
 	)
 	return i, err
 }

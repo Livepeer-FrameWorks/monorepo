@@ -19,7 +19,7 @@ func TestGetNodeHealthUsesCapacityUnits(t *testing.T) {
 		EgressSource: ipcpb.BandwidthBudgetSource_BANDWIDTH_BUDGET_SOURCE_DEFAULT,
 	})
 	if err := manager.ApplyNodeLifecycle(context.Background(), &ipcpb.NodeLifecycleUpdate{
-		NodeId: "capacity-edge", IsHealthy: true, RamMax: 4 << 30, RamCurrent: 2 << 30,
+		NodeId: "capacity-edge", IsHealthy: true, MemoryMetricsAreBytes: true, RamMax: 4 << 30, RamCurrent: 2 << 30,
 		UpSpeed: 12500000, DownSpeed: 25000000, CapacityRevisionApplied: proto.Uint64(3),
 		ObservedValid: proto.Bool(true), ObservedSource: ipcpb.ObservedSource_OBSERVED_SOURCE_NIC,
 	}); err != nil {

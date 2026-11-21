@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
@@ -83,15 +84,14 @@ func (s *FoghornGRPCServer) CreateVodOriginalDownload(ctx context.Context, req *
 
 func (s *FoghornGRPCServer) DeleteVodOriginal(ctx context.Context, req *sharedpb.DeleteVodOriginalRequest) (*sharedpb.DeleteVodOriginalResponse, error) {
 	initial, err := s.originalForTenant(ctx, req.GetTenantId(), req.GetArtifactHash())
+	noOriginal := status.Code(err) == codes.FailedPrecondition && status.Convert(err).Message() == "original_not_kept"
+	if err != nil && !noOriginal {
+		return nil, err
+	}
 	if initial.Status.Valid && initial.Status.String != "ready" {
 		return nil, status.Error(codes.FailedPrecondition, "processing must finish before deleting its original")
 	}
-	if status.Code(err) == codes.FailedPrecondition && status.Convert(err).Message() == "original_not_kept" {
-		err = nil
-	}
-	if err != nil {
-		return nil, err
-	}
+
 	deleted := false
 	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		deleted = false
@@ -150,4 +150,45 @@ func (s *FoghornGRPCServer) requireOriginalRetentionReady(ctx context.Context) e
 		return status.Error(codes.FailedPrecondition, "original retention is waiting for release postdeploy activation")
 	}
 	return nil
+}
+
+// A stored acceptance owns its retention choice. Replaying it does not require
+// the activation gate for a new upload, nor create another command or multipart.
+func (s *FoghornGRPCServer) replayVodOriginalUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, bool, error) {
+	if req.GetVodHash() == "" {
+		return nil, false, nil
+	}
+	committed := false
+	if req.GetRequestId() != "" {
+		row, err := foghorndb.New(s.db).GetArtifactCreationCommandStatus(ctx, foghorndb.GetArtifactCreationCommandStatusParams{RequestID: req.GetRequestId(), TenantID: req.GetTenantId()})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, status.Error(codes.Unavailable, "could not read original upload retry state; retry the upload")
+		}
+		if row.Kind != "vod" || row.ArtifactHash != req.GetVodHash() {
+			return nil, false, status.Error(codes.FailedPrecondition, "request_id already used for a different artifact")
+		}
+		switch row.Status {
+		case "rejected":
+			return nil, false, status.Error(codes.FailedPrecondition, "VOD creation was terminally rejected")
+		case "committed":
+			committed = true
+		default:
+			return nil, false, nil
+		}
+	}
+	partSize, _ := storage.CalculatePartSize(req.GetSizeBytes())
+	replay, found, err := s.existingVodUploadResult(ctx, req.GetTenantId(), req.GetVodHash(), req.GetPlaybackId(), partSize)
+	if err != nil {
+		return nil, true, err
+	}
+	if !found {
+		if committed {
+			return nil, true, status.Error(codes.Internal, "committed VOD command has no artifact row")
+		}
+		return nil, true, nil
+	}
+	return replay, true, nil
 }

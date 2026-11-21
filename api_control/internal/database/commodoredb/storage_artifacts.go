@@ -35,6 +35,7 @@ type StorageArtifactRow struct {
 	Tracks                                                                           sql.NullString
 	IsSynced, IsFinalized                                                            sql.NullBool
 	Description, ErrorMessage, ThumbnailServingCluster                               string
+	ProcessingWaitReason                                                             string
 }
 
 type StorageArtifactCatalog struct {
@@ -52,7 +53,7 @@ const storageArtifactBaseSQL = `
 SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
        size_bytes, original_size_bytes, status, storage_location, created_at, updated_at, expires_at,
        retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails, duration_ms,
-       tracks, sync_status, is_synced, is_finalized, description, error_message, thumbnail_serving_cluster
+       tracks, sync_status, is_synced, is_finalized, description, error_message, thumbnail_serving_cluster, processing_wait_reason
 FROM (
     SELECT
         CASE WHEN COALESCE(v.origin_type, '') = 'dvr_chapter' THEN 'chapter' ELSE 'vod' END AS kind,
@@ -63,6 +64,7 @@ FROM (
         v.size_bytes, v.original_size_bytes,
         CASE WHEN v.retention_until IS NOT NULL AND v.retention_until <= NOW() THEN 'expired'
              WHEN v.lifecycle_status IN ('failed', 'aborted') OR v.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN v.lifecycle_status='queued' AND v.processing_wait_reason IS NOT NULL THEN 'queued'
              WHEN v.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN v.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(v.is_synced, false) THEN 'ready'
              ELSE 'processing' END AS status,
@@ -72,7 +74,8 @@ FROM (
         COALESCE(v.storage_cluster_id, v.origin_cluster_id, '') AS storage_cluster_id,
         v.has_thumbnails, v.duration AS duration_ms, v.tracks, v.sync_status, v.is_synced, v.is_finalized,
         COALESCE(v.description, '') AS description, COALESCE(v.error_message, '') AS error_message,
-        COALESCE(v.thumbnail_serving_cluster_id, v.storage_cluster_id, v.origin_cluster_id, '') AS thumbnail_serving_cluster
+        COALESCE(v.thumbnail_serving_cluster_id, v.storage_cluster_id, v.origin_cluster_id, '') AS thumbnail_serving_cluster,
+ COALESCE(v.processing_wait_reason, '') AS processing_wait_reason
     FROM commodore.vod_assets v
     LEFT JOIN commodore.streams st ON st.id = v.stream_id AND st.tenant_id = v.tenant_id
     WHERE v.tenant_id = $1 AND (v.library_visible = true OR COALESCE(v.origin_type, '') = 'dvr_chapter')
@@ -83,6 +86,7 @@ FROM (
         d.size_bytes, NULL::bigint AS original_size_bytes,
         CASE WHEN d.retention_until IS NOT NULL AND d.retention_until <= NOW() THEN 'expired'
              WHEN d.lifecycle_status IN ('failed', 'aborted') OR d.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN d.lifecycle_status='queued' AND d.processing_wait_reason IS NOT NULL THEN 'queued'
              WHEN d.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN d.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(d.is_synced, false) THEN 'ready'
              ELSE 'processing' END,
@@ -90,7 +94,7 @@ FROM (
         COALESCE(d.retention_source, ''), '', '', COALESCE(d.storage_cluster_id, d.origin_cluster_id, ''),
         d.has_thumbnails, d.duration, d.tracks, d.sync_status, d.is_synced, d.is_finalized,
         '', COALESCE(d.error_message, ''),
-        COALESCE(d.thumbnail_serving_cluster_id, d.storage_cluster_id, d.origin_cluster_id, '')
+        COALESCE(d.thumbnail_serving_cluster_id, d.storage_cluster_id, d.origin_cluster_id, ''), COALESCE(d.processing_wait_reason, '')
     FROM commodore.dvr_recordings d
     LEFT JOIN commodore.streams st ON st.id = d.stream_id AND st.tenant_id = d.tenant_id
     WHERE d.tenant_id = $1
@@ -101,6 +105,7 @@ FROM (
         c.size_bytes, NULL::bigint AS original_size_bytes,
         CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
              WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN c.lifecycle_status='queued' AND c.processing_wait_reason IS NOT NULL THEN 'queued'
              WHEN c.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
              ELSE 'processing' END,
@@ -108,7 +113,7 @@ FROM (
         COALESCE(c.retention_source, ''), '', '', COALESCE(c.storage_cluster_id, c.origin_cluster_id, ''),
         c.has_thumbnails, c.duration, c.tracks, c.sync_status, c.is_synced, c.is_finalized,
         COALESCE(c.description, ''), COALESCE(c.error_message, ''),
-        COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, '')
+        COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, ''), COALESCE(c.processing_wait_reason, '')
     FROM commodore.clips c
     LEFT JOIN commodore.streams st ON st.id = c.stream_id AND st.tenant_id = c.tenant_id
     WHERE c.tenant_id = $1
@@ -132,7 +137,9 @@ func storageArtifactPredicates(arg StorageArtifactFilter, includeKinds bool) ([]
 		}
 		filters = append(filters, "kind IN ("+strings.Join(placeholders, ", ")+")")
 	}
-	if arg.Status != "" {
+	if arg.Status == "processing" {
+		filters = append(filters, "status IN ('processing','queued')")
+	} else if arg.Status != "" {
 		add("status = $%d", arg.Status)
 	}
 	if arg.ArtifactHashes != nil {
@@ -223,7 +230,7 @@ func (q *Queries) ListStorageArtifactCatalog(ctx context.Context, arg StorageArt
 			&row.Kind, &row.ID, &row.ArtifactHash, &row.PlaybackID, &row.StreamID, &row.StreamTitle, &row.Title, &row.SecondaryLabel,
 			&row.SizeBytes, &row.OriginalSizeBytes, &row.Status, &row.StorageLocation, &row.CreatedAt, &row.UpdatedAt, &row.ExpiresAt,
 			&row.RetentionSource, &row.OriginType, &row.OriginID, &row.StorageClusterID, &row.HasThumbnails, &row.DurationMs,
-			&row.Tracks, &row.SyncStatus, &row.IsSynced, &row.IsFinalized, &row.Description, &row.ErrorMessage, &row.ThumbnailServingCluster,
+			&row.Tracks, &row.SyncStatus, &row.IsSynced, &row.IsFinalized, &row.Description, &row.ErrorMessage, &row.ThumbnailServingCluster, &row.ProcessingWaitReason,
 		); err != nil {
 			return out, err
 		}

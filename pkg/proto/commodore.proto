@@ -1269,6 +1269,7 @@ message UpdateArtifactCatalogSnapshotRequest {
   optional google.protobuf.Timestamp ended_at = 24;
   // A legacy producer omits this flag and preserves the recorded capture times.
   bool recording_times_present = 25;
+  optional string processing_wait_reason = 26;
 
 }
 
@@ -1494,6 +1495,7 @@ message StorageArtifactInfo {
   optional string error_message = 29; // Processing failure detail; projected from foghorn.artifacts.error_message
   optional int64 original_size_bytes = 30; // Byte-identical retained upload; absent when not kept.
   optional string parent_recording_id = 31;
+  optional string processing_wait_reason = 32;
 }
 
 message ListStorageArtifactsResponse {

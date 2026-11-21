@@ -46,10 +46,10 @@ const (
 	ProcessingResultTenantID               = "tenant_id"
 	ProcessingRetryCauseSourceStall        = "source_stall"
 	ProcessingRetryCauseMemoryPressure     = "memory_pressure"
-	ProcessingRetryCauseInsufficientMemory = "insufficient_memory"
 	ProcessingRetryCauseMemoryNodeTooSmall = "memory_node_too_small"
 	ProcessingRequiredMemoryBytes          = "required_memory_bytes"
 	ProcessingMemoryPolicy                 = "memory_processes_json"
+	ProcessingNodeMemoryBudget             = "processing_memory_budget_bytes"
 )
 
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
@@ -241,6 +241,14 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")
 			copyProcessOptionWithFallback(av, prof, p, "target_mask")
 			copyProcessOptionWithFallback(av, prof, p, "restart_type")
+			copyProcessOptionWithFallback(av, prof, p, "restart_delay")
+			if av["restart_type"] != "disabled" {
+				av["restart_type"] = "backoff"
+				delay, present := av["restart_delay"].(float64)
+				if !present || delay <= 0 {
+					av["restart_delay"] = 30000
+				}
+			}
 			copyProcessOptionWithFallback(av, prof, p, "memory_budgeted")
 			copyProcessOption(av, prof, "source_track")
 			copyProcessOption(av, prof, "gopsize")
@@ -1079,4 +1087,58 @@ func livepeerProfileToAVProfile(profile string) string {
 	default:
 		return ""
 	}
+}
+
+// ApplyAudioChannelPolicy keeps platform Opus outputs browser-compatible while
+// AAC retains surround and a mono source remains mono.
+func ApplyAudioChannelPolicy(raw string) string {
+	var processes []map[string]any
+	if json.Unmarshal([]byte(raw), &processes) != nil {
+		return raw
+	}
+	changed := false
+	for _, p := range processes {
+		if p["process"] == "AV" && p["codec"] == "opus" && p["max_channels"] != float64(2) {
+			p["max_channels"] = 2
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	encoded, err := json.Marshal(processes)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
+// BoundLiveProcessRestarts prevents an unavailable live decoder from respawning
+// continuously. Deliberately disabled or explicitly delayed restarts are kept.
+func BoundLiveProcessRestarts(raw string) string {
+	var processes []map[string]any
+	if json.Unmarshal([]byte(raw), &processes) != nil {
+		return raw
+	}
+	changed := false
+	for _, p := range processes {
+		if p["process"] != "AV" || p["restart_type"] == "disabled" {
+			continue
+		}
+		delay, delayed := p["restart_delay"].(float64)
+		if delayed && delay > 0 {
+			continue
+		}
+		p["restart_type"] = "backoff"
+		p["restart_delay"] = 30000
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return raw
+	}
+	return string(out)
 }

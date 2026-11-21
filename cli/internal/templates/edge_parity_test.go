@@ -356,7 +356,7 @@ func TestEdgeMistFinishOwnsProcessGroupCleanup(t *testing.T) {
 
 func TestEdgeMistFinishWipesSharedMemoryWithoutSafeGroup(t *testing.T) {
 	finish := readFile(t, repositoryPath(t, "edge/rootfs/etc/s6-overlay/s6-rc.d/mistserver/finish"))
-	for _, group := range []string{"", "0", "1"} {
+	for _, group := range []string{"", "0", "1", "00", "01", "0999"} {
 		t.Run("group="+group, func(t *testing.T) {
 			dir := t.TempDir()
 			page := filepath.Join(dir, "MstStale")
@@ -364,8 +364,15 @@ func TestEdgeMistFinishWipesSharedMemoryWithoutSafeGroup(t *testing.T) {
 				t.Fatal(err)
 			}
 			command := exec.CommandContext(context.Background(), "sh", "-s", "--", "0", "0", "0", group)
-			command.Stdin = strings.NewReader(strings.ReplaceAll(finish, "/dev/shm/", dir+"/"))
+			// Stub signals so a regressed guard cannot target the test runner.
+			logPath := filepath.Join(dir, "signals")
+			command.Env = append(os.Environ(), "FINISH_SIGNAL_LOG="+logPath)
+			script := "kill() { printf '%s\\n' \"$*\" >>\"$FINISH_SIGNAL_LOG\"; return 1; }\n" + strings.ReplaceAll(finish, "/dev/shm/", dir+"/")
+			command.Stdin = strings.NewReader(script)
 			output, err := command.CombinedOutput()
+			if signals, _ := os.ReadFile(logPath); len(signals) > 0 {
+				t.Fatalf("unsafe process group %q attempted signals: %s", group, signals)
+			}
 			if _, statErr := os.Stat(page); !os.IsNotExist(statErr) {
 				t.Fatalf("unsafe group %q skipped shared-memory wipe: err=%v output=%s stat=%v", group, err, output, statErr)
 			}

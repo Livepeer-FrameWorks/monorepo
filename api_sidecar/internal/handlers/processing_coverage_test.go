@@ -103,17 +103,23 @@ func TestRecordingEndRetryable(t *testing.T) {
 	}
 }
 
-func TestActiveStreamsContain(t *testing.T) {
+func TestProcessingStreamPresence(t *testing.T) {
 	name := "processing+abc"
-	if !activeStreamsContain(map[string]interface{}{"active_streams": map[string]interface{}{name: map[string]interface{}{}}}, name) {
-		t.Fatal("a listed stream is active")
-	}
-	if !activeStreamsContain(map[string]interface{}{"active_streams": []interface{}{name}}, name) {
-		t.Fatal("a stream in the short form list is active")
-	}
-	if activeStreamsContain(map[string]interface{}{"active_streams": map[string]interface{}{}}, name) ||
-		activeStreamsContain(map[string]interface{}{}, name) {
-		t.Fatal("an unlisted stream has stopped")
+	for _, tc := range []struct {
+		response      map[string]interface{}
+		known, active bool
+	}{
+		{map[string]interface{}{}, false, false},
+		{map[string]interface{}{"active_streams": 123}, false, false},
+		{map[string]interface{}{"active_streams": []interface{}{name}}, false, false},
+		{map[string]interface{}{"active_streams": nil}, true, false},
+		{map[string]interface{}{"active_streams": map[string]interface{}{}}, true, false},
+		{map[string]interface{}{"active_streams": map[string]interface{}{name: map[string]interface{}{}}}, true, true},
+	} {
+		known, active := processingStreamPresence(tc.response, name)
+		if known != tc.known || active != tc.active {
+			t.Fatalf("presence for %v = %v,%v; want %v,%v", tc.response, known, active, tc.known, tc.active)
+		}
 	}
 }
 

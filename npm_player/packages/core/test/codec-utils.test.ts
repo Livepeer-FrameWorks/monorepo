@@ -20,6 +20,7 @@ describe("CodecUtils", () => {
       ["AC3", "ac-3"],
       ["AC-3", "ac-3"],
       ["EAC3", "ec-3"],
+      ["EAC-3", "ec-3"],
       ["EC3", "ec-3"],
       ["E-AC3", "ec-3"],
       ["EC-3", "ec-3"],

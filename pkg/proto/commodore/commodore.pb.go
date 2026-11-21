@@ -5289,7 +5289,8 @@ type UpdateArtifactCatalogSnapshotRequest struct {
 	StartedAt                 *timestamppb.Timestamp `protobuf:"bytes,23,opt,name=started_at,json=startedAt,proto3,oneof" json:"started_at,omitempty"`
 	EndedAt                   *timestamppb.Timestamp `protobuf:"bytes,24,opt,name=ended_at,json=endedAt,proto3,oneof" json:"ended_at,omitempty"`
 	// A legacy producer omits this flag and preserves the recorded capture times.
-	RecordingTimesPresent bool `protobuf:"varint,25,opt,name=recording_times_present,json=recordingTimesPresent,proto3" json:"recording_times_present,omitempty"`
+	RecordingTimesPresent bool    `protobuf:"varint,25,opt,name=recording_times_present,json=recordingTimesPresent,proto3" json:"recording_times_present,omitempty"`
+	ProcessingWaitReason  *string `protobuf:"bytes,26,opt,name=processing_wait_reason,json=processingWaitReason,proto3,oneof" json:"processing_wait_reason,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -5490,6 +5491,13 @@ func (x *UpdateArtifactCatalogSnapshotRequest) GetRecordingTimesPresent() bool {
 		return x.RecordingTimesPresent
 	}
 	return false
+}
+
+func (x *UpdateArtifactCatalogSnapshotRequest) GetProcessingWaitReason() string {
+	if x != nil && x.ProcessingWaitReason != nil {
+		return *x.ProcessingWaitReason
+	}
+	return ""
 }
 
 type UpdateArtifactCatalogSnapshotResponse struct {
@@ -6955,17 +6963,18 @@ type StorageArtifactInfo struct {
 	ThumbnailAssets  *shared.ThumbnailAssets `protobuf:"bytes,21,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
 	SyncStatus       *string                 `protobuf:"bytes,22,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
 	// has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
-	HasLocalCopy      *bool         `protobuf:"varint,23,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
-	IsSynced          *bool         `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
-	IsFinalized       *bool         `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
-	DurationMs        *int64        `protobuf:"varint,26,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`                        // Duration (ms); clips retain requested duration until measured, DVR/VOD may be null
-	Tracks            []*MediaTrack `protobuf:"bytes,27,rep,name=tracks,proto3" json:"tracks,omitempty"`                                                         // Finalized A/V track summary; empty until finalized
-	Description       *string       `protobuf:"bytes,28,opt,name=description,proto3,oneof" json:"description,omitempty"`                                         // User-provided description (VOD uploads); from commodore business row
-	ErrorMessage      *string       `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`                   // Processing failure detail; projected from foghorn.artifacts.error_message
-	OriginalSizeBytes *int64        `protobuf:"varint,30,opt,name=original_size_bytes,json=originalSizeBytes,proto3,oneof" json:"original_size_bytes,omitempty"` // Byte-identical retained upload; absent when not kept.
-	ParentRecordingId *string       `protobuf:"bytes,31,opt,name=parent_recording_id,json=parentRecordingId,proto3,oneof" json:"parent_recording_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	HasLocalCopy         *bool         `protobuf:"varint,23,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
+	IsSynced             *bool         `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized          *bool         `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	DurationMs           *int64        `protobuf:"varint,26,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`                        // Duration (ms); clips retain requested duration until measured, DVR/VOD may be null
+	Tracks               []*MediaTrack `protobuf:"bytes,27,rep,name=tracks,proto3" json:"tracks,omitempty"`                                                         // Finalized A/V track summary; empty until finalized
+	Description          *string       `protobuf:"bytes,28,opt,name=description,proto3,oneof" json:"description,omitempty"`                                         // User-provided description (VOD uploads); from commodore business row
+	ErrorMessage         *string       `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`                   // Processing failure detail; projected from foghorn.artifacts.error_message
+	OriginalSizeBytes    *int64        `protobuf:"varint,30,opt,name=original_size_bytes,json=originalSizeBytes,proto3,oneof" json:"original_size_bytes,omitempty"` // Byte-identical retained upload; absent when not kept.
+	ParentRecordingId    *string       `protobuf:"bytes,31,opt,name=parent_recording_id,json=parentRecordingId,proto3,oneof" json:"parent_recording_id,omitempty"`
+	ProcessingWaitReason *string       `protobuf:"bytes,32,opt,name=processing_wait_reason,json=processingWaitReason,proto3,oneof" json:"processing_wait_reason,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *StorageArtifactInfo) Reset() {
@@ -7204,6 +7213,13 @@ func (x *StorageArtifactInfo) GetOriginalSizeBytes() int64 {
 func (x *StorageArtifactInfo) GetParentRecordingId() string {
 	if x != nil && x.ParentRecordingId != nil {
 		return *x.ParentRecordingId
+	}
+	return ""
+}
+
+func (x *StorageArtifactInfo) GetProcessingWaitReason() string {
+	if x != nil && x.ProcessingWaitReason != nil {
+		return *x.ProcessingWaitReason
 	}
 	return ""
 }
@@ -18904,7 +18920,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\r_bitrate_kbpsB\v\n" +
 	"\t_channelsB\x0e\n" +
 	"\f_sample_rateB\x0f\n" +
-	"\r_source_track\"\xae\v\n" +
+	"\r_source_track\"\x84\f\n" +
 	"$UpdateArtifactCatalogSnapshotRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12;\n" +
 	"\n" +
@@ -18936,7 +18952,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x17 \x01(\v2\x1a.google.protobuf.TimestampH\x0eR\tstartedAt\x88\x01\x01\x12:\n" +
 	"\bended_at\x18\x18 \x01(\v2\x1a.google.protobuf.TimestampH\x0fR\aendedAt\x88\x01\x01\x126\n" +
-	"\x17recording_times_present\x18\x19 \x01(\bR\x15recordingTimesPresentB\r\n" +
+	"\x17recording_times_present\x18\x19 \x01(\bR\x15recordingTimesPresent\x129\n" +
+	"\x16processing_wait_reason\x18\x1a \x01(\tH\x10R\x14processingWaitReason\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\x0e\n" +
 	"\f_sync_statusB\f\n" +
@@ -18953,7 +18970,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\x1d_thumbnail_serving_cluster_idB\x16\n" +
 	"\x14_original_size_bytesB\r\n" +
 	"\v_started_atB\v\n" +
-	"\t_ended_atJ\x04\b\f\x10\r\"\x9f\x03\n" +
+	"\t_ended_atB\x19\n" +
+	"\x17_processing_wait_reasonJ\x04\b\f\x10\r\"\x9f\x03\n" +
 	"%UpdateArtifactCatalogSnapshotResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12)\n" +
 	"\x10current_revision\x18\x02 \x01(\x03R\x0fcurrentRevision\x12D\n" +
@@ -19093,7 +19111,7 @@ const file_commodore_proto_rawDesc = "" +
 	" \x01(\tR\x06status\x12'\n" +
 	"\x0fartifact_hashes\x18\v \x03(\tR\x0eartifactHashesB\f\n" +
 	"\n" +
-	"_stream_id\"\xae\f\n" +
+	"_stream_id\"\x84\r\n" +
 	"\x13StorageArtifactInfo\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12#\n" +
@@ -19134,7 +19152,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\vdescription\x18\x1c \x01(\tH\x0eR\vdescription\x88\x01\x01\x12(\n" +
 	"\rerror_message\x18\x1d \x01(\tH\x0fR\ferrorMessage\x88\x01\x01\x123\n" +
 	"\x13original_size_bytes\x18\x1e \x01(\x03H\x10R\x11originalSizeBytes\x88\x01\x01\x123\n" +
-	"\x13parent_recording_id\x18\x1f \x01(\tH\x11R\x11parentRecordingId\x88\x01\x01B\x0e\n" +
+	"\x13parent_recording_id\x18\x1f \x01(\tH\x11R\x11parentRecordingId\x88\x01\x01\x129\n" +
+	"\x16processing_wait_reason\x18  \x01(\tH\x12R\x14processingWaitReason\x88\x01\x01B\x0e\n" +
 	"\f_playback_idB\f\n" +
 	"\n" +
 	"_stream_idB\r\n" +
@@ -19155,7 +19174,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\f_descriptionB\x10\n" +
 	"\x0e_error_messageB\x16\n" +
 	"\x14_original_size_bytesB\x16\n" +
-	"\x14_parent_recording_idJ\x04\b\f\x10\r\"\xba\x02\n" +
+	"\x14_parent_recording_idB\x19\n" +
+	"\x17_processing_wait_reasonJ\x04\b\f\x10\r\"\xba\x02\n" +
 	"\x1cListStorageArtifactsResponse\x12<\n" +
 	"\tartifacts\x18\x01 \x03(\v2\x1e.commodore.StorageArtifactInfoR\tartifacts\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +

@@ -20,22 +20,30 @@ function declarations(file: string, names?: string[]): string {
   );
   if (!config) throw new Error("tsconfig.json did not parse");
   const path = `${root}${file}`;
-  const program = ts.createProgram([path], {
-    ...config.options,
-    noEmit: false,
-    declaration: true,
-    emitDeclarationOnly: true,
-  });
-  let text = "";
-  program.emit(
-    program.getSourceFile(path),
-    (name, data) => {
-      if (name.endsWith(".d.ts")) text = data;
+  const input = ts.sys.readFile(path);
+  if (input === undefined) throw new Error(`Source file not found: ${file}`);
+  // Signature snapshots need declaration emit; the type-check target checks the dependency graph.
+  const emitted = ts.transpileDeclaration(input, {
+    fileName: path,
+    compilerOptions: {
+      ...config.options,
+      noEmit: false,
+      declaration: true,
+      emitDeclarationOnly: true,
     },
-    undefined,
-    true
+    reportDiagnostics: true,
+  });
+  const errors = emitted.diagnostics?.filter(
+    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error
   );
-  const source = ts.createSourceFile("out.d.ts", text, ts.ScriptTarget.Latest, true);
+  if (errors?.length) {
+    throw new Error(
+      errors
+        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))
+        .join("\n")
+    );
+  }
+  const source = ts.createSourceFile("out.d.ts", emitted.outputText, ts.ScriptTarget.Latest, true);
   const printer = ts.createPrinter({ removeComments: true });
   const isPrivate = (node: ts.Node) =>
     ts.canHaveModifiers(node) &&

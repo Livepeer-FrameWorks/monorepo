@@ -120,7 +120,7 @@ func TestMemoryDeferralSurvivesTenMinutesAndCompletes_RealPG(t *testing.T) {
 	}
 	logger := logging.NewLogger()
 	for attempt := 0; attempt < 5; attempt++ {
-		if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure}}, "edge-1", logger); err != nil {
+		if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure}}, "edge-1", logger); err != nil {
 			t.Fatal(err)
 		}
 		var job, artifact string
@@ -203,7 +203,7 @@ func TestSourceStallRetriesOutsideRetryBudget_RealPG(t *testing.T) {
 		processProcessingJobResult(&ipcpb.ProcessingJobResult{
 			JobId: processingFailureJob, Status: "retryable",
 			Error:   "processing stream did not boot (source read failed: upstream did not answer before the reader gave up)",
-			Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseSourceStall},
+			Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseSourceStall},
 		}, node, logger)
 	}
 	type jobState struct {
@@ -286,39 +286,42 @@ func TestSourceStallRetriesOutsideRetryBudget_RealPG(t *testing.T) {
 	}
 }
 
-func TestProcessingMemoryRequirementAndBoundedWait_RealPG(t *testing.T) {
+func TestProcessingMemoryRequirementAndWaiting_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	previous := db
 	SetDB(conn)
 	t.Cleanup(func() { SetDB(previous) })
 	seedActiveImportJob(t, conn)
 	policy := `[{"process":"AV","codec":"H264","resolution":"0x2160"}]`
-	result := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "node too small", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryNodeTooSmall, mist.ProcessingRequiredMemoryBytes: "2147483648", mist.ProcessingMemoryPolicy: policy}}
+	result := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "node too small", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryNodeTooSmall, mist.ProcessingRequiredMemoryBytes: "2147483648", mist.ProcessingMemoryPolicy: policy}}
 	if err := processProcessingJobResult(result, "edge-1", logging.NewLogger()); err != nil {
 		t.Fatal(err)
 	}
 	var required int64
+	var excluded, waitRecorded bool
 	var stored, status string
-	if err := conn.QueryRow(`SELECT required_memory_bytes,processes_json,status FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&required, &stored, &status); err != nil {
+	if err := conn.QueryRow(`SELECT required_memory_bytes,processes_json,status,memory_rejected_nodes=ARRAY['edge-1']::TEXT[],wait_started_at IS NOT NULL FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&required, &stored, &status, &excluded, &waitRecorded); err != nil {
 		t.Fatal(err)
 	}
-	if required != 2147483648 || stored != policy || status != "queued" {
+	if required != 2147483648 || stored != policy || status != "queued" || !excluded || !waitRecorded {
 		t.Fatalf("memory placement lost on requeue: %d %s %s", required, stored, status)
 	}
-	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET status='processing',processing_node_id='edge-1',capacity_wait_started_at=NOW()-INTERVAL '25 minutes' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
+	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET status='processing',processing_node_id='edge-2',wait_started_at=NOW()-INTERVAL '25 minutes' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
 		t.Fatal(err)
 	}
-	if err := processProcessingJobResult(result, "edge-1", logging.NewLogger()); err != nil {
+	result.Outputs[mist.ProcessingResultRetryCause] = mist.ProcessingRetryCauseMemoryPressure
+
+	if err := processProcessingJobResult(result, "edge-2", logging.NewLogger()); err != nil {
 		t.Fatal(err)
 	}
 	var artifact string
 	if err := conn.QueryRow(`SELECT j.status,a.status FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &artifact); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || artifact != "failed" {
-		t.Fatalf("capacity waited forever: %s/%s", status, artifact)
+	if status != "queued" || artifact != "queued" {
+		t.Fatalf("queued work expired while memory was busy: %s/%s", status, artifact)
 	}
-	if got := len(domainRows(t, conn, "upload.failed")); got != 1 {
+	if got := len(domainRows(t, conn, "upload.failed")); got != 0 {
 		t.Fatalf("failure events: %d", got)
 	}
 }
@@ -329,7 +332,7 @@ func TestNeverFitVODCapacityFailure_RealPG(t *testing.T) {
 	SetDB(conn)
 	t.Cleanup(func() { SetDB(previous) })
 	seedActiveImportJob(t, conn)
-	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "4K processing workload cannot fit the cluster's largest node", Outputs: map[string]string{mist.ProcessingResultRetryCause: "insufficient_memory"}}, "edge-1", logging.NewLogger()); err != nil {
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "4K processing workload cannot fit the cluster's largest node", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, mist.ProcessingResultRetryCause: "insufficient_memory"}}, "edge-1", logging.NewLogger()); err != nil {
 		t.Fatal(err)
 	}
 	var job, artifact string

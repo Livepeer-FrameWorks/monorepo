@@ -188,3 +188,22 @@ func TestClusterServeAccessibleForScopeIsPureAndFailClosed(t *testing.T) {
 		t.Fatal("unresolved tenant authorized platform-shared serving")
 	}
 }
+
+func TestClusterAccessHonorsSchedulingDeadlineWithoutGrant(t *testing.T) {
+	freshClusterAccessCache(t)
+	previous := tenantStorageRoutingFn
+	t.Cleanup(func() { tenantStorageRoutingFn = previous })
+	tenantStorageRoutingFn = func(ctx context.Context, _ string) (tenantStorageRouting, bool) {
+		<-ctx.Done()
+		return tenantStorageRouting{}, false
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if ClusterAccessibleForTenantContext(ctx, "cluster", "tenant-scheduler") {
+		t.Fatal("unproven tenant authorization was granted")
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("authorization outlived scheduling deadline: %s", elapsed)
+	}
+}

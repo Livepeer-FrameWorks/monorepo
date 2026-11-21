@@ -17,11 +17,12 @@ import (
 )
 
 func TestClusterCannotFitLadderFailsJobAndUpload_RealPG(t *testing.T) {
+	useRuntimeProcessingInventory(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	old := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = old })
 	touchInCluster(sm, "small", routeTestCluster)
 	setNodeMemory(sm, "small", 1536*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
@@ -51,7 +52,7 @@ func TestClusterCannotFitLadderFailsJobAndUpload_RealPG(t *testing.T) {
 	}
 }
 
-func TestMemoryCapacityWaitRecovery_RealPG(t *testing.T) {
+func TestProcessingUploadDeadlineAndDeletedArtifactRecovery_RealPG(t *testing.T) {
 	previous := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previous })
@@ -65,10 +66,10 @@ func TestMemoryCapacityWaitRecovery_RealPG(t *testing.T) {
 	for i, artifactStatus := range []string{"queued", "deleted"} {
 		job := fmt.Sprintf("7a6e0000-0000-4000-8000-%012d", i+10)
 		hash := fmt.Sprintf("memorywaitrecovery%014d", i)
-		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,artifact_type,tenant_id,status) VALUES($1,'vod',$2::uuid,$3)`, hash, tenant, artifactStatus); err != nil {
+		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,artifact_type,tenant_id,status,created_at) VALUES($1,'vod',$2::uuid,$3,NOW()-INTERVAL '25 hours')`, hash, tenant, artifactStatus); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,required_memory_bytes,capacity_wait_started_at)VALUES($1::uuid,$2::uuid,$3,'transcode','queued',1024,NOW()-INTERVAL '25 minutes')`, job, tenant, hash); err != nil {
+		if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,required_memory_bytes,wait_started_at)VALUES($1::uuid,$2::uuid,$3,'transcode','queued',1024,NOW()-INTERVAL '25 minutes')`, job, tenant, hash); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,28 +91,30 @@ func TestMemoryCapacityWaitRecovery_RealPG(t *testing.T) {
 
 func TestProcessingMemoryMigrationReruns_RealPG(t *testing.T) {
 	conn := startRealPGForCleanup(t)
-	if _, err := conn.Exec(`ALTER TABLE foghorn.processing_jobs DROP COLUMN required_memory_bytes CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN capacity_wait_started_at`); err != nil {
+	if _, err := conn.Exec(`ALTER TABLE foghorn.processing_jobs DROP COLUMN required_memory_bytes CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_started_at;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_reason CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN source_probe;ALTER TABLE foghorn.processing_jobs DROP COLUMN memory_rejected_nodes`); err != nil {
 		t.Fatal(err)
 	}
 	data, err := dbsql.Content.ReadFile("migrations/foghorn/v0.3.16/expand/014_processing_memory_placement.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	statements := strings.Split(string(data), ";")
-	if _, err := conn.Exec(statements[0]); err != nil {
+	refusals, err := dbsql.Content.ReadFile("migrations/foghorn/v0.3.16/expand/015_processing_memory_node_refusals.sql")
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Each statement can have committed before a Yugabyte migration is recorded.
+	first := strings.SplitN(string(data), ";", 2)[0]
+	if _, err := conn.Exec(first); err != nil {
+		t.Fatal(err)
+	}
+	// Replay a partially applied expand, preserving dollar-quoted function bodies.
 	for replay := 0; replay < 2; replay++ {
-		for _, statement := range statements {
-			if strings.TrimSpace(statement) == "" {
-				continue
-			}
-			if _, err := conn.Exec(statement); err != nil {
+		for _, migration := range [][]byte{data, refusals} {
+			if _, err := conn.Exec(string(migration)); err != nil {
 				t.Fatalf("replay %d: %v", replay, err)
 			}
 		}
 	}
+
 	var validated bool
 	if err := conn.QueryRow(`SELECT convalidated FROM pg_constraint WHERE conrelid='foghorn.processing_jobs'::regclass AND conname='chk_processing_required_memory'`).Scan(&validated); err != nil {
 		t.Fatal(err)
@@ -137,7 +140,7 @@ func TestProcessingMemoryMigrationReruns_RealPG(t *testing.T) {
 	}
 }
 
-func TestMemoryCapacityWaitUsesElapsedTimeAcrossTimeZones_RealPG(t *testing.T) {
+func TestUploadDeadlineUsesElapsedTimeAcrossTimeZones_RealPG(t *testing.T) {
 	for _, offset := range []int{3600, -18000} {
 		t.Run(fmt.Sprint(offset), func(t *testing.T) {
 			previous := time.Local
@@ -149,13 +152,13 @@ func TestMemoryCapacityWaitUsesElapsedTimeAcrossTimeZones_RealPG(t *testing.T) {
 				t.Fatal(err)
 			}
 			const tenant = "7a6e0000-0000-4000-8000-000000000004"
-			for index, minutes := range []int{10, 25} {
+			for index, minutes := range []int{20, 25} {
 				job := fmt.Sprintf("7a6e0000-0000-4000-8000-%012d", index+50)
 				hash := fmt.Sprintf("memoryclock%020d", index)
-				if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,artifact_type,tenant_id,status) VALUES($1,'vod',$2::uuid,'queued')`, hash, tenant); err != nil {
+				if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,artifact_type,tenant_id,status,created_at) VALUES($1,'vod',$2::uuid,'queued',NOW()-$3::int*INTERVAL '1 hour')`, hash, tenant, minutes); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,required_memory_bytes,capacity_wait_started_at) VALUES($1::uuid,$2::uuid,$3,'transcode','queued',1024,NOW()-$4::int*INTERVAL '1 minute')`, job, tenant, hash, minutes); err != nil {
+				if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,required_memory_bytes,wait_started_at) VALUES($1::uuid,$2::uuid,$3,'transcode','queued',1024,NOW()-$4::int*INTERVAL '1 hour')`, job, tenant, hash, minutes); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -181,9 +184,49 @@ func TestMemoryCapacityWaitUsesElapsedTimeAcrossTimeZones_RealPG(t *testing.T) {
 					t.Fatal(err)
 				}
 				if got != want {
-					t.Errorf("scheduler offset %d changed elapsed memory wait: job %d=%s, want %s", offset, index, got, want)
+					t.Errorf("scheduler offset %d changed whole-upload deadline: job %d=%s, want %s", offset, index, got, want)
 				}
 			}
 		})
+	}
+}
+
+func TestAvailabilityDeferralHasNoTimeout_RealPG(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	conn := startRealPGForCleanup(t)
+	const job, tenant, hash = "7a7e0000-0000-4000-8000-000000000001", "7a7e0000-0000-4000-8000-000000000002", "availabilitywait0000000000000001"
+	if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,artifact_type,tenant_id,status)VALUES($1,'vod',$2::uuid,'queued')`, hash, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,required_memory_bytes,created_at)VALUES($1::uuid,$2::uuid,$3,'transcode','dispatched',2147483648,NOW()-INTERVAL '25 minutes')`, job, tenant, hash); err != nil {
+		t.Fatal(err)
+	}
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: conn, Logger: logging.NewLogger()})
+	request := &processingJob{JobID: job, TenantID: tenant, ArtifactHash: sql.NullString{String: hash, Valid: true}, ArtifactType: sql.NullString{String: "vod", Valid: true}, OriginCluster: routeTestCluster, RequiredMemoryBytes: 2147483648}
+	d.dispatchJob(context.Background(), request)
+	var clock sql.NullTime
+	if err := conn.QueryRow(`SELECT wait_started_at FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, job, tenant).Scan(&clock); err != nil {
+		t.Fatal(err)
+	}
+	if !clock.Valid {
+		t.Fatal("queued wait was not timestamped for observability")
+	}
+	d.recoverStale()
+	var status string
+	if err := conn.QueryRow(`SELECT status FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, job, tenant).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("availability wait became terminal: %s", status)
+	}
+	old := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = old })
+	touchInCluster(sm, "recovered", routeTestCluster)
+	setNodeMemory(sm, "recovered", 16*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	if id, reason := routeProcessingJob(request); id != "recovered" {
+		t.Fatalf("recovered node not selected: %s %s", id, reason)
 	}
 }

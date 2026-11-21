@@ -62,3 +62,7 @@ describe("track-display helpers", () => {
     expect(formatTrackBitrate({ trackType: "video", codec: "H264", bitrateKbps: 4 })).toBeNull();
   });
 });
+
+it("classifies Mist EAC-3 without a type label as audio", () => {
+  expect(classifyTrack({ codec: "EAC-3" })).toBe("audio");
+});

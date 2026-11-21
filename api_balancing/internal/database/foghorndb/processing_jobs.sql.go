@@ -8,6 +8,7 @@ package foghorndb
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -32,10 +33,39 @@ func (q *Queries) AssignProcessingJobNode(ctx context.Context, arg AssignProcess
 	return result.RowsAffected()
 }
 
+const cacheProcessingJobDispatchPolicy = `-- name: CacheProcessingJobDispatchPolicy :execrows
+UPDATE foghorn.processing_jobs
+SET processes_json=$1,updated_at=NOW()
+WHERE job_id=$2 AND tenant_id::text=$3
+ AND processing_node_id=$4 AND status='dispatched'
+`
+
+type CacheProcessingJobDispatchPolicyParams struct {
+	ProcessesJson sql.NullString `db:"processes_json" json:"processes_json"`
+	JobID         string         `db:"job_id" json:"job_id"`
+	TenantID      string         `db:"tenant_id" json:"tenant_id"`
+	NodeID        sql.NullString `db:"node_id" json:"node_id"`
+}
+
+// Dispatch persists only the policy. Memory admission is acknowledged by the
+// edge after its durable ledger acquires the reservation.
+func (q *Queries) CacheProcessingJobDispatchPolicy(ctx context.Context, arg CacheProcessingJobDispatchPolicyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cacheProcessingJobDispatchPolicy,
+		arg.ProcessesJson,
+		arg.JobID,
+		arg.TenantID,
+		arg.NodeID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const claimQueuedProcessingJobs = `-- name: ClaimQueuedProcessingJobs :many
 WITH claimed AS (
     UPDATE foghorn.processing_jobs AS job
-    SET status = 'dispatched', updated_at = NOW()
+    SET status = 'dispatched', updated_at = NOW(), created_at=COALESCE(job.created_at,NOW() AT TIME ZONE 'UTC')
     WHERE job_id IN (
         SELECT pj.job_id
         FROM foghorn.processing_jobs AS pj
@@ -44,14 +74,14 @@ WITH claimed AS (
           AND (pj.next_attempt_at IS NULL OR pj.next_attempt_at <= NOW())
           AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
                OR (pj.job_type = 'thumbnail' AND a.status = 'ready'))
-        ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
+        ORDER BY pj.created_at, pj.job_id
         LIMIT 20
         FOR UPDATE OF pj SKIP LOCKED
     )
     RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
               output_profiles,
               retry_count, processes_json, source_url,
-              source_params, preferred_node_id, required_memory_bytes
+              source_params, preferred_node_id, required_memory_bytes, memory_rejected_nodes, wait_reason, wait_started_at, source_probe, created_at
 )
 SELECT c.job_id, c.tenant_id, c.artifact_hash,
        COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -61,9 +91,10 @@ SELECT c.job_id, c.tenant_id, c.artifact_hash,
        c.processes_json, a.internal_name, COALESCE(a.stream_id::text, '')::text AS stream_id,
        a.stream_internal_name,
        COALESCE(a.durable_backend_local, false) AS durable_backend_local,
-       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id, c.required_memory_bytes
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id, c.required_memory_bytes, c.memory_rejected_nodes, c.wait_reason, c.wait_started_at, c.source_probe, c.created_at, COALESCE(a.created_at,c.created_at) AS upload_created_at
 FROM claimed AS c
 LEFT JOIN foghorn.artifacts AS a ON c.artifact_hash = a.artifact_hash AND c.tenant_id = a.tenant_id
+ORDER BY c.created_at,c.job_id
 `
 
 type ClaimQueuedProcessingJobsRow struct {
@@ -87,6 +118,12 @@ type ClaimQueuedProcessingJobsRow struct {
 	DurableBackendLocal bool           `db:"durable_backend_local" json:"durable_backend_local"`
 	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
+	MemoryRejectedNodes []string       `db:"memory_rejected_nodes" json:"memory_rejected_nodes"`
+	WaitReason          sql.NullString `db:"wait_reason" json:"wait_reason"`
+	WaitStartedAt       sql.NullTime   `db:"wait_started_at" json:"wait_started_at"`
+	SourceProbe         sql.NullString `db:"source_probe" json:"source_probe"`
+	CreatedAt           sql.NullTime   `db:"created_at" json:"created_at"`
+	UploadCreatedAt     sql.NullTime   `db:"upload_created_at" json:"upload_created_at"`
 }
 
 func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedProcessingJobsRow, error) {
@@ -119,6 +156,12 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 			&i.DurableBackendLocal,
 			&i.OriginClusterID,
 			&i.RequiredMemoryBytes,
+			pq.Array(&i.MemoryRejectedNodes),
+			&i.WaitReason,
+			&i.WaitStartedAt,
+			&i.SourceProbe,
+			&i.CreatedAt,
+			&i.UploadCreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -135,7 +178,7 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 
 const commitDispatchedProcessingJob = `-- name: CommitDispatchedProcessingJob :execrows
 UPDATE foghorn.processing_jobs
-SET status = 'processing', processing_node_id = $2, routing_reason = $3,
+SET status = 'processing', wait_reason = NULL, wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
     started_at = NOW(), updated_at = NOW(),
     progress_advanced_at = COALESCE(progress_advanced_at, NOW())
 WHERE job_id = $1 AND status = 'dispatched'
@@ -156,42 +199,57 @@ func (q *Queries) CommitDispatchedProcessingJob(ctx context.Context, arg CommitD
 }
 
 const deferUnroutableProcessingJob = `-- name: DeferUnroutableProcessingJob :exec
-UPDATE foghorn.processing_jobs
-SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
-    next_attempt_at = NOW() + make_interval(secs => $1::double precision),
-    capacity_wait_started_at = CASE WHEN required_memory_bytes > 0 THEN COALESCE(capacity_wait_started_at, NOW()) ELSE capacity_wait_started_at END
-WHERE job_id = $2
+WITH deferred AS (
+ UPDATE foghorn.processing_jobs AS job
+ SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+     next_attempt_at = NOW() + make_interval(secs => $1::double precision),
+     wait_reason = $2::text,
+     wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC')
+ WHERE job.job_id = $3 AND job.tenant_id::text = $4
+ RETURNING job.artifact_hash,job.tenant_id
+)
+UPDATE foghorn.artifacts AS a
+SET catalog_revision=GREATEST(a.catalog_revision+1,4503599627370496),updated_at=NOW()
+FROM deferred d
+WHERE a.artifact_hash=d.artifact_hash AND a.tenant_id=d.tenant_id
 `
 
 type DeferUnroutableProcessingJobParams struct {
 	DeferSeconds float64 `db:"defer_seconds" json:"defer_seconds"`
+	WaitReason   string  `db:"wait_reason" json:"wait_reason"`
 	JobID        string  `db:"job_id" json:"job_id"`
+	TenantID     string  `db:"tenant_id" json:"tenant_id"`
 }
 
 // Returns a claimed job no node can run to the queue and keeps it out of
 // ClaimQueuedProcessingJobs until next_attempt_at.
 func (q *Queries) DeferUnroutableProcessingJob(ctx context.Context, arg DeferUnroutableProcessingJobParams) error {
-	_, err := q.db.ExecContext(ctx, deferUnroutableProcessingJob, arg.DeferSeconds, arg.JobID)
+	_, err := q.db.ExecContext(ctx, deferUnroutableProcessingJob,
+		arg.DeferSeconds,
+		arg.WaitReason,
+		arg.JobID,
+		arg.TenantID,
+	)
 	return err
 }
 
 const failExhaustedProcessingJob = `-- name: FailExhaustedProcessingJob :one
 WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
-    SET status = 'failed',
+    SET status = 'failed', wait_reason = NULL, wait_started_at = NULL,
         error_message = CASE
-            WHEN job.status = 'queued' AND job.capacity_wait_started_at < $5::timestamp THEN 'processing memory remained busy beyond the processing wait window'
-            WHEN job.status = 'queued' THEN 'stuck queued: node-pinned source unavailable'
-            WHEN job.updated_at < $2 AND job.retry_count >= $3 THEN 'max retries exceeded'
+            WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < $1::timestamp)
+              THEN 'upload processing timed out after 24 hours'
+            WHEN EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')) THEN 'source artifact is no longer available'
+            WHEN job.updated_at < $2::timestamp AND job.retry_count >= $3::integer THEN 'max retries exceeded'
             ELSE 'no processing progress within the watchdog window' END,
         updated_at = NOW()
-    WHERE job.job_id = $1
-      AND ((job.status IN ('dispatched', 'processing') AND job.updated_at < $2 AND job.retry_count >= $3)
-           OR (job.status = 'queued' AND job.created_at < $4
-               AND job.preferred_node_id IS NOT NULL
-               AND job.source_params->>'source_kind' IN ('live', 'dvr_rolling'))
+    WHERE job.job_id = $4
+      AND ((job.status IN ('dispatched', 'processing') AND job.updated_at < $2::timestamp AND job.retry_count >= $3::integer)
            OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < $5::timestamp)
-           OR (job.status = 'queued' AND job.capacity_wait_started_at < $5::timestamp))
+           OR (job.status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
+           OR (job.status IN ('queued', 'dispatched', 'processing') AND EXISTS (
+             SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < $1::timestamp)))
     RETURNING artifact_hash, tenant_id, error_message
 )
 SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -200,14 +258,14 @@ SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
        COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
        f.error_message
 FROM failed AS f
-LEFT JOIN foghorn.artifacts AS a ON f.artifact_hash = a.artifact_hash
+LEFT JOIN foghorn.artifacts AS a ON f.artifact_hash = a.artifact_hash AND f.tenant_id=a.tenant_id
 `
 
 type FailExhaustedProcessingJobParams struct {
-	JobID              string        `db:"job_id" json:"job_id"`
+	UploadDeadline     time.Time     `db:"upload_deadline" json:"upload_deadline"`
 	UpdatedAt          sql.NullTime  `db:"updated_at" json:"updated_at"`
 	RetryCount         sql.NullInt32 `db:"retry_count" json:"retry_count"`
-	CreatedAt          sql.NullTime  `db:"created_at" json:"created_at"`
+	JobID              string        `db:"job_id" json:"job_id"`
 	ProgressAdvancedAt sql.NullTime  `db:"progress_advanced_at" json:"progress_advanced_at"`
 }
 
@@ -220,14 +278,12 @@ type FailExhaustedProcessingJobRow struct {
 	ErrorMessage       sql.NullString `db:"error_message" json:"error_message"`
 }
 
-// The last arm is the progress watchdog: an active job whose media position has
-// not advanced since sqlc.narg(progress_advanced_at)::timestamp, however recently its lease heartbeat refreshed updated_at.
 func (q *Queries) FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error) {
 	row := q.db.QueryRowContext(ctx, failExhaustedProcessingJob,
-		arg.JobID,
+		arg.UploadDeadline,
 		arg.UpdatedAt,
 		arg.RetryCount,
-		arg.CreatedAt,
+		arg.JobID,
 		arg.ProgressAdvancedAt,
 	)
 	var i FailExhaustedProcessingJobRow
@@ -303,28 +359,29 @@ func (q *Queries) InsertProcessingJob(ctx context.Context, arg InsertProcessingJ
 
 const listExhaustedProcessingJobIDs = `-- name: ListExhaustedProcessingJobIDs :many
 SELECT job_id
-FROM foghorn.processing_jobs
-WHERE (status IN ('dispatched', 'processing') AND updated_at < $1 AND retry_count >= $2)
-   OR (status = 'queued' AND created_at < $3
-       AND preferred_node_id IS NOT NULL
-       AND source_params->>'source_kind' IN ('live', 'dvr_rolling'))
-   OR (status IN ('dispatched', 'processing') AND progress_advanced_at < $4)
-   OR (status = 'queued' AND capacity_wait_started_at < $4)
+FROM foghorn.processing_jobs AS job
+WHERE (status IN ('dispatched', 'processing') AND updated_at < $1::timestamp AND retry_count >= $2::integer)
+   OR (status IN ('dispatched', 'processing') AND progress_advanced_at < $3::timestamp)
+   OR (status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
+   OR (status IN ('queued', 'dispatched', 'processing') AND EXISTS (
+       SELECT 1 FROM foghorn.artifacts AS upload
+       WHERE upload.artifact_hash = job.artifact_hash AND upload.tenant_id = job.tenant_id
+         AND upload.artifact_type = 'vod' AND COALESCE(upload.created_at,job.created_at) < $4::timestamp))
 `
 
 type ListExhaustedProcessingJobIDsParams struct {
 	UpdatedAt          sql.NullTime  `db:"updated_at" json:"updated_at"`
 	RetryCount         sql.NullInt32 `db:"retry_count" json:"retry_count"`
-	CreatedAt          sql.NullTime  `db:"created_at" json:"created_at"`
 	ProgressAdvancedAt sql.NullTime  `db:"progress_advanced_at" json:"progress_advanced_at"`
+	UploadDeadline     time.Time     `db:"upload_deadline" json:"upload_deadline"`
 }
 
 func (q *Queries) ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExhaustedProcessingJobIDsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listExhaustedProcessingJobIDs,
 		arg.UpdatedAt,
 		arg.RetryCount,
-		arg.CreatedAt,
 		arg.ProgressAdvancedAt,
+		arg.UploadDeadline,
 	)
 	if err != nil {
 		return nil, err
@@ -455,18 +512,18 @@ WITH requeued AS (
         next_attempt_at = NOW() + INTERVAL '30 seconds',
         required_memory_bytes = GREATEST(required_memory_bytes, $2::bigint),
         processes_json = COALESCE(NULLIF($3::text, ''), processes_json),
-        capacity_wait_started_at = COALESCE(capacity_wait_started_at, NOW())
-    WHERE job.job_id = $4
+        wait_reason = CASE WHEN $4::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
+        wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC'),
+        memory_rejected_nodes = CASE WHEN $4::boolean AND NOT ($5::text=ANY(memory_rejected_nodes)) THEN array_append(memory_rejected_nodes,$5::text) ELSE memory_rejected_nodes END
+    WHERE job.job_id = $6
       AND job.processing_node_id = $5
-      AND job.tenant_id::text = COALESCE(NULLIF($6::text, ''),
-        (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$4 AND assigned.processing_node_id=$5))
+      AND job.tenant_id::text = $7
       AND job.status IN ('dispatched', 'processing')
-      AND COALESCE(job.capacity_wait_started_at, NOW()) > NOW() - CAST($7 AS text)::interval
       AND EXISTS (SELECT 1 FROM foghorn.artifacts AS owned WHERE owned.artifact_hash=job.artifact_hash AND owned.tenant_id=job.tenant_id AND owned.status NOT IN ('deleted','expired','aborted','failed'))
     RETURNING artifact_hash, tenant_id
 ), artifact AS (
     UPDATE foghorn.artifacts AS a
-    SET status = 'queued', updated_at = NOW()
+    SET status = 'queued', catalog_revision=GREATEST(a.catalog_revision+1,4503599627370496), updated_at = NOW()
     FROM requeued AS r
     WHERE a.artifact_hash = r.artifact_hash
       AND a.tenant_id = r.tenant_id
@@ -481,24 +538,23 @@ type RequeueCapacityDeferredProcessingJobParams struct {
 	ErrorMessage        sql.NullString `db:"error_message" json:"error_message"`
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
 	ProcessesJson       string         `db:"processes_json" json:"processes_json"`
+	NodeTooSmall        bool           `db:"node_too_small" json:"node_too_small"`
+	NodeID              string         `db:"node_id" json:"node_id"`
 	JobID               string         `db:"job_id" json:"job_id"`
-	NodeID              sql.NullString `db:"node_id" json:"node_id"`
 	TenantID            string         `db:"tenant_id" json:"tenant_id"`
-	WaitWindow          string         `db:"wait_window" json:"wait_window"`
 }
 
 // Capacity backpressure is not a failed processing attempt. Only the assigned
 // node can return an active job, and the queue delay bounds redispatch traffic.
-// The assigned job supplies the tenant when an older edge omits its echo.
 func (q *Queries) RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error) {
 	row := q.db.QueryRowContext(ctx, requeueCapacityDeferredProcessingJob,
 		arg.ErrorMessage,
 		arg.RequiredMemoryBytes,
 		arg.ProcessesJson,
-		arg.JobID,
+		arg.NodeTooSmall,
 		arg.NodeID,
+		arg.JobID,
 		arg.TenantID,
-		arg.WaitWindow,
 	)
 	var requeued int32
 	err := row.Scan(&requeued)

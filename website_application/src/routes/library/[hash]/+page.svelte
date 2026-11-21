@@ -15,6 +15,7 @@
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import type { ContentType } from "$lib/config";
   import AssetRetentionDialog from "$lib/components/library/AssetRetentionDialog.svelte";
+  import { processingStatusLabel } from "$lib/library/processing-status";
   import { formatBytes } from "$lib/utils/formatters";
   import { formatDate } from "$lib/utils/stream-helpers";
 
@@ -383,8 +384,22 @@
             </div>
             <div class="flex justify-between">
               <span class="text-muted-foreground">Status</span>
-              <span class="text-foreground">{artifact.status}</span>
+              <span class="text-foreground"
+                >{processingStatusLabel(
+                  artifact.status,
+                  false,
+                  artifact.processingWaitReason
+                )}</span
+              >
             </div>
+            {#if artifact.kind === "VOD" && ["ready", "completed"].includes(artifact.status.toLowerCase())}
+              <div class="flex justify-between text-sm">
+                <span class="text-muted-foreground">Original upload</span>
+                <span class="text-foreground"
+                  >{artifact.originalFile ? "Retained" : "Not retained"}</span
+                >
+              </div>
+            {/if}
             <div class="flex justify-between gap-4">
               <span class="text-muted-foreground shrink-0">Hash</span>
               <span class="font-mono text-xs text-foreground truncate">{artifact.hash}</span>

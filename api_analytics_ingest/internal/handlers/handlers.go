@@ -2372,6 +2372,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		return fmt.Errorf("unexpected payload for node_lifecycle_update")
 	}
 	nodeLifecycle := tp.NodeLifecycleUpdate
+	ramTotal, ramUsed, shmTotal, shmUsed := mist.NodeMemoryBytes(nodeLifecycle)
 
 	if h.metrics != nil {
 		h.metrics.HandlerWrites.WithLabelValues("live_nodes", "attempt").Inc()
@@ -2440,7 +2441,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	clusterID := mt.GetClusterId()
 	if appendErr := stateBatch.Append(periscopeingestdb.NodeStateRow{
 		TenantID: uuid.MustParse(event.TenantID), ClusterID: clusterID, NodeID: nodeLifecycle.GetNodeId(), CPUPercent: cpuPercent,
-		RAMUsedBytes: uint64(nodeLifecycle.GetRamCurrent()), RAMTotalBytes: uint64(nodeLifecycle.GetRamMax()),
+		RAMUsedBytes: ramUsed, RAMTotalBytes: ramTotal,
 		DiskUsedBytes: uint64(nodeLifecycle.GetDiskUsedBytes()), DiskTotalBytes: uint64(nodeLifecycle.GetDiskTotalBytes()),
 		UpSpeed: uint64(nodeLifecycle.GetUpSpeed()), DownSpeed: uint64(nodeLifecycle.GetDownSpeed()), BWLimit: uint64(nodeLifecycle.GetBwLimit()),
 		ActiveStreams: uint32(nodeLifecycle.GetActiveStreams()), IsHealthy: boolToUint8(nodeLifecycle.GetIsHealthy()),
@@ -2481,8 +2482,8 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 
 	if err := metricsBatch.Append(periscopeingestdb.NodeMetricsSampleRow{
 		Timestamp: event.Timestamp, TenantID: uuid.MustParse(event.TenantID), ClusterID: clusterID, NodeID: nodeLifecycle.GetNodeId(),
-		CPUUsage: cpuPercent, RAMMax: uint64(nodeLifecycle.GetRamMax()), RAMCurrent: uint64(nodeLifecycle.GetRamCurrent()),
-		SHMTotalBytes: uint64(nodeLifecycle.GetShmTotalBytes()), SHMUsedBytes: uint64(nodeLifecycle.GetShmUsedBytes()),
+		CPUUsage: cpuPercent, RAMMax: ramTotal, RAMCurrent: ramUsed,
+		SHMTotalBytes: shmTotal, SHMUsedBytes: shmUsed,
 		DiskTotalBytes: uint64(nodeLifecycle.GetDiskTotalBytes()), DiskUsedBytes: uint64(nodeLifecycle.GetDiskUsedBytes()),
 		BandwidthIn: uint64(nodeLifecycle.GetBandwidthInTotal()), BandwidthOut: uint64(nodeLifecycle.GetBandwidthOutTotal()),
 		UpSpeed: uint64(nodeLifecycle.GetUpSpeed()), DownSpeed: uint64(nodeLifecycle.GetDownSpeed()),

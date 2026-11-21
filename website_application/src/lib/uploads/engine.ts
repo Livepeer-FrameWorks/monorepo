@@ -13,6 +13,7 @@ import type {
 import { WorkerPool } from "./worker-pool";
 
 export interface UploadEngineConfig {
+  keepOriginal?: boolean;
   uploadId: string;
   file: File;
   partSize: number;
@@ -69,6 +70,7 @@ export function createUploadEngine(cfg: UploadEngineConfig): UploadEngine {
 
   const persist = async () => {
     const record: UploadSessionRecord = {
+      keepOriginal: cfg.keepOriginal,
       uploadId: cfg.uploadId,
       file: fileIdentityOf(cfg.file),
       partSize: cfg.partSize,

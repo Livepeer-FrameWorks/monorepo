@@ -706,12 +706,13 @@ type ClipInfo struct {
 	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
 	SyncStatus      *string `protobuf:"bytes,24,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
 	// has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
-	HasLocalCopy  *bool   `protobuf:"varint,25,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
-	IsSynced      *bool   `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
-	IsFinalized   *bool   `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
-	ErrorMessage  *string `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	HasLocalCopy         *bool   `protobuf:"varint,25,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
+	IsSynced             *bool   `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized          *bool   `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	ErrorMessage         *string `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
+	ProcessingWaitReason *string `protobuf:"bytes,30,opt,name=processing_wait_reason,json=processingWaitReason,proto3,oneof" json:"processing_wait_reason,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ClipInfo) Reset() {
@@ -922,6 +923,13 @@ func (x *ClipInfo) GetIsFinalized() bool {
 func (x *ClipInfo) GetErrorMessage() string {
 	if x != nil && x.ErrorMessage != nil {
 		return *x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ClipInfo) GetProcessingWaitReason() string {
+	if x != nil && x.ProcessingWaitReason != nil {
+		return *x.ProcessingWaitReason
 	}
 	return ""
 }
@@ -4465,12 +4473,13 @@ type VodAssetInfo struct {
 	OriginId        *string `protobuf:"bytes,26,opt,name=origin_id,json=originId,proto3,oneof" json:"origin_id,omitempty"`       // origin entity id (chapter_id for dvr_chapter)
 	SyncStatus      string  `protobuf:"bytes,27,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
 	// has_local_copy: a node holds a present full local copy (origin or cache).
-	HasLocalCopy      bool   `protobuf:"varint,28,opt,name=has_local_copy,json=hasLocalCopy,proto3" json:"has_local_copy,omitempty"`
-	IsSynced          bool   `protobuf:"varint,29,opt,name=is_synced,json=isSynced,proto3" json:"is_synced,omitempty"`
-	IsFinalized       bool   `protobuf:"varint,30,opt,name=is_finalized,json=isFinalized,proto3" json:"is_finalized,omitempty"`
-	OriginalSizeBytes *int64 `protobuf:"varint,32,opt,name=original_size_bytes,json=originalSizeBytes,proto3,oneof" json:"original_size_bytes,omitempty"` // Size in bytes of the byte-identical retained upload.
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	HasLocalCopy         bool    `protobuf:"varint,28,opt,name=has_local_copy,json=hasLocalCopy,proto3" json:"has_local_copy,omitempty"`
+	IsSynced             bool    `protobuf:"varint,29,opt,name=is_synced,json=isSynced,proto3" json:"is_synced,omitempty"`
+	IsFinalized          bool    `protobuf:"varint,30,opt,name=is_finalized,json=isFinalized,proto3" json:"is_finalized,omitempty"`
+	OriginalSizeBytes    *int64  `protobuf:"varint,32,opt,name=original_size_bytes,json=originalSizeBytes,proto3,oneof" json:"original_size_bytes,omitempty"` // Size in bytes of the byte-identical retained upload.
+	ProcessingWaitReason *string `protobuf:"bytes,33,opt,name=processing_wait_reason,json=processingWaitReason,proto3,oneof" json:"processing_wait_reason,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *VodAssetInfo) Reset() {
@@ -4718,6 +4727,13 @@ func (x *VodAssetInfo) GetOriginalSizeBytes() int64 {
 		return *x.OriginalSizeBytes
 	}
 	return 0
+}
+
+func (x *VodAssetInfo) GetProcessingWaitReason() string {
+	if x != nil && x.ProcessingWaitReason != nil {
+		return *x.ProcessingWaitReason
+	}
+	return ""
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -5545,7 +5561,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x12effective_start_ms\x18\b \x01(\x03R\x10effectiveStartMs\x122\n" +
 	"\x15effective_duration_ms\x18\t \x01(\x03R\x13effectiveDurationMs\x12\x18\n" +
 	"\apartial\x18\n" +
-	" \x01(\bR\apartial\"\x87\n" +
+	" \x01(\bR\apartial\"\xdd\n" +
 	"\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -5582,7 +5598,8 @@ const file_shared_proto_rawDesc = "" +
 	"\tis_synced\x18\x1a \x01(\bH\tR\bisSynced\x88\x01\x01\x12&\n" +
 	"\fis_finalized\x18\x1b \x01(\bH\n" +
 	"R\visFinalized\x88\x01\x01\x12(\n" +
-	"\rerror_message\x18\x1d \x01(\tH\vR\ferrorMessage\x88\x01\x01B\r\n" +
+	"\rerror_message\x18\x1d \x01(\tH\vR\ferrorMessage\x88\x01\x01\x129\n" +
+	"\x16processing_wait_reason\x18\x1e \x01(\tH\fR\x14processingWaitReason\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\f\n" +
 	"\n" +
 	"_clip_modeB\x13\n" +
@@ -5596,7 +5613,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"_is_syncedB\x0f\n" +
 	"\r_is_finalizedB\x10\n" +
-	"\x0e_error_messageJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14J\x04\b\x1c\x10\x1dR\faccess_countR\rlast_accessed\"J\n" +
+	"\x0e_error_messageB\x19\n" +
+	"\x17_processing_wait_reasonJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14J\x04\b\x1c\x10\x1dR\faccess_countR\rlast_accessed\"J\n" +
 	"\x0eGetClipRequest\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"~\n" +
@@ -6005,7 +6023,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x14requested_by_user_id\x18\x03 \x01(\tR\x11requestedByUserId\"L\n" +
 	"\x16DeleteVodAssetResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x86\f\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xdc\f\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -6052,7 +6070,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x0ehas_local_copy\x18\x1c \x01(\bR\fhasLocalCopy\x12\x1b\n" +
 	"\tis_synced\x18\x1d \x01(\bR\bisSynced\x12!\n" +
 	"\fis_finalized\x18\x1e \x01(\bR\visFinalized\x123\n" +
-	"\x13original_size_bytes\x18  \x01(\x03H\x10R\x11originalSizeBytes\x88\x01\x01B\r\n" +
+	"\x13original_size_bytes\x18  \x01(\x03H\x10R\x11originalSizeBytes\x88\x01\x01\x129\n" +
+	"\x16processing_wait_reason\x18! \x01(\tH\x11R\x14processingWaitReason\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +
@@ -6071,7 +6090,8 @@ const file_shared_proto_rawDesc = "" +
 	"\f_origin_typeB\f\n" +
 	"\n" +
 	"_origin_idB\x16\n" +
-	"\x14_original_size_bytesJ\x04\b\x1f\x10 \"\xa5\x03\n" +
+	"\x14_original_size_bytesB\x19\n" +
+	"\x17_processing_wait_reasonJ\x04\b\x1f\x10 \"\xa5\x03\n" +
 	"\vVodMetadata\x12\x1f\n" +
 	"\vduration_ms\x18\x01 \x01(\x05R\n" +
 	"durationMs\x12\x1e\n" +

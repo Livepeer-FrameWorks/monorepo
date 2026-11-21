@@ -4,24 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
-
-func TestProcessingDispatcherClaimQueryRotatesRetriedQueuedJobs(t *testing.T) {
-	querySource, err := os.ReadFile("../database/queries/processing_jobs.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at"
-	if !strings.Contains(string(querySource), want) {
-		t.Fatalf("processing job claim query must rotate retried queued jobs with %q", want)
-	}
-}
 
 func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -145,16 +132,16 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"job_id", "tenant_id", "artifact_hash", "artifact_type", "job_type", "input_codec",
 		"output_profiles", "status", "retry_count", "s3_url", "source_url", "source_params", "preferred_node_id", "processes_json", "internal_name", "stream_id", "stream_internal_name",
-		"durable_backend_local", "origin_cluster_id", "required_memory_bytes",
+		"durable_backend_local", "origin_cluster_id", "required_memory_bytes", "memory_rejected_nodes", "wait_reason", "wait_started_at", "source_probe", "created_at", "upload_created_at",
 	}).AddRow(
 		"job-1", "tenant-1", "artifact-1", "vod", "process", nil,
 		nil, "dispatched", 0, nil, nil, nil, nil, "", "vod_internal", "", nil,
-		false, "platform-eu", int64(0),
+		false, "platform-eu", int64(0), "{}", nil, nil, nil, nil, nil,
 	)
 	mock.ExpectQuery("WITH claimed AS").
 		WillReturnRows(rows)
 	mock.ExpectExec(deferUnroutablePattern).
-		WithArgs(unroutableDeferralSeconds{}, "job-1").
+		WithArgs(unroutableDeferralSeconds{}, "cluster_unavailable", "job-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{

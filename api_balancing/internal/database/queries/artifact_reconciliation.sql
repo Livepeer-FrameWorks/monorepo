@@ -90,7 +90,10 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text AS tenant_id,
        a.catalog_revision, a.status,
        a.retention_until,
        a.error_message, a.thumbnail_serving_cluster_id,
-       v.original_size_bytes, a.started_at, a.ended_at
+       v.original_size_bytes, a.started_at, a.ended_at,
+       COALESCE((SELECT j.wait_reason FROM foghorn.processing_jobs j
+        WHERE j.artifact_hash=a.artifact_hash AND j.tenant_id=a.tenant_id AND j.status='queued'
+        ORDER BY j.created_at ASC LIMIT 1),'')::text AS processing_wait_reason
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE a.tenant_id IS NOT NULL

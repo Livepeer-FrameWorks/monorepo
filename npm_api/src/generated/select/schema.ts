@@ -926,6 +926,8 @@ export interface Clip {
     sizeBytes: (Scalars['Float'] | null)
     /** Processing status (queued, processing, ready, failed). */
     status: Scalars['String']
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason: (Scalars['String'] | null)
     /** Processing failure detail from the artifact catalog. */
     errorMessage: (Scalars['String'] | null)
     /** When the clip was requested. */
@@ -3389,7 +3391,7 @@ export interface Mutation {
     setVodOriginalPolicy: SetMediaRetentionPolicyResult
     /** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
     createVodOriginalDownload: CreateVodOriginalDownloadResult
-    /** Permanently delete only the retained upload; processed playback remains available. */
+    /** Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available. */
     deleteVodOriginal: DeleteVodOriginalResult
     /** Atomically saves the requested verbs. Saved does not mean effective on every cell. */
     applyMediaPlacementChange: MediaPlacementChangeResult
@@ -3543,9 +3545,9 @@ export interface NodeMetric {
     nodeId: Scalars['String']
     clusterId: (Scalars['String'] | null)
     cpuUsage: Scalars['Float']
-    /** Total memory in MiB. */
+    /** Total memory in bytes. */
     memoryTotal: (Scalars['Float'] | null)
-    /** Used memory in MiB. */
+    /** Used memory in bytes. */
     memoryUsed: (Scalars['Float'] | null)
     /** Total disk capacity in bytes. */
     diskTotal: (Scalars['Float'] | null)
@@ -5286,6 +5288,8 @@ export interface StorageArtifact {
     errorMessage: (Scalars['String'] | null)
     sizeBytes: (Scalars['Float'] | null)
     status: Scalars['String']
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason: (Scalars['String'] | null)
     storageLocation: (Scalars['String'] | null)
     /** ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore). */
     storageClusterId: (Scalars['String'] | null)
@@ -6825,6 +6829,8 @@ export interface VodAsset {
     filename: (Scalars['String'] | null)
     /** Current processing/storage status of the asset. */
     status: VodAssetStatus
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason: (Scalars['String'] | null)
     /** Where the asset is stored (s3, local, freezing). */
     storageLocation: Scalars['String']
     /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
@@ -8241,6 +8247,8 @@ export interface ClipGenqlSelection{
     sizeBytes?: boolean | number
     /** Processing status (queued, processing, ready, failed). */
     status?: boolean | number
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason?: boolean | number
     /** Processing failure detail from the artifact catalog. */
     errorMessage?: boolean | number
     /** When the clip was requested. */
@@ -11381,7 +11389,7 @@ export interface MutationGenqlSelection{
     setVodOriginalPolicy?: (SetMediaRetentionPolicyResultGenqlSelection & { __args?: {keepVodOriginals?: (Scalars['Boolean'] | null)} })
     /** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
     createVodOriginalDownload?: (CreateVodOriginalDownloadResultGenqlSelection & { __args: {id: Scalars['ID']} })
-    /** Permanently delete only the retained upload; processed playback remains available. */
+    /** Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available. */
     deleteVodOriginal?: (DeleteVodOriginalResultGenqlSelection & { __args: {id: Scalars['ID']} })
     /** Atomically saves the requested verbs. Saved does not mean effective on every cell. */
     applyMediaPlacementChange?: (MediaPlacementChangeResultGenqlSelection & { __args: {input: ApplyMediaPlacementChangeInput} })
@@ -11580,9 +11588,9 @@ export interface NodeMetricGenqlSelection{
     nodeId?: boolean | number
     clusterId?: boolean | number
     cpuUsage?: boolean | number
-    /** Total memory in MiB. */
+    /** Total memory in bytes. */
     memoryTotal?: boolean | number
-    /** Used memory in MiB. */
+    /** Used memory in bytes. */
     memoryUsed?: boolean | number
     /** Total disk capacity in bytes. */
     diskTotal?: boolean | number
@@ -13827,6 +13835,8 @@ export interface StorageArtifactGenqlSelection{
     errorMessage?: boolean | number
     sizeBytes?: boolean | number
     status?: boolean | number
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason?: boolean | number
     storageLocation?: boolean | number
     /** ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore). */
     storageClusterId?: boolean | number
@@ -15692,6 +15702,8 @@ export interface VodAssetGenqlSelection{
     filename?: boolean | number
     /** Current processing/storage status of the asset. */
     status?: boolean | number
+    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    processingWaitReason?: boolean | number
     /** Where the asset is stored (s3, local, freezing). */
     storageLocation?: boolean | number
     /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */

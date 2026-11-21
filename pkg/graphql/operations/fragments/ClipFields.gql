@@ -13,6 +13,7 @@ fragment ClipFields on Clip {
   storagePath
   sizeBytes
   status
+  processingWaitReason
   createdAt
   updatedAt
   clipMode

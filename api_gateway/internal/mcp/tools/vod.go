@@ -216,6 +216,9 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 		if r.KeepOriginal != nil && !*r.KeepOriginal && args.KeepOriginal != nil && *args.KeepOriginal {
 			output.Message += " Original retention is temporarily unavailable; this upload keeps only the processed video."
 		}
+		if r.KeepOriginal != nil && !*r.KeepOriginal && (args.KeepOriginal == nil || !*args.KeepOriginal) {
+			output.Message += " This upload keeps only the processed video; no original upload will be retained."
+		}
 		if r.ArtifactHash != "" {
 			relay := globalid.Encode(globalid.TypeVodAsset, r.ArtifactHash)
 			output.ID = &relay

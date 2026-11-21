@@ -2056,6 +2056,25 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	// Receive loop and heartbeat sender
 	errCh := make(chan error, 1)
 	go func() {
+		protectionSeen := false
+		applyProtection := func(update *ipcpb.ProcessingMemoryReservation) {
+			if update == nil {
+				return
+			}
+			before := sidecarcfg.ProcessingProtectedMemory("")
+			accepted, applyErr := sidecarcfg.ApplyProcessingMemoryReservation(cfg.StateDir, update, !protectionSeen)
+			if accepted {
+				protectionSeen = true
+			}
+			if applyErr != nil {
+				logger.WithError(applyErr).Warn("Could not persist processing queue protection")
+			}
+			if sidecarcfg.ProcessingProtectedMemory("") < before {
+				if err := SendProcessingMemoryReleased(update.GetJobId()); err != nil {
+					logger.WithError(err).Warn("Could not announce released processing protection")
+				}
+			}
+		}
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
@@ -2142,12 +2161,15 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 						}
 					}
 				}
+			case *ipcpb.ControlMessage_ProcessingMemoryReservation:
+				applyProtection(x.ProcessingMemoryReservation)
 			case *ipcpb.ControlMessage_ConfigSeed:
 				// Receive desired config seed and trigger reconcile.
 				// The sender callback lets Helmsman ACK back over the
 				// existing bidi stream after TLS bundles are applied and
 				// Caddy is reloaded; Foghorn gates DNS publishing on this.
 				if x.ConfigSeed != nil {
+					applyProtection(x.ConfigSeed.GetProcessingMemoryReservation())
 					if finalizeErr := finalizeAcceptedEnrollment(cfg.StateDir, cfg.NodeID, cfg.EnrollmentTokenFile, cfg.RuntimeEnvFile, rotationRequested, registration.GetEnrollmentToken()); finalizeErr != nil {
 						var deferred *credentialCleanupDeferredError
 						if errors.As(finalizeErr, &deferred) {

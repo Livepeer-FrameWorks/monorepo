@@ -25,14 +25,15 @@ SET size_bytes = $1,
     origin_cluster_id = COALESCE(origin_cluster_id, $12),
     retention_until = to_timestamp($13::bigint),
     error_message = $14,
-    thumbnail_serving_cluster_id = COALESCE($15::varchar, thumbnail_serving_cluster_id),
-    catalog_revision = $16::bigint,
+    processing_wait_reason = $15::text,
+    thumbnail_serving_cluster_id = COALESCE($16::varchar, thumbnail_serving_cluster_id),
+    catalog_revision = $17::bigint,
     updated_at = NOW()
-WHERE tenant_id = $17::uuid AND clip_hash = $18
-  AND (catalog_revision IS NULL OR catalog_revision < $16::bigint
-       OR (catalog_revision = $16::bigint
+WHERE tenant_id = $18::uuid AND clip_hash = $19
+  AND (catalog_revision IS NULL OR catalog_revision < $17::bigint
+       OR (catalog_revision = $17::bigint
            AND thumbnail_serving_cluster_id IS NULL
-           AND $15::varchar IS NOT NULL))
+           AND $16::varchar IS NOT NULL))
   AND (origin_cluster_id IS NULL OR origin_cluster_id = $12)
 RETURNING catalog_revision, thumbnail_serving_cluster_id
 `
@@ -52,6 +53,7 @@ type ApplyClipCatalogSnapshotParams struct {
 	OriginClusterID           sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RetentionUntilUnix        sql.NullInt64  `db:"retention_until_unix" json:"retention_until_unix"`
 	ErrorMessage              sql.NullString `db:"error_message" json:"error_message"`
+	ProcessingWaitReason      sql.NullString `db:"processing_wait_reason" json:"processing_wait_reason"`
 	ThumbnailServingClusterID sql.NullString `db:"thumbnail_serving_cluster_id" json:"thumbnail_serving_cluster_id"`
 	SourceRevision            int64          `db:"source_revision" json:"source_revision"`
 	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
@@ -79,6 +81,7 @@ func (q *Queries) ApplyClipCatalogSnapshot(ctx context.Context, arg ApplyClipCat
 		arg.OriginClusterID,
 		arg.RetentionUntilUnix,
 		arg.ErrorMessage,
+		arg.ProcessingWaitReason,
 		arg.ThumbnailServingClusterID,
 		arg.SourceRevision,
 		arg.TenantID,
@@ -100,13 +103,14 @@ SET size_bytes = $1, duration = $2,
     origin_cluster_id = COALESCE(origin_cluster_id, $12),
     retention_until = to_timestamp($13::bigint),
     error_message = $14,
-    thumbnail_serving_cluster_id = COALESCE($15::varchar, thumbnail_serving_cluster_id),
-    catalog_revision = $16::bigint, updated_at = NOW()
-WHERE tenant_id = $17::uuid AND dvr_hash = $18
-  AND (catalog_revision IS NULL OR catalog_revision < $16::bigint
-       OR (catalog_revision = $16::bigint
+    processing_wait_reason = $15::text,
+    thumbnail_serving_cluster_id = COALESCE($16::varchar, thumbnail_serving_cluster_id),
+    catalog_revision = $17::bigint, updated_at = NOW()
+WHERE tenant_id = $18::uuid AND dvr_hash = $19
+  AND (catalog_revision IS NULL OR catalog_revision < $17::bigint
+       OR (catalog_revision = $17::bigint
            AND thumbnail_serving_cluster_id IS NULL
-           AND $15::varchar IS NOT NULL))
+           AND $16::varchar IS NOT NULL))
   AND (origin_cluster_id IS NULL OR origin_cluster_id = $12)
 RETURNING catalog_revision, thumbnail_serving_cluster_id
 `
@@ -126,6 +130,7 @@ type ApplyDVRCatalogSnapshotParams struct {
 	OriginClusterID           sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RetentionUntilUnix        sql.NullInt64  `db:"retention_until_unix" json:"retention_until_unix"`
 	ErrorMessage              sql.NullString `db:"error_message" json:"error_message"`
+	ProcessingWaitReason      sql.NullString `db:"processing_wait_reason" json:"processing_wait_reason"`
 	ThumbnailServingClusterID sql.NullString `db:"thumbnail_serving_cluster_id" json:"thumbnail_serving_cluster_id"`
 	SourceRevision            int64          `db:"source_revision" json:"source_revision"`
 	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
@@ -153,6 +158,7 @@ func (q *Queries) ApplyDVRCatalogSnapshot(ctx context.Context, arg ApplyDVRCatal
 		arg.OriginClusterID,
 		arg.RetentionUntilUnix,
 		arg.ErrorMessage,
+		arg.ProcessingWaitReason,
 		arg.ThumbnailServingClusterID,
 		arg.SourceRevision,
 		arg.TenantID,
@@ -174,14 +180,15 @@ SET size_bytes = $1, duration = $2,
     origin_cluster_id = COALESCE(origin_cluster_id, $12),
     retention_until = to_timestamp($13::bigint),
     error_message = $14,
-    thumbnail_serving_cluster_id = COALESCE($15::varchar, thumbnail_serving_cluster_id),
-    catalog_revision = $16::bigint, updated_at = NOW(),
-    original_size_bytes = $17::bigint
-WHERE tenant_id = $18::uuid AND vod_hash = $19
-  AND (catalog_revision IS NULL OR catalog_revision < $16::bigint
-       OR (catalog_revision = $16::bigint
+    processing_wait_reason = $15::text,
+    thumbnail_serving_cluster_id = COALESCE($16::varchar, thumbnail_serving_cluster_id),
+    catalog_revision = $17::bigint, updated_at = NOW(),
+    original_size_bytes = $18::bigint
+WHERE tenant_id = $19::uuid AND vod_hash = $20
+  AND (catalog_revision IS NULL OR catalog_revision < $17::bigint
+       OR (catalog_revision = $17::bigint
            AND thumbnail_serving_cluster_id IS NULL
-           AND $15::varchar IS NOT NULL))
+           AND $16::varchar IS NOT NULL))
   AND (origin_cluster_id IS NULL OR origin_cluster_id = $12)
 RETURNING catalog_revision, thumbnail_serving_cluster_id
 `
@@ -201,6 +208,7 @@ type ApplyVODCatalogSnapshotParams struct {
 	OriginClusterID           sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RetentionUntilUnix        sql.NullInt64  `db:"retention_until_unix" json:"retention_until_unix"`
 	ErrorMessage              sql.NullString `db:"error_message" json:"error_message"`
+	ProcessingWaitReason      sql.NullString `db:"processing_wait_reason" json:"processing_wait_reason"`
 	ThumbnailServingClusterID sql.NullString `db:"thumbnail_serving_cluster_id" json:"thumbnail_serving_cluster_id"`
 	SourceRevision            int64          `db:"source_revision" json:"source_revision"`
 	OriginalSizeBytes         sql.NullInt64  `db:"original_size_bytes" json:"original_size_bytes"`
@@ -229,6 +237,7 @@ func (q *Queries) ApplyVODCatalogSnapshot(ctx context.Context, arg ApplyVODCatal
 		arg.OriginClusterID,
 		arg.RetentionUntilUnix,
 		arg.ErrorMessage,
+		arg.ProcessingWaitReason,
 		arg.ThumbnailServingClusterID,
 		arg.SourceRevision,
 		arg.OriginalSizeBytes,

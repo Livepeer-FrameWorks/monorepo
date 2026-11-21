@@ -165,9 +165,10 @@ type ClipInfo struct {
 
 // PrometheusMonitor handles monitoring of MistServer Prometheus endpoints
 type PrometheusMonitor struct {
-	mutex         sync.RWMutex
-	updateChannel chan models.NodeUpdate
-	stopChannel   chan bool
+	memorySnapshot func() (uint64, uint64, error)
+	mutex          sync.RWMutex
+	updateChannel  chan models.NodeUpdate
+	stopChannel    chan bool
 	// MistServer API authentication
 	mistUsername    string // Username for MistServer API
 	mistAPIPassword string // Password for MistServer API
@@ -3262,6 +3263,15 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	nodeUpdate.ObservedValid = &observedValid
 	nodeUpdate.ObservedSource = ipcpb.ObservedSource_OBSERVED_SOURCE_MIST
 
+	snapshot := pm.memorySnapshot
+	if snapshot == nil {
+		snapshot = processingMemorySnapshot
+	}
+	if total, _, err := snapshot(); err == nil {
+		budget := processingMemoryBudget(total)
+		nodeUpdate.ProcessingMemoryBudgetBytes = &budget
+	}
+
 	if jsonData != nil {
 		// An absent outputs member in a successful metrics response means no
 		// listener was advertised. Send an empty snapshot to withdraw old URLs.
@@ -3270,32 +3280,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			nodeUpdate.CpuTenths = mistCPUTenths(cpu)
 		}
 
-		// Extract RAM info (Mist provides bytes)
-		if memTotal, ok := jsonData["mem_total"].(float64); ok {
-			nodeUpdate.RamMax = uint64(memTotal) // Bytes
-		} else if ram, ok := jsonData["ram"].(map[string]any); ok {
-			// Fallback to old 'ram' object if 'mem_total' missing
-			if max, ok := ram["max"].(float64); ok {
-				nodeUpdate.RamMax = uint64(max)
-			}
-		}
-
-		if memUsed, ok := jsonData["mem_used"].(float64); ok {
-			nodeUpdate.RamCurrent = uint64(memUsed) // Bytes
-		} else if ram, ok := jsonData["ram"].(map[string]any); ok {
-			// Fallback
-			if current, ok := ram["current"].(float64); ok {
-				nodeUpdate.RamCurrent = uint64(current)
-			}
-		}
-
-		// Extract Shared Memory info
-		if shmTotal, ok := jsonData["shm_total"].(float64); ok {
-			nodeUpdate.ShmTotalBytes = uint64(shmTotal)
-		}
-		if shmUsed, ok := jsonData["shm_used"].(float64); ok {
-			nodeUpdate.ShmUsedBytes = uint64(shmUsed)
-		}
+		mist.ApplyMemoryMetrics(nodeUpdate, jsonData)
 
 		// Extract bandwidth data from bw array: [up_total, down_total]
 		if bw, ok := jsonData["bw"].([]any); ok && len(bw) >= 2 {

@@ -778,6 +778,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			ThumbnailServingClusterId: nullStringPtr(thumbServingCluster),
 			LifecycleStatus:           nullStringPtr(lifecycleStatus),
 			ErrorMessage:              nullStringPtr(errorMessage),
+			ProcessingWaitReason:      strPtrOrNil(row.ProcessingWaitReason),
 			// Assert this cluster as the projection source so Commodore enforces origin authority:
 			// only the origin cluster may mutate the artifact's catalog state.
 			SourceClusterId: strPtrOrNil(origin),

@@ -108,6 +108,19 @@ def http_connection_when_ready(container):
         return None
 
 
+def wait_group_shutdown(container, group, action):
+    try:
+        eventually(lambda: not any(row[1] == group for row in table(container).values()),
+                   15, '%s left processes in the old Mist process group %d' % (action, group))
+    except AssertionError as error:
+        try:
+            survivors = ', '.join('%d (%s)' % (pid, row[3])
+                                  for pid, row in sorted(table(container).items()) if row[1] == group)
+        except (OSError, subprocess.SubprocessError) as inspection_error:
+            survivors = 'process snapshot unavailable: %s' % inspection_error
+        raise AssertionError('%s; surviving processes: %s' % (error, survivors or 'none in final snapshot')) from error
+
+
 def exercise(container, stream, action):
     pid, group = eventually(lambda: angel(container), 30, 'supervised Mist angel is missing')
     before = table(container)
@@ -128,8 +141,7 @@ def exercise(container, stream, action):
         else:
             execute(container, 'kill', '-KILL', str(pid))
         if action != 'reload':
-            eventually(lambda: not any(row[1] == group for row in table(container).values()),
-                       15, '%s left processes in the old Mist process group %d' % (action, group))
+            wait_group_shutdown(container, group, action)
             http.eof()
             viewer.eof()
             eventually(lambda: angel(container, pid), 30, 's6 did not start a new Mist angel')

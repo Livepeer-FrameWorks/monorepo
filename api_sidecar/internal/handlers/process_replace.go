@@ -20,6 +20,8 @@ import (
 // process disabled without starting anything in its place.
 const noProcessReplacement = "[]"
 
+var admitLiveProcessReplacement = admitLiveReplacement
+
 // ProcessReplaceEvent is a PROCESS_REPLACE trigger from MistServer: a process
 // on a stream buffer exited unrecoverably and Mist asks which configs replace it.
 type ProcessReplaceEvent struct {
@@ -172,6 +174,27 @@ func HandleProcessReplace(c *gin.Context) {
 		return
 	}
 
+	replacement, err = admitLiveProcessReplacement(evt, replacement)
+	if err != nil {
+		evt.ReplacementCount = 0
+		RouteProcessReplace(evt)
+		incMistWebhook("PROCESS_REPLACE", "admission_refused")
+		failure := evt
+		failure.ShortReason = "LOCAL_ADMISSION_REFUSED"
+		failure.Reason = err.Error()
+		reportProcessDegradation(failure)
+		logger.WithError(err).WithField("stream", evt.StreamName).Warn("PROCESS_REPLACE: local ladder could not be admitted")
+		c.String(http.StatusOK, noProcessReplacement)
+		return
+	}
+	var admitted []json.RawMessage
+	if err := json.Unmarshal([]byte(replacement), &admitted); err != nil {
+		logger.WithError(err).WithField("stream", evt.StreamName).Warn("PROCESS_REPLACE: admitted policy is invalid")
+		c.String(http.StatusOK, noProcessReplacement)
+		return
+	}
+	evt.ReplacementCount = len(admitted)
+	fields["replacement_count"] = evt.ReplacementCount
 	RouteProcessReplace(evt)
 	if evt.ProcessType == "Livepeer" && evt.ShortReason == "SOURCE_ROTATED" {
 		incMistWebhook("PROCESS_REPLACE", "routed")
@@ -194,8 +217,7 @@ func HandleProcessReplace(c *gin.Context) {
 }
 
 func expectedSourceCodecRoute(process, shortReason, reason string) bool {
-	return process == "Livepeer" && shortReason == "FORMAT_SPECIFIC" &&
-		strings.HasPrefix(reason, "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry ")
+	return process == "Livepeer" && shortReason == "SOURCE_CODEC_UNSUPPORTED"
 }
 
 var (

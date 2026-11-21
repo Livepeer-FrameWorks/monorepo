@@ -160,12 +160,12 @@ func TestMemoryAdmissionPreservesPermanentSourceFailure(t *testing.T) {
 		"invalid policy": errors.New("invalid processes JSON"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := processingMemoryResultStatus(input); got != "failed" {
+			if got := processingMemoryFailureStatus(input); got != "failed" {
 				t.Fatalf("permanent admission failure was made retryable: got %s", got)
 			}
 		})
 	}
-	if got := processingMemoryResultStatus(&processingCapacityError{reason: "busy now"}); got != processingResultRetryable {
+	if got := processingMemoryFailureStatus(&processingCapacityError{reason: "busy now"}); got != processingResultRetryable {
 		t.Fatalf("transient capacity refusal was not retryable: %s", got)
 	}
 }

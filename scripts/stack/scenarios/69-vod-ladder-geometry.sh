@@ -17,8 +17,14 @@ gateway_state() {
 gateway_absent() {
   [ "$(gateway_state)" != healthy ] && [ "$(date +%s)" -ge "$DISCOVERY_DRAIN_AT" ]
 }
+GATEWAY_HEALTHY_AT=0
 gateway_present() {
-  [ "$(gateway_state)" = healthy ] && [ "$(date +%s)" -ge "$DISCOVERY_READY_AT" ]
+  local now
+  now=$(date +%s)
+  if [ "$(gateway_state)" != healthy ]; then GATEWAY_HEALTHY_AT=0; return 1; fi
+  [ "$GATEWAY_HEALTHY_AT" != 0 ] || GATEWAY_HEALTHY_AT=$now
+  # Cover the Foghorn positive discovery cache and the consumer's next refresh.
+  [ "$now" -ge "$((GATEWAY_HEALTHY_AT + 65))" ]
 }
 orchestrator_present() {
   stack_running "$ORCHESTRATOR" &&
@@ -76,7 +82,7 @@ for path in livepeer local fallback; do
         docker inspect --format '{{json .State}}' "$(docker compose -p "$COMPOSE_PROJECT_NAME" ps --all -q "$ORCHESTRATOR")" >&2
         finish
       fi
-      DISCOVERY_READY_AT=$(($(date +%s) + 6))
+      GATEWAY_HEALTHY_AT=0
       eventually 120 "Livepeer gateway available" gateway_present || finish
       ;;
     local)
@@ -87,7 +93,7 @@ for path in livepeer local fallback; do
       ;;
     fallback)
       stack_ctl start "$GATEWAY" || { fail "start gateway"; finish; }
-      DISCOVERY_READY_AT=$(($(date +%s) + 6))
+      GATEWAY_HEALTHY_AT=0
       eventually 120 "gateway registered for Livepeer-to-local uploads" gateway_present || finish
       stack_ctl stop "$ORCHESTRATOR" || { fail "stop orchestrator"; finish; }
       ;;

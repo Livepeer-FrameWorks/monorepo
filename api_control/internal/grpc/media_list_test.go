@@ -16,7 +16,7 @@ func clipRows() *sqlmock.Rows {
 		"id", "clip_hash", "playback_id", "stream_id", "title", "description",
 		"start_time", "duration", "clip_mode", "requested_params",
 		"size_bytes", "retention_until", "retention_source", "created_at", "updated_at",
-		"thumbnail_cluster", "has_thumbnails", "status", "error_message", "storage_location", "sync_status", "is_synced", "is_finalized", "storage_cluster_id",
+		"thumbnail_cluster", "has_thumbnails", "status", "error_message", "storage_location", "sync_status", "is_synced", "is_finalized", "storage_cluster_id", "processing_wait_reason",
 	})
 }
 
@@ -55,7 +55,7 @@ func TestGetClip(t *testing.T) {
 				"id1", "hash1", "pb1", "s1", "Title", "desc",
 				int64(5000), int64(60000), "precise", "",
 				int64(2048), nil, "manual", now, now,
-				"cluster-a", false, "ready", nil, "local", "pending", false, false, "cluster-a"))
+				"cluster-a", false, "ready", nil, "local", "pending", false, false, "cluster-a", nil))
 		resp, err := s.GetClip(ctxAs("u1", "t1", "owner"), &sharedpb.GetClipRequest{ClipHash: "hash1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -64,4 +64,20 @@ func TestGetClip(t *testing.T) {
 			t.Errorf("unexpected clip: %+v", resp)
 		}
 	})
+}
+
+func TestGetClipShowsProcessingWaitReason(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	now := time.Now()
+	mock.ExpectQuery("FROM commodore.clips").WithArgs("t1", "waiting").WillReturnRows(clipRows().AddRow(
+		"id1", "waiting", "pb1", "s1", "Title", "desc", int64(0), int64(60000), "precise", "",
+		int64(2048), nil, "manual", now, now, "cluster-a", false, "processing", nil, "local", "pending", false, false, "cluster-a", "memory"))
+	response, err := s.GetClip(ctxAs("u1", "t1", "owner"), &sharedpb.GetClipRequest{ClipHash: "waiting"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetProcessingWaitReason() != "memory" {
+		t.Fatalf("waiting clip has no visible reason: %+v", response)
+	}
 }

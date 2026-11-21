@@ -2243,7 +2243,7 @@ type Mutation {
   setVodOriginalPolicy(keepVodOriginals: Boolean): SetMediaRetentionPolicyResult!
   "Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5."
   createVodOriginalDownload(id: ID!): CreateVodOriginalDownloadResult!
-  "Permanently delete only the retained upload; processed playback remains available."
+  "Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available."
   deleteVodOriginal(id: ID!): DeleteVodOriginalResult!
 
   """
@@ -3233,6 +3233,8 @@ type VodAsset implements Node {
   filename: String
   "Current processing/storage status of the asset."
   status: VodAssetStatus!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   "Where the asset is stored (s3, local, freezing)."
   storageLocation: String!
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
@@ -3348,6 +3350,8 @@ type StorageArtifact {
   errorMessage: String
   sizeBytes: Float
   status: String!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   storageLocation: String
   "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
   storageClusterId: String
@@ -6516,6 +6520,8 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   "Processing failure detail from the artifact catalog."
   errorMessage: String
   "When the clip was requested."
@@ -7288,9 +7294,9 @@ type NodeMetric implements Node {
   cpuUsage: Float!
 
   # Resource metrics (RAM in MiB; disk/shm in bytes)
-  "Total memory in MiB."
+  "Total memory in bytes."
   memoryTotal: Float
-  "Used memory in MiB."
+  "Used memory in bytes."
   memoryUsed: Float
   "Total disk capacity in bytes."
   diskTotal: Float

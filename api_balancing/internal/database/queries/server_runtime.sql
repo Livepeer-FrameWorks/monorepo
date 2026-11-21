@@ -31,9 +31,18 @@ UPDATE foghorn.artifacts SET dtsh_status = 'failed', dtsh_failure_count = dtsh_f
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND dtsh_sync_request_id = sqlc.narg(dtsh_sync_request_id) AND dtsh_sync_node_id = sqlc.narg(dtsh_sync_node_id) AND status NOT IN ('deleted', 'expired', 'aborted') AND tenant_id::text = sqlc.arg(tenant_id) RETURNING COALESCE(sync_object_key, '');
 -- name: UpdateProcessingJobCache :execrows
 -- Older edges omit the tenant echo; only the assigned node can recover it from the job.
-UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,sqlc.arg(required_memory_bytes)::bigint), capacity_wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+WITH admitted AS (
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,sqlc.arg(required_memory_bytes)::bigint), memory_reserved_bytes=sqlc.arg(memory_reserved_bytes)::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
 AND job.tenant_id::text = COALESCE(NULLIF(sqlc.arg(tenant_id)::text, ''),
- (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$1 AND assigned.processing_node_id=$4));
+ (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$1 AND assigned.processing_node_id=$4))
+ RETURNING job.artifact_hash,job.tenant_id
+)
+UPDATE foghorn.artifacts AS asset
+SET catalog_revision=GREATEST(asset.catalog_revision+1,4503599627370496),updated_at=NOW(),
+ status=CASE WHEN asset.status='queued' THEN 'processing' ELSE asset.status END
+FROM admitted
+WHERE asset.artifact_hash=admitted.artifact_hash AND asset.tenant_id=admitted.tenant_id
+ AND asset.status NOT IN ('failed','deleted','expired','aborted');
 -- name: LockProcessingJobForCompletion :one
 SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1
 AND tenant_id::text = COALESCE(NULLIF(sqlc.arg(tenant_id)::text, ''), tenant_id::text) FOR UPDATE;
@@ -69,7 +78,6 @@ UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at =
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progress)::int), progress_last_ms = GREATEST(progress_last_ms, sqlc.arg(last_ms)::bigint),
   progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
-  capacity_wait_started_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE capacity_wait_started_at END,
   updated_at = NOW()
 WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress, job_type;
 -- name: RecordImportSourceStaged :execrows

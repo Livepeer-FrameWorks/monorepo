@@ -100,6 +100,7 @@ enum GQL {
     storagePath
     sizeBytes
     status
+    processingWaitReason
     createdAt
     updatedAt
     clipMode
@@ -3696,6 +3697,7 @@ enum GQL {
         secondaryLabel
         description
         errorMessage
+        processingWaitReason
         originalFile {
           sizeBytes
         }
@@ -5558,6 +5560,7 @@ enum GQL {
         updatedAt
         expiresAt
         errorMessage
+        processingWaitReason
       }
       ... on ValidationError {
         message
@@ -6253,6 +6256,7 @@ enum GQL {
         createdAt
         updatedAt
         errorMessage
+        processingWaitReason
       }
       ... on ValidationError {
         message

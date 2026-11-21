@@ -90,6 +90,9 @@ func TestMCPUploadReportsUnavailableOriginalRetention(t *testing.T) {
 	if err != nil || marshalErr != nil || result == nil || result.IsError || !strings.Contains(string(encoded), `"keep_original":false`) {
 		t.Fatalf("accepted upload did not expose its disabled retention: %s %v %v", encoded, err, marshalErr)
 	}
+	if !strings.Contains(string(encoded), "keeps only the processed video") {
+		t.Fatalf("inherited no-original result was not explained: %s", encoded)
+	}
 	if strings.Contains(string(encoded), "temporarily unavailable") {
 		t.Fatal("inheriting an account opt-out must not claim retention is unavailable")
 	}

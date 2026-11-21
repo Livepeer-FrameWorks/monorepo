@@ -78,7 +78,7 @@ func TestUpdateProcessConfigCacheCarriesDispatchedJobID(t *testing.T) {
 	var sent []*ipcpb.ControlMessage
 	h := &ProcessingJobHandler{}
 	h.updateProcessConfigCache(func(m *ipcpb.ControlMessage) { sent = append(sent, m) },
-		"4a8b0f0e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "artifacthash", `[{"process":"AV"}]`)
+		"4a8b0f0e-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "artifacthash", `[{"process":"AV"}]`, 0, 0)
 	if len(sent) != 1 {
 		t.Fatalf("sent %d messages, want 1", len(sent))
 	}

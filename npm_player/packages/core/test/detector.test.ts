@@ -539,3 +539,9 @@ describe("detector", () => {
     });
   });
 });
+
+describe("Mist EAC-3 alias", () => {
+  it("cannot negotiate E-AC3 as WebRTC audio", () => {
+    expect(WEBRTC_INCOMPATIBLE_CODECS.audio).toContain("EAC-3");
+  });
+});

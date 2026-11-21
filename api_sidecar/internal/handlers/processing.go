@@ -20,6 +20,7 @@ import (
 
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/appconfig"
+	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/relay"
@@ -44,7 +45,6 @@ type ProcessingJobHandler struct {
 	mistServerURL  string
 	storagePath    string
 	memorySnapshot func() (uint64, uint64, error)
-	memoryControls map[string]bool
 }
 
 // pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
@@ -474,16 +474,18 @@ func processingPushFailureMessage(evt ProcessingPushEndEvent) string {
 }
 
 type processingOverrideRecord struct {
-	Version       int       `json:"version"`
-	StreamName    string    `json:"stream_name"`
-	ProcessesJSON string    `json:"processes_json"`
-	JobID         string    `json:"job_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	MemoryBytes   uint64    `json:"memory_bytes,omitempty"`
+	Version         int       `json:"version"`
+	StreamName      string    `json:"stream_name"`
+	ProcessesJSON   string    `json:"processes_json"`
+	JobID           string    `json:"job_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	MemoryBytes     uint64    `json:"memory_bytes,omitempty"`
+	SourceProbe     string    `json:"source_probe,omitempty"`
+	ReplacementOnly bool      `json:"replacement_only,omitempty"`
 }
 
-const processingOverrideMaxLifetime = 5 * time.Hour
+const processingOverrideMaxLifetime = 25 * time.Hour
 
 const processingOverrideReconcileInterval = time.Minute
 
@@ -805,7 +807,7 @@ func clearExpiredProcessingProcessOverride(streamName string, expected processin
 
 func processingOverrideRecordsEqual(a, b processingOverrideRecord) bool {
 	return a.Version == b.Version && a.StreamName == b.StreamName && a.ProcessesJSON == b.ProcessesJSON &&
-		a.JobID == b.JobID && a.MemoryBytes == b.MemoryBytes && a.CreatedAt.Equal(b.CreatedAt) && a.ExpiresAt.Equal(b.ExpiresAt)
+		a.JobID == b.JobID && a.MemoryBytes == b.MemoryBytes && a.ReplacementOnly == b.ReplacementOnly && a.CreatedAt.Equal(b.CreatedAt) && a.ExpiresAt.Equal(b.ExpiresAt)
 }
 
 func removeProcessingProcessOverrideLocked(streamName string) {
@@ -834,6 +836,9 @@ func logProcessingOverrideCleanupError(err error, streamName, operation string) 
 func getProcessingProcessOverride(streamName string) (string, bool) {
 	processingProcessOverridesMu.Lock()
 	processesJSON, ok := processingProcessOverrides[streamName]
+	if processingOverrideRecords[streamName].ReplacementOnly {
+		ok = false
+	}
 	processingProcessOverridesMu.Unlock()
 	return processesJSON, ok
 }
@@ -980,11 +985,8 @@ func drainProcessingGenerationFromActiveStreams(log *logrus.Entry, streamName st
 			time.Sleep(pollInterval)
 			continue
 		}
-		active, ok := resp["active_streams"].(map[string]interface{})
-		if !ok {
-			return nil
-		}
-		if _, ok := active[streamName]; !ok {
+
+		if known, active := processingStreamPresence(resp, streamName); known && !active {
 			return nil
 		}
 		time.Sleep(pollInterval)
@@ -993,6 +995,10 @@ func drainProcessingGenerationFromActiveStreams(log *logrus.Entry, streamName st
 }
 
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, stateDir string) *ProcessingJobHandler {
+	if err := config.LoadProcessingMemoryReservation(stateDir); err != nil {
+		logger.WithError(err).Warn("Processing protection is awaiting an authoritative control snapshot")
+	}
+
 	if err := configureProcessingOverridePersistence(stateDir, logger); err != nil {
 		logger.WithError(err).Error("Failed to restore durable processing overrides")
 	}
@@ -1021,6 +1027,15 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 					result.Outputs = make(map[string]string)
 				}
 				result.Outputs[mist.ProcessingResultTenantID] = req.GetTenantId()
+				if result.Status == "cache_update" || result.Status == "retryable" || result.Status == "failed" || result.Status == "completed" {
+					processingProcessOverridesMu.Lock()
+					record := processingOverrideRecords["processing+"+req.GetArtifactHash()]
+					if record.JobID == req.GetJobId() && record.SourceProbe != "" {
+						result.Outputs[mist.ProcessingSourceProbeParam] = record.SourceProbe
+					}
+					processingProcessOverridesMu.Unlock()
+				}
+
 			}
 			forward(message)
 		}
@@ -1051,6 +1066,10 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 
+	if req.GetDeadlineUnixMs() > 0 && req.GetDeadlineUnixMs() <= time.Now().UnixMilli() {
+		h.sendResult(send, req.GetJobId(), "failed", "upload processing timed out after 24 hours", nil, "", 0)
+		return
+	}
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 
@@ -1109,7 +1128,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		log.Info("Processing job has no source URL; Mist resolves its source through STREAM_SOURCE")
 	}
 
-	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
+	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" && !hasCachedProcessingProbe(req) {
 		path, err := h.stageUnsafeWrapper(log, req, ext)
 		if err != nil {
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
@@ -1174,22 +1193,26 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 
+	stopMemoryObservation := observeProcessingMemory(streamName)
+	defer stopMemoryObservation()
 	defer h.finishProcessingMemory(log, mistClient, streamName, req.GetJobId())
 	admittedProcesses, admissionSource, memoryErr := h.prepareProcessingMemory(log, mistClient, req, streamName, outputPath, processesJSON, processExitCh, send)
 	if memoryErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(memoryErr), fmt.Sprintf("processing memory admission: %v", memoryErr), processingMemoryFailureOutputs(memoryErr), "", 0)
+		h.sendResult(send, req.GetJobId(), processingMemoryFailureStatus(memoryErr), fmt.Sprintf("processing memory admission: %v", memoryErr), processingMemoryFailureOutputs(memoryErr), "", 0)
 		return
 	}
+	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" && stagedSourcePath == "" {
+		stagedSourcePath, memoryErr = h.stageUnsafeWrapper(log, req, ext)
+		if memoryErr != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("source staging: %v", memoryErr), nil, "", 0)
+			return
+		}
+	}
+
 	processesJSON = admittedProcesses
 
-	// fallbackAttempted: the stream was restarted on local MistProcAV.
-	// inPlaceReplaced: Mist replaced the failed Livepeer process inside the
-	// running buffer (PROCESS_REPLACE); a restart remains available if that
-	// replacement produces no output or an incomplete ladder.
 	fallbackAttempted := false
-	inPlaceReplaced := false
-	var inPlacePending *inPlaceLivepeerReplacement
 	hasLivepeer := mist.HasLivepeerProcesses(processesJSON)
 	ignoredProcessExitBootCounts := map[string]int{}
 	activePushID := 0
@@ -1205,11 +1228,15 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 				admissionSource = observed
 			}
 		}
-		localConfig := mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON)
+		localConfig, err := mist.EnsureRotatedSourceRendition(mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON), admissionSource)
+		if err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
+			return false
+		}
 		admitted, err := h.admitLocalProcessingFallback(log, mistClient, req, streamName, outputPath, activePushID, localConfig, admissionSource, send)
 		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(err), fmt.Sprintf("fallback memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
+			h.sendResult(send, req.GetJobId(), processingMemoryFailureStatus(err), fmt.Sprintf("fallback memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
 			return false
 		}
 		effectiveProcessesJSON = admitted
@@ -1224,50 +1251,24 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			if !adoptLocalProcessingPolicy() {
 				return
 			}
-			replacedInPlace := false
-			if processingLivepeerExitFallbackDecision(livepeerBootErr.evt) == livepeerFallbackInPlace {
-				inPlaceErr := awaitInPlaceLivepeerReplacement(context.Background(), log, processExitCh, processAVCh, processReplaceCh, ignoredProcessExitBootCounts, processReplaceConfirmWindow, processingReadinessWindow)
-				if inPlaceErr == nil {
-					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
-					inPlaceErr = waitErr
-				}
-				if inPlaceErr != nil {
-					log.WithError(inPlaceErr).Warn("In-place Livepeer replacement failed; restarting the stream on local MistProcAV")
-				} else {
-					replacedInPlace = true
-					log.Info("Livepeer replaced in place by local MistProcAV during readiness")
-				}
+			ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
+			drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
+			clearProcessingResourceFailures(streamName)
+			var replaced bool
+			doneCh, replaced = replacePendingJobChannel(streamName, req.GetJobId())
+			if !replaced {
+				h.sendResult(send, req.GetJobId(), "failed", "processing reservation lost during fallback", nil, "", 0)
+				return
 			}
-			// An in-place replacement mirrors the Livepeer profiles 1:1, so the
-			// in-loop rendition check still validates its output and escalates
-			// to a restart if the ladder comes out incomplete.
-			if !replacedInPlace {
-				ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
-				if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
-					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback teardown: %v", teardownErr), nil, "", 0)
-					return
-				}
-				drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
-				clearProcessingResourceFailures(streamName)
-				var replaced bool
-				doneCh, replaced = replacePendingJobChannel(streamName, req.GetJobId())
-				if !replaced {
-					h.sendResult(send, req.GetJobId(), "failed", "processing reservation lost during fallback", nil, "", 0)
-					return
-				}
-				recordingEndCh = registerProcessingRecordingEndListener(streamName)
-				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
-				if waitErr != nil {
-					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
-					return
-				}
-				fallbackAttempted = true
-				hasLivepeer = false
-			} else {
-				inPlaceReplaced = true
+			recordingEndCh = registerProcessingRecordingEndListener(streamName)
+			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
+			if waitErr != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
+				return
 			}
+			fallbackAttempted = true
+			hasLivepeer = false
 		} else {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), waitErr.Error(), processingReadinessFailureOutputs(waitErr), "", 0)
@@ -1287,7 +1288,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		admitted, err := h.admitProcessingPolicy(log, req, streamName, localEncoderConfig(uprightConfig), source, send)
 		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(err), fmt.Sprintf("rotation memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
+			h.sendResult(send, req.GetJobId(), processingMemoryFailureStatus(err), fmt.Sprintf("rotation memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
 			return
 		}
 		effectiveProcessesJSON = admitted
@@ -1342,7 +1343,11 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// viewer count).
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
-	absoluteTimeout := time.After(4 * time.Hour)
+	absoluteRemaining := 4 * time.Hour
+	if req.GetDeadlineUnixMs() > 0 {
+		absoluteRemaining = max(time.Duration(0), time.Until(time.UnixMilli(req.GetDeadlineUnixMs())))
+	}
+	absoluteTimeout := time.After(absoluteRemaining)
 
 	pushTargetURI := processingMuxTargetURI(outputPath)
 	stallWatch := newRecorderStallWatch(time.Now())
@@ -1362,15 +1367,10 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		// No Livepeer process runs after the restart; any later Livepeer exit
 		// belongs to the retired generation.
 		ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
-		inPlacePending = nil
 		if !adoptLocalProcessingPolicy() {
 			return false
 		}
-		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback teardown: %v", teardownErr), nil, "", 0)
-			return false
-		}
+
 		drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
 		clearProcessingResourceFailures(streamName)
 		// Fresh doneCh so a PUSH_END from the retired push can't satisfy the
@@ -1415,7 +1415,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
 		if err := processingResourceFailure(streamName, ignoredProcessExitBootCounts); err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), processingReadinessFailureOutputs(err), "", 0)
 			return false, true
 		}
 		if recordingEnd == nil {
@@ -1425,11 +1425,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		srcInfo, _ := sourceFromReadinessOutputs(outputs)
 		if hasLivepeer && !fallbackAttempted && !renditionsComplete(log, effectiveProcessesJSON, recordingEnd.Tracks, srcInfo, sourceEndMs, sourceStartMs, recordingEnd.MediaDurationMs) {
 			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
-			if inPlaceReplaced || inPlacePending != nil {
-				log.Warn("In-place local replacement produced an incomplete rendition set, restarting on local MistProcAV before publish")
-			} else {
-				log.Warn("Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
-			}
+			log.Warn("Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
 			if !restartWithLocalFallback("Livepeer", 0) {
 				return false, true
 			}
@@ -1497,20 +1493,11 @@ loop:
 
 			if evt.ProcessType == "Livepeer" {
 				decision := processingLivepeerExitFallbackDecision(evt)
-				if fallbackAttempted || inPlacePending != nil || inPlaceReplaced {
+				if fallbackAttempted {
 					decision = livepeerFallbackNone
 				}
 				logLivepeerProcessingExit(log, evt, decision, "push")
 				switch decision {
-				case livepeerFallbackInPlace:
-					// Mist fires PROCESS_REPLACE next and keeps the buffer
-					// running on the local ladder; the ticker escalates to a
-					// restart if the replacement never produces output.
-					ignoreProcessExitThrough(ignoredProcessExitBootCounts, evt.ProcessType, evt.BootCount)
-					if !adoptLocalProcessingPolicy() {
-						return
-					}
-					inPlacePending = &inPlaceLivepeerReplacement{startedAt: time.Now()}
 				case livepeerFallbackRestart:
 					if !restartWithLocalFallback(evt.ProcessType, evt.BootCount) {
 						return
@@ -1522,7 +1509,7 @@ loop:
 			switch {
 			case retryableProcessingExit(evt):
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), processingResultRetryable, (&processingResourceError{event: evt}).Error(), nil, "", 0)
+				h.sendResult(send, req.GetJobId(), processingResultRetryable, processingExitError(evt).Error(), processingReadinessFailureOutputs(processingExitError(evt)), "", 0)
 				return
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Critical process unrecoverable")
@@ -1548,43 +1535,14 @@ loop:
 			}
 
 		case evt := <-processReplaceCh:
-			fields := logging.Fields{"process_type": evt.ProcessType, "replacement_count": evt.ReplacementCount}
-			if inPlacePending == nil {
-				log.WithFields(fields).Info("PROCESS_REPLACE answered for this stream")
-				continue loop
-			}
-			if evt.ReplacementCount == 0 {
-				log.WithFields(fields).Warn("PROCESS_REPLACE answered without a replacement; restarting on local MistProcAV")
+			if hasLivepeer && !fallbackAttempted && evt.ProcessType == "Livepeer" {
 				if !restartWithLocalFallback("Livepeer", 0) {
 					return
 				}
-				continue loop
 			}
-			inPlacePending.confirmed = true
-			log.WithFields(fields).Info("Mist is replacing the failed Livepeer process in place")
-
-		case evt := <-processAVCh:
-			if inPlacePending != nil && processAVVideoProgress(evt) {
-				inPlacePending = nil
-				inPlaceReplaced = true
-				log.WithFields(logging.Fields{
-					"output_codec":  evt.OutputCodec,
-					"output_width":  evt.OutputWidth,
-					"output_height": evt.OutputHeight,
-				}).Info("In-place local replacement is producing video")
-			}
-
+		case <-processAVCh:
 		case <-progressTicker.C:
 			sampleSourceEnd()
-			if inPlacePending != nil {
-				if reason := inPlacePending.expiredReason(time.Now(), processReplaceConfirmWindow, processingReadinessWindow); reason != "" {
-					log.WithField("reason", reason).Warn("In-place Livepeer replacement abandoned; restarting on local MistProcAV")
-					if !restartWithLocalFallback("Livepeer", 0) {
-						return
-					}
-					continue loop
-				}
-			}
 			recorder, stalledFor := stallWatch.observe(time.Now(), sampleProcessingRecorderProgress(mistClient, streamName, pushTargetURI, activePushID, outputPath))
 			currentMs := recorder.mediaMs
 			speedSampler.observe(time.Now().UnixMilli(), currentMs)
@@ -1619,7 +1577,7 @@ loop:
 		case <-absoluteTimeout:
 			log.Warn("Processing absolute timeout exceeded")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "absolute timeout exceeded (4h)", nil, "", 0)
+			h.sendResult(send, req.GetJobId(), "failed", "upload processing timed out at its absolute deadline", nil, "", 0)
 			return
 		}
 	}
@@ -1677,7 +1635,7 @@ loop:
 	srcInfo, _ := sourceFromReadinessOutputs(outputs)
 	if err := processingResourceFailure(streamName, ignoredProcessExitBootCounts); err != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), nil, "", 0)
+		h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), processingReadinessFailureOutputs(err), "", 0)
 		return
 	}
 	if !renditionsComplete(log, effectiveProcessesJSON, recordingEnd.Tracks, srcInfo, sourceEndMs, sourceStartMs, recordingEnd.MediaDurationMs) {
@@ -1842,7 +1800,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 			}
 			switch {
 			case retryableProcessingExit(evt):
-				return nil, 0, &processingResourceError{event: evt}
+				return nil, 0, processingExitError(evt)
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Critical process unrecoverable while waiting for processing readiness")
 				return nil, 0, fmt.Errorf("%s process failed during readiness: %s", evt.ProcessType, evt.Reason)
@@ -2890,16 +2848,8 @@ const (
 )
 
 // processingReadinessWindow bounds how long a processing stream may go without
-// new output before readiness gives up; an in-place replacement gets the same
-// budget to show its first local video output.
+// new output before readiness gives up.
 var processingReadinessWindow = 45 * time.Second
-
-const (
-	// processReplaceConfirmWindow bounds the wait for Mist's PROCESS_REPLACE
-	// after an unrecoverable Livepeer exit. Mist fires it right after
-	// PROCESS_EXIT; a Mist build without the trigger never does.
-	processReplaceConfirmWindow = 10 * time.Second
-)
 
 var (
 	// processingBootRequestTimeout bounds one /json_ boot request. Mist holds
@@ -2954,72 +2904,6 @@ func logLivepeerProcessingExit(log *logrus.Entry, evt ProcessExitEvent, decision
 		return
 	}
 	log.WithFields(fields).Warn("Livepeer process failed; falling back to local MistProcAV")
-}
-
-// inPlaceLivepeerReplacement tracks a Livepeer process Mist is replacing inside
-// the running buffer. It is resolved by the first local video output, and
-// escalates to a stream restart when Mist never asks for the replacement or
-// the replacement produces nothing.
-type inPlaceLivepeerReplacement struct {
-	startedAt time.Time
-	confirmed bool
-}
-
-// expiredReason returns why the in-place replacement is abandoned at now, or "".
-func (r *inPlaceLivepeerReplacement) expiredReason(now time.Time, confirmWindow, outputWindow time.Duration) string {
-	elapsed := now.Sub(r.startedAt)
-	if !r.confirmed && elapsed >= confirmWindow {
-		return "Mist did not request a replacement (PROCESS_REPLACE) for the failed Livepeer process"
-	}
-	if elapsed >= outputWindow {
-		return fmt.Sprintf("in-place replacement produced no local video output within %s", outputWindow)
-	}
-	return ""
-}
-
-// awaitInPlaceLivepeerReplacement blocks until Mist's in-place replacement of a
-// failed Livepeer process produces local video output. An error means the
-// caller must fall back to restarting the stream on the local config.
-func awaitInPlaceLivepeerReplacement(ctx context.Context, log *logrus.Entry, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, processReplaceCh <-chan ProcessReplaceEvent, ignored map[string]int, confirmWindow, outputWindow time.Duration) error {
-	replacement := &inPlaceLivepeerReplacement{startedAt: time.Now()}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case evt := <-processReplaceCh:
-			if evt.ReplacementCount == 0 {
-				return errors.New("PROCESS_REPLACE was answered without a replacement")
-			}
-			replacement.confirmed = true
-			log.WithFields(logging.Fields{
-				"process_type":      evt.ProcessType,
-				"replacement_count": evt.ReplacementCount,
-			}).Info("Mist is replacing the failed Livepeer process in place")
-		case evt := <-processAVCh:
-			if processAVVideoProgress(evt) {
-				log.WithFields(logging.Fields{
-					"output_codec":  evt.OutputCodec,
-					"output_width":  evt.OutputWidth,
-					"output_height": evt.OutputHeight,
-				}).Info("In-place local replacement is producing video")
-				return nil
-			}
-		case evt := <-processExitCh:
-			if shouldIgnoreProcessExit(evt, ignored) {
-				continue
-			}
-			if evt.Status == "unrecoverable" && isCriticalProcess(evt) {
-				return fmt.Errorf("replacement %s process failed: %s", evt.ProcessType, evt.Reason)
-			}
-			log.WithFields(processExitFields(evt)).Info("Process exit while waiting for the in-place replacement")
-		case now := <-ticker.C:
-			if reason := replacement.expiredReason(now, confirmWindow, outputWindow); reason != "" {
-				return errors.New(reason)
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 }
 
 // drainRetiredProcessEvents discards trigger events a torn-down generation
@@ -3444,14 +3328,19 @@ func stagedProcessingSourceSize(artifactHash, stagedSourcePath string) int64 {
 // for this artifact with the given processes_json (used for Livepeer fallback).
 // Foghorn applies it only to the exact dispatched job owned by this node, so
 // jobID must be the job's own id.
-func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), jobID, artifactHash, processesJSON string, requiredMemory ...uint64) {
+func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), jobID, artifactHash, processesJSON string, requiredMemory, reservedMemory uint64) {
 	if send == nil {
 		return
 	}
 	outputs := map[string]string{"artifact_hash": artifactHash, "processes_json": processesJSON}
-	if len(requiredMemory) > 0 {
-		outputs[mist.ProcessingRequiredMemoryBytes] = strconv.FormatUint(requiredMemory[0], 10)
+	outputs[mist.ProcessingRequiredMemoryBytes] = strconv.FormatUint(requiredMemory, 10)
+	outputs[mist.ProcessingReservedMemoryBytes] = strconv.FormatUint(reservedMemory, 10)
+	processingProcessOverridesMu.Lock()
+	record := processingOverrideRecords["processing+"+artifactHash]
+	if record.JobID == jobID && record.SourceProbe != "" {
+		outputs[mist.ProcessingSourceProbeParam] = record.SourceProbe
 	}
+	processingProcessOverridesMu.Unlock()
 	send(&ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobResult{
 			ProcessingJobResult: &ipcpb.ProcessingJobResult{

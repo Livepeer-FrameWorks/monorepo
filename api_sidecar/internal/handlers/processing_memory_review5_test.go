@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestLocalFallbackNeedsItsOwnMemoryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	total := uint64(1536) * memoryMiB
-	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
+	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	req := &ipcpb.ProcessingJobRequest{JobId: job}
 	source := mist.SourceMediaInfo{Width: 3840, Height: 2160}
 	policy := `[{"process":"Livepeer","target_profiles":[{"height":2160,"bitrate":16000000},{"height":1440,"bitrate":8000000},{"height":1080,"bitrate":5000000},{"height":720,"bitrate":3000000},{"height":480,"bitrate":1200000},{"height":360,"bitrate":800000}]}]`
@@ -50,7 +51,7 @@ func TestZeroWorkAdmissionKeepsGlobalProcessesInhibited(t *testing.T) {
 		t.Fatal(err)
 	}
 	total := uint64(3072) * memoryMiB
-	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
+	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	policy, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, "[]", mist.SourceMediaInfo{Width: 320, Height: 180}, func(*ipcpb.ControlMessage) {})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +109,7 @@ func TestProcessingFallbackAcquiresLocalMemoryBeforePublishingPolicy(t *testing.
 	if err != nil || !ok {
 		t.Fatalf("remote reservation = %v, %v", ok, err)
 	}
-	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
+	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	request := &ipcpb.ProcessingJobRequest{JobId: job, ArtifactHash: "fallback-budget"}
 	var published []*ipcpb.ControlMessage
 	send := func(message *ipcpb.ControlMessage) { published = append(published, message) }
@@ -152,6 +153,8 @@ func TestProcessingMemoryReclaimsInactiveFileCache(t *testing.T) {
 }
 
 func TestProcessingMemoryDoesNotForceLowQualityOnAmpleNode(t *testing.T) {
+	previous := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previous) })
 	policy, err := boundedProcessingMemoryConfig(`[{"process":"AV","codec":"H264","resolution":"3840x2160"}]`)
 	if err != nil {
 		t.Fatal(err)

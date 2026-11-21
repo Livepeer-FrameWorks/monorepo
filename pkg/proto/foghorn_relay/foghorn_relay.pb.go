@@ -45,6 +45,7 @@ type ForwardCommandRequest struct {
 	//	*ForwardCommandRequest_DrainStream
 	//	*ForwardCommandRequest_ReclaimDvrSegment
 	//	*ForwardCommandRequest_StopClaimedSessions
+	//	*ForwardCommandRequest_ProcessingMemoryReservation
 	Command       isForwardCommandRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -256,6 +257,15 @@ func (x *ForwardCommandRequest) GetStopClaimedSessions() *ipc.StopSessionsReques
 	return nil
 }
 
+func (x *ForwardCommandRequest) GetProcessingMemoryReservation() *ipc.ProcessingMemoryReservation {
+	if x != nil {
+		if x, ok := x.Command.(*ForwardCommandRequest_ProcessingMemoryReservation); ok {
+			return x.ProcessingMemoryReservation
+		}
+	}
+	return nil
+}
+
 type isForwardCommandRequest_Command interface {
 	isForwardCommandRequest_Command()
 }
@@ -343,6 +353,10 @@ type ForwardCommandRequest_StopClaimedSessions struct {
 	StopClaimedSessions *ipc.StopSessionsRequest `protobuf:"bytes,31,opt,name=stop_claimed_sessions,json=stopClaimedSessions,proto3,oneof"`
 }
 
+type ForwardCommandRequest_ProcessingMemoryReservation struct {
+	ProcessingMemoryReservation *ipc.ProcessingMemoryReservation `protobuf:"bytes,32,opt,name=processing_memory_reservation,json=processingMemoryReservation,proto3,oneof"`
+}
+
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DvrStart) isForwardCommandRequest_Command() {}
@@ -378,6 +392,8 @@ func (*ForwardCommandRequest_DrainStream) isForwardCommandRequest_Command() {}
 func (*ForwardCommandRequest_ReclaimDvrSegment) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_StopClaimedSessions) isForwardCommandRequest_Command() {}
+
+func (*ForwardCommandRequest_ProcessingMemoryReservation) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -451,7 +467,7 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\x92\f\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\x86\r\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
@@ -476,7 +492,8 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStream\x12H\n" +
 	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStream\x12T\n" +
 	"\x13reclaim_dvr_segment\x18\x1e \x01(\v2\".helmsmancontrol.ReclaimDVRSegmentH\x00R\x11reclaimDvrSegment\x12Z\n" +
-	"\x15stop_claimed_sessions\x18\x1f \x01(\v2$.helmsmancontrol.StopSessionsRequestH\x00R\x13stopClaimedSessionsB\t\n" +
+	"\x15stop_claimed_sessions\x18\x1f \x01(\v2$.helmsmancontrol.StopSessionsRequestH\x00R\x13stopClaimedSessions\x12r\n" +
+	"\x1dprocessing_memory_reservation\x18  \x01(\v2,.helmsmancontrol.ProcessingMemoryReservationH\x00R\x1bprocessingMemoryReservationB\t\n" +
 	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fJ\x04\b\x1d\x10\x1eJ\x04\b\x14\x10\x15R\adefrostR\tclip_pullR\x11dvr_update_sourceR\x15activate_push_targets\"\xa5\x01\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
@@ -500,25 +517,26 @@ func file_foghorn_relay_proto_rawDescGZIP() []byte {
 
 var file_foghorn_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_foghorn_relay_proto_goTypes = []any{
-	(*ForwardCommandRequest)(nil),         // 0: foghorn_relay.ForwardCommandRequest
-	(*ForwardCommandResponse)(nil),        // 1: foghorn_relay.ForwardCommandResponse
-	(*ipc.ConfigSeed)(nil),                // 2: helmsmancontrol.ConfigSeed
-	(*ipc.DVRStartRequest)(nil),           // 3: helmsmancontrol.DVRStartRequest
-	(*ipc.DVRStopRequest)(nil),            // 4: helmsmancontrol.DVRStopRequest
-	(*ipc.ClipDeleteRequest)(nil),         // 5: helmsmancontrol.ClipDeleteRequest
-	(*ipc.DVRDeleteRequest)(nil),          // 6: helmsmancontrol.DVRDeleteRequest
-	(*ipc.VodDeleteRequest)(nil),          // 7: helmsmancontrol.VodDeleteRequest
-	(*ipc.DtshSyncRequest)(nil),           // 8: helmsmancontrol.DtshSyncRequest
-	(*ipc.StopSessionsRequest)(nil),       // 9: helmsmancontrol.StopSessionsRequest
-	(*ipc.DeactivatePushTargets)(nil),     // 10: helmsmancontrol.DeactivatePushTargets
-	(*ipc.ProcessingJobRequest)(nil),      // 11: helmsmancontrol.ProcessingJobRequest
-	(*ipc.FreezeRequest)(nil),             // 12: helmsmancontrol.FreezeRequest
-	(*ipc.DesiredStateUpdate)(nil),        // 13: helmsmancontrol.DesiredStateUpdate
-	(*ipc.InvalidateSessionsRequest)(nil), // 14: helmsmancontrol.InvalidateSessionsRequest
-	(*ipc.ApplyManagedStream)(nil),        // 15: helmsmancontrol.ApplyManagedStream
-	(*ipc.RetractManagedStream)(nil),      // 16: helmsmancontrol.RetractManagedStream
-	(*ipc.DrainStreamRequest)(nil),        // 17: helmsmancontrol.DrainStreamRequest
-	(*ipc.ReclaimDVRSegment)(nil),         // 18: helmsmancontrol.ReclaimDVRSegment
+	(*ForwardCommandRequest)(nil),           // 0: foghorn_relay.ForwardCommandRequest
+	(*ForwardCommandResponse)(nil),          // 1: foghorn_relay.ForwardCommandResponse
+	(*ipc.ConfigSeed)(nil),                  // 2: helmsmancontrol.ConfigSeed
+	(*ipc.DVRStartRequest)(nil),             // 3: helmsmancontrol.DVRStartRequest
+	(*ipc.DVRStopRequest)(nil),              // 4: helmsmancontrol.DVRStopRequest
+	(*ipc.ClipDeleteRequest)(nil),           // 5: helmsmancontrol.ClipDeleteRequest
+	(*ipc.DVRDeleteRequest)(nil),            // 6: helmsmancontrol.DVRDeleteRequest
+	(*ipc.VodDeleteRequest)(nil),            // 7: helmsmancontrol.VodDeleteRequest
+	(*ipc.DtshSyncRequest)(nil),             // 8: helmsmancontrol.DtshSyncRequest
+	(*ipc.StopSessionsRequest)(nil),         // 9: helmsmancontrol.StopSessionsRequest
+	(*ipc.DeactivatePushTargets)(nil),       // 10: helmsmancontrol.DeactivatePushTargets
+	(*ipc.ProcessingJobRequest)(nil),        // 11: helmsmancontrol.ProcessingJobRequest
+	(*ipc.FreezeRequest)(nil),               // 12: helmsmancontrol.FreezeRequest
+	(*ipc.DesiredStateUpdate)(nil),          // 13: helmsmancontrol.DesiredStateUpdate
+	(*ipc.InvalidateSessionsRequest)(nil),   // 14: helmsmancontrol.InvalidateSessionsRequest
+	(*ipc.ApplyManagedStream)(nil),          // 15: helmsmancontrol.ApplyManagedStream
+	(*ipc.RetractManagedStream)(nil),        // 16: helmsmancontrol.RetractManagedStream
+	(*ipc.DrainStreamRequest)(nil),          // 17: helmsmancontrol.DrainStreamRequest
+	(*ipc.ReclaimDVRSegment)(nil),           // 18: helmsmancontrol.ReclaimDVRSegment
+	(*ipc.ProcessingMemoryReservation)(nil), // 19: helmsmancontrol.ProcessingMemoryReservation
 }
 var file_foghorn_relay_proto_depIdxs = []int32{
 	2,  // 0: foghorn_relay.ForwardCommandRequest.config_seed:type_name -> helmsmancontrol.ConfigSeed
@@ -539,13 +557,14 @@ var file_foghorn_relay_proto_depIdxs = []int32{
 	17, // 15: foghorn_relay.ForwardCommandRequest.drain_stream:type_name -> helmsmancontrol.DrainStreamRequest
 	18, // 16: foghorn_relay.ForwardCommandRequest.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
 	9,  // 17: foghorn_relay.ForwardCommandRequest.stop_claimed_sessions:type_name -> helmsmancontrol.StopSessionsRequest
-	0,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	19, // [19:20] is the sub-list for method output_type
-	18, // [18:19] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	19, // 18: foghorn_relay.ForwardCommandRequest.processing_memory_reservation:type_name -> helmsmancontrol.ProcessingMemoryReservation
+	0,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 20: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	20, // [20:21] is the sub-list for method output_type
+	19, // [19:20] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -572,6 +591,7 @@ func file_foghorn_relay_proto_init() {
 		(*ForwardCommandRequest_DrainStream)(nil),
 		(*ForwardCommandRequest_ReclaimDvrSegment)(nil),
 		(*ForwardCommandRequest_StopClaimedSessions)(nil),
+		(*ForwardCommandRequest_ProcessingMemoryReservation)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

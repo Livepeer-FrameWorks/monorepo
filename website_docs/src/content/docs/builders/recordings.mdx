@@ -505,10 +505,10 @@ was already removed.
 Request `originalFile { sizeBytes }` on a `VodAsset` or library `StorageArtifact` to see whether
 an original is retained. **Download original** in the library, or `createVodOriginalDownload(id)`,
 returns an authenticated attachment link valid for 15 minutes. It requires `streams:read`, is
-limited to 20 grants per minute with a burst of 5 per account per gateway, and is not metered as
+limited to 20 grants per minute with a burst of 5 per account across all gateways, and is not metered as
 playback. **Download MP4 (processed)** downloads the rendition output.
 
-`deleteVodOriginal(id)` permanently removes only the original, keeping processed playback. It
+`deleteVodOriginal(id)` removes original download access and schedules permanent storage deletion, keeping processed playback. It
 requires `streams:write`; the library asks for confirmation. Wait until processed storage sync
 finishes before deleting the original. Deleting the video or reaching its retention deadline
 removes both files. Originals count at the normal storage rate and toward the plan storage cap.

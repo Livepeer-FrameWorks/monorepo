@@ -881,10 +881,10 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 
 	jsonData := map[string]interface{}{
 		"cpu":       float64(45),
-		"mem_total": float64(8589934592),
-		"mem_used":  float64(4294967296),
-		"shm_total": float64(1073741824),
-		"shm_used":  float64(536870912),
+		"mem_total": float64(8388608),
+		"mem_used":  float64(4194304),
+		"shm_total": float64(1048576),
+		"shm_used":  float64(524288),
 		"bw":        []interface{}{float64(2000), float64(10000)},
 		"curr":      []interface{}{float64(10), float64(2), float64(5), float64(0), float64(3)},
 		"bwlimit":   float64(134217728),
@@ -1087,7 +1087,7 @@ func TestConvertNodeAPI_LegacyBandwidthFormat(t *testing.T) {
 	}
 }
 
-func TestConvertNodeAPI_LegacyRAMFormat(t *testing.T) {
+func TestConvertNodeAPI_ObsoleteRAMObjectIgnored(t *testing.T) {
 	pm := &PrometheusMonitor{baseURL: "http://mist:4242"}
 	jsonData := map[string]interface{}{
 		"cpu": float64(10),
@@ -1100,11 +1100,11 @@ func TestConvertNodeAPI_LegacyRAMFormat(t *testing.T) {
 	trigger := pm.convertNodeAPIToMistTrigger("node-5", jsonData, logging.NewLogger())
 	nlu := trigger.GetNodeLifecycleUpdate()
 
-	if nlu.RamMax != 8000000000 {
-		t.Fatalf("expected legacy RAM max, got %d", nlu.RamMax)
+	if nlu.RamMax != 0 {
+		t.Fatalf("obsolete RAM object supplied max, got %d", nlu.RamMax)
 	}
-	if nlu.RamCurrent != 4000000000 {
-		t.Fatalf("expected legacy RAM current, got %d", nlu.RamCurrent)
+	if nlu.RamCurrent != 0 {
+		t.Fatalf("obsolete RAM object supplied current, got %d", nlu.RamCurrent)
 	}
 }
 
@@ -1938,5 +1938,24 @@ func TestConvertStreamAPIToMistTriggerReportsPlayabilityWithoutInventingBufferSt
 	}
 	if sampled := slu.GetBufferSampledUnixMillis(); sampled < before || sampled > time.Now().UnixMilli() {
 		t.Fatalf("buffer sample time %d outside the poll window", sampled)
+	}
+}
+
+func TestMistKiBMemoryReachesLifecycleAsBytes(t *testing.T) {
+	pm := &PrometheusMonitor{baseURL: "http://mist.invalid"}
+	update := pm.convertNodeAPIToMistTrigger("memory-units", map[string]interface{}{"mem_total": float64(16 * 1024 * 1024), "mem_used": float64(4 * 1024 * 1024), "shm_total": float64(2 * 1024 * 1024), "shm_used": float64(1024 * 1024)}, logging.NewLogger()).GetNodeLifecycleUpdate()
+	if update.GetRamMax() != 16*1024*1024*1024 || update.GetRamCurrent() != 4*1024*1024*1024 || update.GetShmTotalBytes() != 2*1024*1024*1024 || update.GetShmUsedBytes() != 1024*1024*1024 {
+		t.Fatalf("Mist KiB leaked into byte-valued lifecycle: %+v", update)
+	}
+}
+
+func TestLifecycleReportsContainerProcessingBudget(t *testing.T) {
+	pm := &PrometheusMonitor{memorySnapshot: func() (uint64, uint64, error) { return 3 * 1024 * memoryMiB, 2 * 1024 * memoryMiB, nil }}
+	update := pm.convertNodeAPIToMistTrigger("container", map[string]interface{}{"mem_total": float64(16 * 1024 * 1024)}, logging.NewLogger()).GetNodeLifecycleUpdate()
+	if update.ProcessingMemoryBudgetBytes == nil || update.GetProcessingMemoryBudgetBytes() != 2560*memoryMiB {
+		t.Fatalf("host memory replaced effective processing budget: %+v", update)
+	}
+	if update.GetRamMax() != 16*1024*1024*1024 {
+		t.Fatalf("physical memory display corrupted: %d", update.GetRamMax())
 	}
 }

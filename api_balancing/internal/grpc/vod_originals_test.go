@@ -158,8 +158,8 @@ func TestCreateVodUploadContinuesWithoutRetentionDuringRollout(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			server, mock, done := newStatusServer(t, &fakeVodS3Client{})
 			defer done()
-			mock.ExpectQuery("IsVodOriginalRetentionActivated").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 			mock.ExpectQuery(`FROM foghorn\.artifacts a`).WillReturnError(sql.ErrNoRows)
+			mock.ExpectQuery("IsVodOriginalRetentionActivated").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 			mock.ExpectBegin()
 			mock.ExpectExec(`INSERT INTO foghorn\.artifacts`).WillReturnResult(sqlmock.NewResult(1, 1))
 			mock.ExpectExec(`INSERT INTO foghorn\.vod_metadata`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false).WillReturnError(sql.ErrConnDone)
@@ -175,6 +175,20 @@ func TestCreateVodUploadContinuesWithoutRetentionDuringRollout(t *testing.T) {
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDeleteOriginalPreservesTerminalNotFound(t *testing.T) {
+	for _, state := range []string{"failed", "deleted", "expired", "aborted"} {
+		t.Run(state, func(t *testing.T) {
+			server, mock, done := newStatusServer(t, &fakeVodS3Client{})
+			defer done()
+			mock.ExpectQuery("GetVodOriginal").WithArgs("tenant", "hash").WillReturnRows(originalRows().AddRow(state, "source.mp4", true, server.localBackendID(), nil, nil, "phone.mp4"))
+			_, err := server.DeleteVodOriginal(t.Context(), &sharedpb.DeleteVodOriginalRequest{TenantId: "tenant", ArtifactHash: "hash"})
+			if status.Code(err) != codes.NotFound {
+				t.Fatalf("terminal video mislabeled as still processing: %v", err)
 			}
 		})
 	}

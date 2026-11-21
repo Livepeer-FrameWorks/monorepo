@@ -168,6 +168,10 @@ func mergeIncomingNode(incoming, local *NodeState) {
 // already holds (it was serialized before a newer report landed here, or by a
 // replica whose copy was behind), and must not move any of them backwards.
 func keepNewerNodeObservations(incoming, local *NodeState) {
+	if incoming.ProcessingMemoryBudgetBytes == nil {
+		incoming.ProcessingMemoryBudgetBytes = cloneUint64Ptr(local.ProcessingMemoryBudgetBytes)
+	}
+
 	// A zero heartbeat is a disconnect, which stands when it happened after
 	// the heartbeat this replica holds.
 	heartbeatOlder := local.LastHeartbeat.After(incoming.LastHeartbeat) &&
@@ -203,6 +207,7 @@ func keepNewerNodeObservations(incoming, local *NodeState) {
 		incoming.StorageCapacityBytes = local.StorageCapacityBytes
 		incoming.StorageUsedBytes = local.StorageUsedBytes
 		incoming.ProcessingClasses = local.ProcessingClasses
+		incoming.ProcessingMemoryBudgetBytes = cloneUint64Ptr(local.ProcessingMemoryBudgetBytes)
 		incoming.DiskTotalBytes = local.DiskTotalBytes
 		incoming.DiskUsedBytes = local.DiskUsedBytes
 	}
@@ -348,7 +353,13 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 		defer lock.Unlock()
 	}
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	capacityImproved := false
+	defer func() {
+		sm.mu.Unlock()
+		if capacityImproved {
+			sm.processingCapacityChanged(change.NodeID)
+		}
+	}()
 
 	switch change.Entity {
 	case StateEntityNodeStreamCounts:
@@ -372,7 +383,9 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 		}
 		var node NodeState
 		if err := json.Unmarshal(change.Payload, &node); err == nil {
-			mergeIncomingNode(&node, sm.nodes[node.NodeID])
+			previous := sm.nodes[node.NodeID]
+			mergeIncomingNode(&node, previous)
+			capacityImproved = processingNodeCapacityImproved(previous, &node)
 			sm.nodes[node.NodeID] = &node
 			// The replicated node state is the holder's lifecycle update;
 			// reconcile this replica's own redirects to the node with it.
@@ -403,6 +416,7 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 			n = newNodeState(nodeID)
 			sm.nodes[nodeID] = n
 		}
+		capacityImproved = n.OperationalMode != mode && mode == NodeModeNormal
 		n.OperationalMode = mode
 		n.OperationalModeSetBy = rec.SetBy
 	case StateEntityStream:

@@ -176,6 +176,9 @@ func processingReadinessFailureStatus(err error) string {
 // processingReadinessFailureOutputs names a source stall as the retry cause, so
 // Foghorn retries it within its stall window instead of its retry budget.
 func processingReadinessFailureOutputs(err error) map[string]string {
+	if outputs := processingOOMOutputs(err); outputs != nil {
+		return outputs
+	}
 	var stall *processingSourceStallError
 	if errors.As(err, &stall) {
 		return map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseSourceStall}

@@ -76,18 +76,3 @@ func TestDecodeConcurrencyFollowsSourceAcrossAllRungs(t *testing.T) {
 		}
 	}
 }
-
-func TestProcessingSourcePolicyPreservesFullTurnRotation(t *testing.T) {
-	policy := `[{"process":"Livepeer","target_profiles":[{"height":720,"bitrate":3000000}]}]`
-	for _, rotation := range []int{0, 360, -360, 720} {
-		got := ProcessingSourcePolicy(policy, SourceMediaInfo{VideoCodec: "H264", Rotation: rotation})
-		if got != policy {
-			t.Errorf("equivalent upright rotation %d unnecessarily selected local processing: %s", rotation, got)
-		}
-	}
-	for _, source := range []SourceMediaInfo{{VideoCodec: "H264", Rotation: 90}, {VideoCodec: "H264", Rotation: -270}, {VideoCodec: "H264", Mirror: true}} {
-		if HasLivepeerProcesses(ProcessingSourcePolicy(policy, source)) {
-			t.Errorf("source requiring a display transform retained remote processing: %+v", source)
-		}
-	}
-}

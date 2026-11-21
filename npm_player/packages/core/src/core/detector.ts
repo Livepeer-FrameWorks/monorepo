@@ -240,7 +240,7 @@ export const WEBRTC_COMPATIBLE_CODECS = {
  */
 export const WEBRTC_INCOMPATIBLE_CODECS = {
   video: ["HEVC", "H265", "THEORA", "MPEG2"],
-  audio: ["AC3", "EAC3", "EC3", "MP3", "FLAC", "VORBIS", "DTS"],
+  audio: ["AC3", "EAC3", "EAC-3", "EC3", "MP3", "FLAC", "VORBIS", "DTS"],
 } as const;
 
 export interface WebRTCCodecCompatibility {

@@ -29,9 +29,9 @@ class DeleteVodOriginal(BaseModel):
         OpenUnion(),
     ] = Field(
         alias="deleteVodOriginal",
-        description="Permanently delete only the retained upload; processed playback remains available.",
+        description="Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available.",
     )
-    "Permanently delete only the retained upload; processed playback remains available."
+    "Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available."
 
 
 class DeleteVodOriginalDeleteVodOriginalDeleteSuccess(DeleteSuccessDefault):

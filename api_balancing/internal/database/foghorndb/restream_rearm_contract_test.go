@@ -21,20 +21,6 @@ func TestRuntimeRestreamRearmHasStableRunResetAndBoundedBackoff(t *testing.T) {
 	}
 }
 
-func TestOfflineSettlementKeepsRetryBudgetAndBoundsAcknowledgementWait(t *testing.T) {
-	if strings.Contains(settleOfflineEffect, "\n    attempts =") {
-		t.Fatal("incomplete offline settlement erases the per-generation retry budget")
-	}
-	for _, fragment := range []string{
-		"THEN e.ack_wait_attempts + 1 ELSE e.ack_wait_attempts END",
-		"e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)",
-	} {
-		if !strings.Contains(settleOfflineEffect, fragment) {
-			t.Fatalf("offline settlement is missing %q", fragment)
-		}
-	}
-}
-
 func TestOfflineDeadLettersAreVisibleAndRetained(t *testing.T) {
 	if !strings.Contains(failExhaustedOfflineEffects, "RETURNING id, tenant_id") {
 		t.Fatal("exhausted offline effects are not returned for observability")

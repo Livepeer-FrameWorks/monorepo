@@ -12,7 +12,7 @@ import (
 
 // deferUnroutablePattern matches the write that returns an unroutable job to
 // the queue with a next_attempt_at, so the next polls do not claim it again.
-const deferUnroutablePattern = `UPDATE foghorn.processing_jobs\s+SET status = 'queued', processing_node_id = NULL, updated_at = NOW\(\),\s+next_attempt_at = NOW\(\) \+`
+const deferUnroutablePattern = `UPDATE foghorn.processing_jobs AS job\s+SET status = 'queued', processing_node_id = NULL, updated_at = NOW\(\),\s+next_attempt_at = NOW\(\) \+`
 
 // unroutableDeferralSeconds matches a deferral within the jittered bounds of
 // unroutableJobDeferral: 12 to 18 seconds, several poll intervals.
@@ -38,7 +38,7 @@ func TestDispatchJobNoNodeRevertsAndMarksArtifactQueued(t *testing.T) {
 
 	// 1. return the claimed job to the queue, held back until its deferral passes.
 	mock.ExpectExec(deferUnroutablePattern).
-		WithArgs(unroutableDeferralSeconds{}, "job-1").
+		WithArgs(unroutableDeferralSeconds{}, "cluster_unavailable", "job-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 2. project the artifact back to queued (clip/vod only).
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -70,7 +70,7 @@ func TestDispatchJobNoNodeWithoutArtifactOnlyReverts(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec(deferUnroutablePattern).
-		WithArgs(unroutableDeferralSeconds{}, "job-2").
+		WithArgs(unroutableDeferralSeconds{}, "cluster_unavailable", "job-2", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})

@@ -54,6 +54,7 @@ distributed_tables:
   - foghorn.stream_cleanup_obligation
   - foghorn.vod_metadata
   - foghorn.processing_jobs
+  - foghorn.processing_node_reservations
   - foghorn.artifact_node_copy_version_counter
   - foghorn.artifact_event_outbox
   - foghorn.domain_event_outbox

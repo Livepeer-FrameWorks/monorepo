@@ -74,6 +74,7 @@
   import { formatDuration } from "$lib/utils/stream-helpers";
   import { createCatalogRefresh } from "$lib/library/catalog-refresh";
   import { canPlayRollingDvr } from "$lib/library/dvr-playback";
+  import { processingStatusLabel } from "$lib/library/processing-status";
   import { processingWatchVerdict } from "$lib/library/processing-watch";
   import { ARTIFACT_EVENT_TYPES, artifactEventFromTenantEvent } from "$lib/library/artifact-events";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
@@ -114,6 +115,7 @@
     status: string;
     description?: string | null;
     errorMessage?: string | null;
+    processingWaitReason?: string | null;
     duration: number | null;
     sizeBytes: number | null;
     segmentCount?: number | null;
@@ -395,6 +397,7 @@
         // Catalog-projected metadata: description (VOD uploads) + processing-failure detail.
         description: node.description ?? null,
         errorMessage: node.errorMessage ?? null,
+        processingWaitReason: node.processingWaitReason ?? null,
         // Clips retain requested duration until measured; DVR/VOD may still be unknown.
         duration: node.durationSeconds ?? null,
         // Catalog size is authoritative for a registered row; the feed only fills in a size for a
@@ -620,6 +623,7 @@
   let uploadTitle = $state("");
   let uploadLadder = $state("");
   let uploadKeepOriginal = $state<boolean | null>(null);
+  let acceptedUploadKeepsOriginal = $state<boolean | null>(null);
   const originalDownload = new CreateVodOriginalDownloadStore();
   const deleteOriginal = new DeleteVodOriginalStore();
   const uploadPolicy = new MediaRetentionPolicyStore();
@@ -1060,6 +1064,7 @@
     }
 
     uploadFile = file;
+    acceptedUploadKeepsOriginal = null;
     if (!uploadTitle) {
       uploadTitle = file.name.replace(/\.[^/.]+$/, "");
     }
@@ -1101,6 +1106,7 @@
   type UploadSessionInputs =
     | {
         kind: "upload";
+        keepOriginal?: boolean;
         uploadId: string;
         partSize: number;
         parts: { partNumber: number; presignedUrl: string }[];
@@ -1108,6 +1114,7 @@
       }
     | {
         kind: "finalized";
+        keepOriginal?: boolean;
         stage: "processing" | "done";
       };
 
@@ -1133,6 +1140,7 @@
       toast.info("Previous upload session expired; starting fresh.");
       return null;
     }
+    acceptedUploadKeepsOriginal = candidate.record.keepOriginal ?? null;
     if (data.state === "PROCESSING" || data.state === "READY") {
       await getSessionStore().delete(candidate.record.uploadId);
       recoveryOffer = null;
@@ -1153,6 +1161,7 @@
       kind: "upload",
       uploadId: candidate.record.uploadId,
       partSize: candidate.record.partSize,
+      keepOriginal: candidate.record.keepOriginal,
       parts: candidate.record.parts.map((p) => ({
         partNumber: p.partNumber,
         presignedUrl: p.presignedUrl,
@@ -1245,6 +1254,7 @@
           const error = createResult as unknown as { message?: string };
           throw new Error(error?.message || "Failed to initialize upload");
         }
+        acceptedUploadKeepsOriginal = createResult.keepOriginal ?? null;
         const wantedOriginal =
           uploadKeepOriginal ??
           $uploadPolicy.data?.mediaRetentionPolicy?.effectiveKeepVodOriginals ??
@@ -1258,6 +1268,7 @@
           kind: "upload",
           uploadId: createResult.id,
           partSize: createResult.partSize,
+          keepOriginal: createResult.keepOriginal ?? undefined,
           parts: createResult.parts.map((p) => ({
             partNumber: p.partNumber,
             presignedUrl: p.presignedUrl,
@@ -1273,6 +1284,7 @@
         uploadId: session.uploadId,
         file,
         partSize: session.partSize,
+        keepOriginal: session.keepOriginal,
         parts: session.parts,
         store: getSessionStore(),
       });
@@ -1450,6 +1462,7 @@
     uploadTitle = "";
     uploadLadder = "";
     uploadKeepOriginal = null;
+    acceptedUploadKeepsOriginal = null;
     uploadDescription = "";
     uploadProgress = 0;
     uploadStage = "idle";
@@ -1558,13 +1571,6 @@
     if (s === "failed") return "text-destructive bg-destructive/10 border-destructive/20";
     if (s === "deleted") return "text-muted-foreground bg-muted border-border opacity-70";
     return "text-muted-foreground bg-muted border-border";
-  }
-
-  // Expired assets now come back in the catalog with status "expired"; render a proper
-  // label and never let a past-expiry row read as a live "Ready"/"Completed" state.
-  function statusLabel(status: string, expired: boolean): string {
-    if (expired || status.toLowerCase() === "expired") return "Expired";
-    return status || "Unknown";
   }
 
   function getTypeColor(type: ArtifactType): string {
@@ -2211,7 +2217,11 @@
                                   isExpiredArtifact ? 'expired' : artifact.status
                                 )}"
                               >
-                                {statusLabel(artifact.status, isExpiredArtifact)}
+                                {processingStatusLabel(
+                                  artifact.status,
+                                  isExpiredArtifact,
+                                  artifact.processingWaitReason
+                                )}
                               </span>
                               <!-- Durable (S3) state: freezing → frozen → synced is a genuine
                                    progression, so these are mutually exclusive. -->
@@ -3044,6 +3054,12 @@
           disabled={uploading}
         />
       </div>
+
+      {#if acceptedUploadKeepsOriginal === false}
+        <p role="status" class="text-sm text-warning">
+          This upload keeps only the processed video; no original upload will be retained.
+        </p>
+      {/if}
 
       {#if uploading || uploadStage === "processing" || uploadStage === "done"}
         <div class="space-y-3">

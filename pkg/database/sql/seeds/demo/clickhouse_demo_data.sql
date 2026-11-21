@@ -611,7 +611,7 @@ INSERT INTO periscope.node_metrics_samples (
     bandwidth_in, bandwidth_out, up_speed, down_speed,
     connections_current, stream_count,
     is_healthy, operational_mode, latitude, longitude,
-    metadata
+    metadata, memory_unit_bytes
 )
 SELECT
     toDateTime(now() - INTERVAL number MINUTE) as timestamp,
@@ -635,7 +635,8 @@ SELECT
     'normal' as operational_mode,
     52.1601 as latitude,
     4.4970 as longitude,
-    '{"region":"eu-west"}' as metadata
+    '{"region":"eu-west"}' as metadata,
+    toUInt16(1) AS memory_unit_bytes
 FROM numbers(0, 10080);
 
 -- =================================================================================================

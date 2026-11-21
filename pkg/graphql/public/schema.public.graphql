@@ -1239,6 +1239,10 @@ type Clip implements Node {
   """
   status: String!
   """
+  Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+  """
+  processingWaitReason: String
+  """
   Processing failure detail from the artifact catalog.
   """
   errorMessage: String
@@ -5420,7 +5424,7 @@ type Mutation {
   """
   createVodOriginalDownload(id: ID!): CreateVodOriginalDownloadResult!
   """
-  Permanently delete only the retained upload; processed playback remains available.
+  Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available.
   """
   deleteVodOriginal(id: ID!): DeleteVodOriginalResult!
   """
@@ -5580,11 +5584,11 @@ type NodeMetric implements Node {
   clusterId: String
   cpuUsage: Float!
   """
-  Total memory in MiB.
+  Total memory in bytes.
   """
   memoryTotal: Float
   """
-  Used memory in MiB.
+  Used memory in bytes.
   """
   memoryUsed: Float
   """
@@ -8182,6 +8186,10 @@ type StorageArtifact {
   errorMessage: String
   sizeBytes: Float
   status: String!
+  """
+  Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+  """
+  processingWaitReason: String
   storageLocation: String
   """
   ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
@@ -10146,6 +10154,10 @@ type VodAsset implements Node {
   Current processing/storage status of the asset.
   """
   status: VodAssetStatus!
+  """
+  Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+  """
+  processingWaitReason: String
   """
   Where the asset is stored (s3, local, freezing).
   """

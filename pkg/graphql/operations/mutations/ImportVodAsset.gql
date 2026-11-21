@@ -11,6 +11,7 @@ mutation ImportVodAsset($input: ImportVodAssetInput!) {
       createdAt
       updatedAt
       errorMessage
+      processingWaitReason
     }
     ... on ValidationError {
       message

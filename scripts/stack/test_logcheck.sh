@@ -106,6 +106,11 @@ expect "an unsupported transport codec with a confirmed local replacement passes
   passes "0 edge $codec_routed
 0 edge $codec_exit
 0 edge $codec_fail"
+codec_vod_routed=${codec_routed//PROCESS_REPLACE: local MistProcAV decodes the source codec/Source codec routed to local MistProcAV for decoding}
+expect "a structured VOD codec refusal routed through job admission passes" \
+  passes "0 edge $codec_vod_routed
+0 edge $codec_exit
+0 edge $codec_fail"
 expect "an unsupported transport codec without replacement still fails" fails "0 edge $codec_exit"
 expect "a codec replacement for a different source does not cover the failure" \
   fails "0 edge ${codec_routed//part2/other2}

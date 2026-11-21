@@ -1149,6 +1149,8 @@ CREATE TABLE IF NOT EXISTS node_metrics_samples (
     cpu_usage Float32,
     ram_max UInt64,
     ram_current UInt64,
+    -- Historical rows without an explicit writer marker contain Mist KiB counters.
+    memory_unit_bytes UInt16 DEFAULT 1024,
     shm_total_bytes UInt64,
     shm_used_bytes UInt64,
     disk_total_bytes UInt64,

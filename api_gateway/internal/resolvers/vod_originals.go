@@ -65,7 +65,11 @@ func (r *Resolver) DoCreateVodOriginalDownload(ctx context.Context, id string) (
 			return &model.NotFoundError{Message: "VOD not found"}, nil
 		}
 		if status.Code(err) == codes.FailedPrecondition || status.Code(err) == codes.ResourceExhausted {
-			return &model.ValidationError{Message: status.Convert(err).Message()}, nil
+			message := status.Convert(err).Message()
+			if message == "original_not_kept" {
+				message = "No original upload is retained for this video"
+			}
+			return &model.ValidationError{Message: message}, nil
 		}
 		return nil, fmt.Errorf("download original: %w", err)
 	}

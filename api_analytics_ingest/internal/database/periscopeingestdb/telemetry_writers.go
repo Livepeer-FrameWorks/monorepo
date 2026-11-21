@@ -282,7 +282,7 @@ const insertNodeMetricsSample = `INSERT INTO node_metrics_samples (
 	shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
 	bandwidth_in, bandwidth_out, up_speed, down_speed, connections_current,
 	stream_count, is_healthy, operational_mode, latitude, longitude, metadata,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, memory_unit_bytes
 )`
 
 type NodeMetricsSampleRow struct {
@@ -303,6 +303,6 @@ type NodeMetricsSampleRow struct {
 
 func PrepareNodeMetricsSample(ctx context.Context, db BatchPreparer) (*Writer[NodeMetricsSampleRow], error) {
 	return prepare(ctx, db, insertNodeMetricsSample, func(row NodeMetricsSampleRow) []interface{} {
-		return []interface{}{row.Timestamp, row.TenantID, row.ClusterID, row.NodeID, row.CPUUsage, row.RAMMax, row.RAMCurrent, row.SHMTotalBytes, row.SHMUsedBytes, row.DiskTotalBytes, row.DiskUsedBytes, row.BandwidthIn, row.BandwidthOut, row.UpSpeed, row.DownSpeed, row.ConnectionsCurrent, row.StreamCount, row.IsHealthy, row.OperationalMode, row.Latitude, row.Longitude, row.Metadata, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.TenantID, row.ClusterID, row.NodeID, row.CPUUsage, row.RAMMax, row.RAMCurrent, row.SHMTotalBytes, row.SHMUsedBytes, row.DiskTotalBytes, row.DiskUsedBytes, row.BandwidthIn, row.BandwidthOut, row.UpSpeed, row.DownSpeed, row.ConnectionsCurrent, row.StreamCount, row.IsHealthy, row.OperationalMode, row.Latitude, row.Longitude, row.Metadata, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, uint16(1)}
 	})
 }

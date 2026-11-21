@@ -635,9 +635,9 @@ expect 'capacity health probe authenticates to the internal Foghorn listener' ca
 
 rotation_degradation_is_scoped() (
   eval "$(sed -n '/^no_upload_degradation() {$/,/^}$/p' "$here/scenarios/79-rotated-upload.sh")"
-  logs_since() { printf '%s\n' '{"msg":"Stream transcode degraded to local processing","stream":"processing+another-upload"}'; }
+  logs_since() { printf '%s\n' '{"msg":"Processing work admitted by memory","artifact_hash":"this-upload"}' '{"msg":"Stream transcode degraded to local processing","stream":"processing+another-upload"}'; }
   no_upload_degradation this-upload now || return 1
-  logs_since() { printf '%s\n' '{"msg":"Stream transcode degraded to local processing","stream":"processing+this-upload"}'; }
+  logs_since() { printf '%s\n' '{"msg":"Processing work admitted by memory","artifact_hash":"this-upload"}' '{"msg":"Stream transcode degraded to local processing","stream":"processing+this-upload"}'; }
   ! no_upload_degradation this-upload now || return 1
   logs_since() { return 1; }
   ! no_upload_degradation this-upload now

@@ -117,21 +117,15 @@ func failedRecordingStatus(log *logrus.Entry, mistClient *mist.Client, streamNam
 	return processingResultRetryable
 }
 
-// activeStreamsContain reports whether an active_streams response still lists
-// the stream.
-func activeStreamsContain(resp map[string]interface{}, streamName string) bool {
-	switch streams := resp["active_streams"].(type) {
-	case map[string]interface{}:
-		_, ok := streams[streamName]
-		return ok
-	case []interface{}:
-		for _, s := range streams {
-			if name, ok := s.(string); ok && name == streamName {
-				return true
-			}
-		}
+// processingStreamPresence distinguishes a confirmed stop from a missing or
+// invalid controller snapshot. Only null or map membership supplies evidence.
+func processingStreamPresence(resp map[string]interface{}, streamName string) (known, active bool) {
+	streams, known := activeStreamsFromResponse(resp)
+	if !known {
+		return false, false
 	}
-	return false
+	_, active = streams[streamName]
+	return true, active
 }
 
 // waitProcessingStreamStopped polls Mist until the stream is no longer active
@@ -140,7 +134,7 @@ func waitProcessingStreamStopped(mistClient *mist.Client, streamName string, tim
 	deadline := time.Now().Add(timeout)
 	for {
 		resp, err := mistClient.GetActiveStreamsFiltered([]string{streamName})
-		if err == nil && !activeStreamsContain(resp, streamName) {
+		if known, active := processingStreamPresence(resp, streamName); err == nil && known && !active {
 			return true
 		}
 		if time.Now().After(deadline) {

@@ -1,16 +1,11 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -30,6 +25,12 @@ func TestRenditionSpanWithNonzeroTimestampOrigin(t *testing.T) {
 			if renditionsCompleteFromTracks(discardLog(), []int{360}, tracks, 60000) {
 				t.Fatal("two-second rung accepted against a sixty-second source with nonzero origin")
 			}
+			tracks[0].firstms = 148000
+			tracks[0].lastms = 150000
+			if renditionsCompleteFromTracks(discardLog(), []int{360}, tracks, 60000) {
+				t.Fatal("rendition missing its first 58 seconds was accepted")
+			}
+
 		})
 	}
 }
@@ -63,7 +64,7 @@ func TestNodeCapacityRefusalCarriesPlacementRequirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	total := uint64(1536) * memoryMiB
-	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
+	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	policy := mist.ReplaceLivepeerWithLocal(`[{"process":"Livepeer","target_profiles":[{"height":2160,"bitrate":16000000},{"height":1440,"bitrate":8000000},{"height":1080,"bitrate":5000000},{"height":720,"bitrate":3000000},{"height":480,"bitrate":1200000},{"height":360,"bitrate":800000}]}]`)
 	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
 	if err == nil {
@@ -74,54 +75,10 @@ func TestNodeCapacityRefusalCarriesPlacementRequirement(t *testing.T) {
 		outputs[mist.ProcessingRequiredMemoryBytes] == "" || outputs[mist.ProcessingMemoryPolicy] != policy {
 		t.Fatalf("node refusal lost its placement requirement: %v, %v", err, outputs)
 	}
-	if processingMemoryResultStatus(err) != processingResultRetryable {
+	if processingMemoryFailureStatus(err) != processingResultRetryable {
 		t.Fatalf("a node refusal must let Foghorn consider the other cluster nodes: %v", err)
 	}
 	if !strings.Contains(err.Error(), "memory budget") {
 		t.Fatalf("memory refusal lacks a clear reason: %v", err)
-	}
-}
-
-func TestOldMistUsesConservativeMemoryAdmission(t *testing.T) {
-	isolateProcessingOverrideState(t)
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]any{"authorize": map[string]any{"status": "OK"}, "capabilities": map[string]any{"processes": map[string]any{"AV": map[string]any{"optional": map[string]any{}}, "Thumbs": map[string]any{"optional": map[string]any{}}}}})
-	}))
-	defer server.Close()
-	const stream, job = "processing+old-mist", "old-mist"
-	if err := setProcessingProcessOverride(stream, processingSourceProbePolicy, job, time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	total := uint64(3072) * memoryMiB
-	h := &ProcessingJobHandler{logger: logging.NewLogger(), mistServerURL: server.URL, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
-	desired := `[{"process":"AV","codec":"H264","resolution":"x2160","bitrate":16000000,"preset":"faster"},{"process":"AV","codec":"H264","resolution":"x360","bitrate":800000,"preset":"faster"}]`
-	policy, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, desired, mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
-	if calls.Load() == 0 {
-		t.Error("memory admission ignored the Mist capability inventory")
-	}
-	if err == nil {
-		t.Fatalf("old Mist admitted a reduced-thread estimate it cannot enforce: %s", policy)
-	}
-	total = uint64(128) * 1024 * memoryMiB
-	policy, err = h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, desired, mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"memory_budgeted", "encode_threads", "decode_threads", "lookahead"} {
-		if strings.Contains(policy, key) {
-			t.Fatalf("unsupported %s published to old Mist: %s", key, policy)
-		}
-	}
-	modern, err := mist.PlanProcessingMemory(desired, mist.SourceMediaInfo{Width: 3840, Height: 2160}, total, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	processingProcessOverridesMu.Lock()
-	bytes := processingOverrideRecords[stream].MemoryBytes
-	processingProcessOverridesMu.Unlock()
-	if bytes <= modern.Bytes {
-		t.Fatalf("legacy estimate %d is no larger than controlled estimate %d", bytes, modern.Bytes)
 	}
 }

@@ -2148,7 +2148,8 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** Processing failure detail from the artifact catalog. */
+status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+processingWaitReason: string | null, /** Processing failure detail from the artifact catalog. */
 errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
 clipMode: string | null, /** Original request parameters for audit/display. */
@@ -2835,8 +2836,8 @@ nextPaymentDate: string | null };
 
 export type NetworkStatusDefaultFieldsFragment = { totalNodes: number, healthyNodes: number, updatedAt: string, clusters: Array<{ clusterId: string, name: string, region: string, latitude: number, longitude: number, nodeCount: number, healthyNodeCount: number, peerCount: number, status: string, clusterType: string, shortDescription: string | null, currentStreams: number, currentViewers: number, egressMbps: number, egressCapacityMbps: number, egressUsableMbps: number, defaultBudgetNodes: number, ingressMbps: number, services: Array<string> }>, peerConnections: Array<{ sourceCluster: string, targetCluster: string, connected: boolean, connectionType: string }>, nodes: Array<{ nodeId: string, name: string, nodeType: string, latitude: number, longitude: number, status: string, clusterId: string }>, serviceInstances: Array<{ instanceId: string, serviceId: string, clusterId: string, nodeId: string | null, status: string, healthStatus: string }> };
 
-export type NodeMetricDefaultFieldsFragment = { id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, /** Total memory in MiB. */
-memoryTotal: number | null, /** Used memory in MiB. */
+export type NodeMetricDefaultFieldsFragment = { id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, /** Total memory in bytes. */
+memoryTotal: number | null, /** Used memory in bytes. */
 memoryUsed: number | null, /** Total disk capacity in bytes. */
 diskTotal: number | null, /** Used disk capacity in bytes. */
 diskUsed: number | null, /** Total shared memory in bytes. */
@@ -4578,7 +4579,8 @@ playbackId: string, /** Registry origin kind. Null/user_upload for ordinary uplo
 originType: string | null, /** Origin entity id, such as DVR chapter_id when originType=dvr_chapter. */
 originId: string | null, /** Optional description of the asset content. */
 description: string | null, /** Original filename when uploaded. */
-filename: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
+filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+processingWaitReason: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
 syncStatus: string | null, /** Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false. */
 hasLocalCopy: boolean | null, /** File size in bytes (available after validation). */
 sizeBytes: number | null, /** Video duration in milliseconds. */
@@ -5220,8 +5222,8 @@ export type DeleteVodOriginalMutationVariables = Exact<{
 }>;
 
 
-/** Permanently delete only the retained upload; processed playback remains available. */
-export type DeleteVodOriginalMutation = { /** Permanently delete only the retained upload; processed playback remains available. */
+/** Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available. */
+export type DeleteVodOriginalMutation = { /** Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available. */
 deleteVodOriginal:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
@@ -7024,7 +7026,8 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** Processing failure detail from the artifact catalog. */
+status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+processingWaitReason: string | null, /** Processing failure detail from the artifact catalog. */
 errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
 clipMode: string | null, /** Original request parameters for audit/display. */
@@ -7240,8 +7243,8 @@ conversationId: string, /** The message content. */
 content: string, /** Who sent this message. */
 sender: MessageSender, /** When the message was sent. */
 createdAt: string }
-    | { __typename: 'NodeMetric', id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, /** Total memory in MiB. */
-memoryTotal: number | null, /** Used memory in MiB. */
+    | { __typename: 'NodeMetric', id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, /** Total memory in bytes. */
+memoryTotal: number | null, /** Used memory in bytes. */
 memoryUsed: number | null, /** Total disk capacity in bytes. */
 diskTotal: number | null, /** Used disk capacity in bytes. */
 diskUsed: number | null, /** Total shared memory in bytes. */
@@ -7896,7 +7899,8 @@ playbackId: string, /** Registry origin kind. Null/user_upload for ordinary uplo
 originType: string | null, /** Origin entity id, such as DVR chapter_id when originType=dvr_chapter. */
 originId: string | null, /** Optional description of the asset content. */
 description: string | null, /** Original filename when uploaded. */
-filename: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
+filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+processingWaitReason: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
 syncStatus: string | null, /** Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false. */
 hasLocalCopy: boolean | null, /** File size in bytes (available after validation). */
 sizeBytes: number | null, /** Video duration in milliseconds. */
@@ -11962,6 +11966,7 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
   storagePath
   sizeBytes
   status
+  processingWaitReason
   errorMessage
   clipCreatedAt: createdAt
   updatedAt
@@ -17669,6 +17674,7 @@ export const VodAssetInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
   description
   filename
   vodAssetStatus: status
+  processingWaitReason
   vodAssetStorageLocation: storageLocation
   syncStatus
   hasLocalCopy
@@ -18940,7 +18946,7 @@ export const DeleteSkipperConversationDocument = /*#__PURE__*/ new TypedDocument
   deleteSkipperConversation(id: $id)
 }
     `) as unknown as TypedDocumentString<DeleteSkipperConversationMutation, DeleteSkipperConversationMutationVariables>;
-/** Permanently delete only the retained upload; processed playback remains available. */
+/** Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available. */
 export const DeleteVodOriginalDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteVodOriginal($id: ID!) {
   deleteVodOriginal(id: $id) {
@@ -23546,6 +23552,7 @@ fragment ClipInNodeDefaultFields on Clip {
   storagePath
   sizeBytes
   status
+  processingWaitReason
   errorMessage
   clipCreatedAt: createdAt
   updatedAt
@@ -25216,6 +25223,7 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
   description
   filename
   vodAssetStatus: status
+  processingWaitReason
   vodAssetStorageLocation: storageLocation
   syncStatus
   hasLocalCopy

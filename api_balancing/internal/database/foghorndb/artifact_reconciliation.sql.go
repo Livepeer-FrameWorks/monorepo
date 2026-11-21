@@ -294,7 +294,10 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text AS tenant_id,
        a.catalog_revision, a.status,
        a.retention_until,
        a.error_message, a.thumbnail_serving_cluster_id,
-       v.original_size_bytes, a.started_at, a.ended_at
+       v.original_size_bytes, a.started_at, a.ended_at,
+       COALESCE((SELECT j.wait_reason FROM foghorn.processing_jobs j
+        WHERE j.artifact_hash=a.artifact_hash AND j.tenant_id=a.tenant_id AND j.status='queued'
+        ORDER BY j.created_at ASC LIMIT 1),'')::text AS processing_wait_reason
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE a.tenant_id IS NOT NULL
@@ -331,6 +334,7 @@ type ListArtifactsForCatalogProjectionRow struct {
 	OriginalSizeBytes         sql.NullInt64  `db:"original_size_bytes" json:"original_size_bytes"`
 	StartedAt                 sql.NullTime   `db:"started_at" json:"started_at"`
 	EndedAt                   sql.NullTime   `db:"ended_at" json:"ended_at"`
+	ProcessingWaitReason      string         `db:"processing_wait_reason" json:"processing_wait_reason"`
 }
 
 func (q *Queries) ListArtifactsForCatalogProjection(ctx context.Context, arg ListArtifactsForCatalogProjectionParams) ([]ListArtifactsForCatalogProjectionRow, error) {
@@ -362,6 +366,7 @@ func (q *Queries) ListArtifactsForCatalogProjection(ctx context.Context, arg Lis
 			&i.OriginalSizeBytes,
 			&i.StartedAt,
 			&i.EndedAt,
+			&i.ProcessingWaitReason,
 		); err != nil {
 			return nil, err
 		}

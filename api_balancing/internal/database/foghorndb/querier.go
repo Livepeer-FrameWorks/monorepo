@@ -71,7 +71,11 @@ type Querier interface {
 	// transaction. The row lock is held until commit, so a concurrent transition
 	// of the same artifact reads the committed value and takes the next one.
 	BumpArtifactRevision(ctx context.Context, arg BumpArtifactRevisionParams) (int64, error)
+	// Dispatch persists only the policy. Memory admission is acknowledged by the
+	// edge after its durable ledger acquires the reservation.
+	CacheProcessingJobDispatchPolicy(ctx context.Context, arg CacheProcessingJobDispatchPolicyParams) (int64, error)
 	CancelClipProcessingJobs(ctx context.Context, artifactHash sql.NullString) error
+	CancelProcessingNodeReservation(ctx context.Context, arg CancelProcessingNodeReservationParams) (int64, error)
 	CellStorageIdentityCommitted(ctx context.Context) (bool, error)
 	ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionEffectsParams) ([]ClaimAdmissionEffectsRow, error)
 	ClaimArtifactEvents(ctx context.Context, arg ClaimArtifactEventsParams) ([]ClaimArtifactEventsRow, error)
@@ -105,6 +109,8 @@ type Querier interface {
 	ClearCurrentChaptersForInactiveDVRs(ctx context.Context) (int64, error)
 	ClearDVRStopObligation(ctx context.Context, arg ClearDVRStopObligationParams) error
 	ClearDtshAttempt(ctx context.Context, arg ClearDtshAttemptParams) (string, error)
+	// Cleared rows retain their revision so a delayed protection cannot undo a clear.
+	ClearFinishedProcessingReservations(ctx context.Context) error
 	ClearThumbnailReassert(ctx context.Context, attemptID string) error
 	ClearVodOriginal(ctx context.Context, arg ClearVodOriginalParams) (int64, error)
 	ClipNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
@@ -144,6 +150,7 @@ type Querier interface {
 	CountTerminalArtifactsWithSyncInProgress(ctx context.Context) (int64, error)
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
+	CountWaitingProcessingJobs(ctx context.Context) ([]CountWaitingProcessingJobsRow, error)
 	DVRHasStoredSegments(ctx context.Context, artifactHash string) (bool, error)
 	DVRRecordingState(ctx context.Context, arg DVRRecordingStateParams) (DVRRecordingStateRow, error)
 	DVRRecordingTenant(ctx context.Context, internalName sql.NullString) (string, error)
@@ -237,8 +244,6 @@ type Querier interface {
 	FailDVRIntent(ctx context.Context, arg FailDVRIntentParams) error
 	FailDtshAttempt(ctx context.Context, arg FailDtshAttemptParams) (string, error)
 	FailExhaustedOfflineEffects(ctx context.Context) ([]FailExhaustedOfflineEffectsRow, error)
-	// The last arm is the progress watchdog: an active job whose media position has
-	// not advanced since sqlc.narg(progress_advanced_at)::timestamp, however recently its lease heartbeat refreshed updated_at.
 	FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error)
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
@@ -383,6 +388,7 @@ type Querier interface {
 	GetPlaybackArtifact(ctx context.Context, arg GetPlaybackArtifactParams) (GetPlaybackArtifactRow, error)
 	GetProcessingArtifactLifecycle(ctx context.Context, artifactHash string) (GetProcessingArtifactLifecycleRow, error)
 	GetProcessingJobAuthContext(ctx context.Context, arg GetProcessingJobAuthContextParams) (GetProcessingJobAuthContextRow, error)
+	GetProcessingMemoryReservation(ctx context.Context, nodeID string) (GetProcessingMemoryReservationRow, error)
 	GetPublisherAdmission(ctx context.Context, arg GetPublisherAdmissionParams) (GetPublisherAdmissionRow, error)
 	GetPublisherAuthorityPreflight(ctx context.Context, arg GetPublisherAuthorityPreflightParams) (GetPublisherAuthorityPreflightRow, error)
 	GetPublisherRuntimeBinding(ctx context.Context, arg GetPublisherRuntimeBindingParams) (GetPublisherRuntimeBindingRow, error)
@@ -554,6 +560,10 @@ type Querier interface {
 	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListPendingArtifactsForFreeze(ctx context.Context, limit int32) ([]ListPendingArtifactsForFreezeRow, error)
 	ListPendingDVRSegments(ctx context.Context, arg ListPendingDVRSegmentsParams) ([]FoghornDvrSegment, error)
+	ListProcessingMemoryReservations(ctx context.Context) ([]ListProcessingMemoryReservationsRow, error)
+	ListProcessingMemoryWaiters(ctx context.Context, arg ListProcessingMemoryWaitersParams) ([]ListProcessingMemoryWaitersRow, error)
+	// Infrastructure telemetry is scoped to registered node IDs from Quartermaster.
+	ListProcessingNodeBudgets(ctx context.Context, nodeIds []string) ([]ListProcessingNodeBudgetsRow, error)
 	// Execution markers precede tenant discovery and are scoped to a node.
 	ListPublisherAbandonmentsToForward(ctx context.Context) ([]ListPublisherAbandonmentsToForwardRow, error)
 	// Local marker completion is independent of global lease forwarding. Bound the
@@ -807,7 +817,6 @@ type Querier interface {
 	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
 	// Capacity backpressure is not a failed processing attempt. Only the assigned
 	// node can return an active job, and the queue delay bounds redispatch traffic.
-	// The assigned job supplies the tenant when an older edge omits its echo.
 	RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error)
 	// Requeues a job its node reported as failed in a retryable way, while the
 	// retry budget lasts. Bound to the reporting node like every result. The job
@@ -827,6 +836,7 @@ type Querier interface {
 	// Requeues the jobs assigned to a node before its registration that the node
 	// did not report as running: a restarted sidecar lost them.
 	RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error)
+	ReserveProcessingNode(ctx context.Context, arg ReserveProcessingNodeParams) (int64, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
 	ResolveArtifactTenants(ctx context.Context, dollar_1 []string) ([]ResolveArtifactTenantsRow, error)
@@ -903,6 +913,7 @@ type Querier interface {
 	// media position increases, which is what the stale-recovery watchdog reads. The same
 	// advance ends a run of source stalls.
 	UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error)
+	UpdateProcessingSourceProbe(ctx context.Context, arg UpdateProcessingSourceProbeParams) (int64, error)
 	UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error)
 	// The format of a processing input the relay can serve: an uploaded object in
 	// S3, or the source URL of an import.
@@ -928,6 +939,7 @@ type Querier interface {
 	UpsertTenantAuthorityProjection(ctx context.Context, arg UpsertTenantAuthorityProjectionParams) error
 	VODNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	VerifyThumbnailObject(ctx context.Context, arg VerifyThumbnailObjectParams) (int64, error)
+	WakeProcessingClusterJobs(ctx context.Context, clusterID string) error
 	// A revived tenant withholds objects not confirmed by a fetch begun after its
 	// barrier. A fetched parent and its objects share one confirmation instant.
 	WithholdTenantObjectsAppliedBefore(ctx context.Context, arg WithholdTenantObjectsAppliedBeforeParams) error

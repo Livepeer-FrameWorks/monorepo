@@ -1,0 +1,1885 @@
+{
+  "image": "sha256:36ea629f7b2df0639af3bd69c1b186a2e2b33ec9be98d84faa8f220175ec9714",
+  "source_commit": "0c3e30859452036b64563cb4dfeca8fb38b209f0",
+  "measured_at": "2026-11-20",
+  "source": "30s H264 AAC testsrc2 30fps CRF22 GOP60 bf2",
+  "cpu_control": "Docker --cpus 4 or 16, cpu.max retained",
+  "fit_coefficients": [
+    42.974079234556065, 13.038374785017243, 17.266494755627832, 5.596540932150619
+  ],
+  "max_positive_residual_bytes": 39972991.39681637,
+  "cases": [
+    {
+      "case": "qhd_1080p_cpus16",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 16,
+      "container_peak_bytes": 850149376,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 3,
+          "decode_threads": 3,
+          "peak_anon_bytes": 76316672,
+          "peak_shared_bytes": 13238272,
+          "pid": "1004604"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 7,
+          "decode_threads": 3,
+          "peak_anon_bytes": 119332864,
+          "peak_shared_bytes": 15429632,
+          "pid": "1004605"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 16,
+          "decode_threads": 3,
+          "peak_anon_bytes": 310829056,
+          "peak_shared_bytes": 13246464,
+          "pid": "1004606"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 67497984,
+          "peak_shared_bytes": 11227136,
+          "pid": "1004607"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19820544,
+          "peak_shared_bytes": 1294336,
+          "pid": "1004608"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 29999104,
+          "peak_shared_bytes": 8650752,
+          "pid": "1004609"
+        }
+      ],
+      "observed_process_bytes": 686882816,
+      "old_estimate_bytes": 1120434688,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 3,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 7,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "qhd_1080p_cpus4",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 4,
+      "container_peak_bytes": 631865344,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 70795264,
+          "peak_shared_bytes": 13721600,
+          "pid": "1005791"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 83406848,
+          "peak_shared_bytes": 16052224,
+          "pid": "1005792"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 4,
+          "decode_threads": 3,
+          "peak_anon_bytes": 144437248,
+          "peak_shared_bytes": 14491648,
+          "pid": "1005793"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 67502080,
+          "peak_shared_bytes": 12029952,
+          "pid": "1005794"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 17829888,
+          "peak_shared_bytes": 1323008,
+          "pid": "1005795"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 29999104,
+          "peak_shared_bytes": 8970240,
+          "pid": "1005796"
+        }
+      ],
+      "observed_process_bytes": 480559104,
+      "old_estimate_bytes": 1026742528,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "qhd_2160p_cpus16",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 16,
+      "container_peak_bytes": 2130141184,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1440",
+          "encode_threads": 16,
+          "decode_threads": 4,
+          "peak_anon_bytes": 598528000,
+          "peak_shared_bytes": 18821120,
+          "pid": "1007327"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 213979136,
+          "peak_shared_bytes": 14815232,
+          "pid": "1007328"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 4,
+          "decode_threads": 4,
+          "peak_anon_bytes": 245579776,
+          "peak_shared_bytes": 17416192,
+          "pid": "1007329"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 9,
+          "decode_threads": 4,
+          "peak_anon_bytes": 360718336,
+          "peak_shared_bytes": 17809408,
+          "pid": "1007330"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 210620416,
+          "peak_shared_bytes": 13299712,
+          "pid": "1007331"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 17846272,
+          "peak_shared_bytes": 1327104,
+          "pid": "1007332"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 48439296,
+          "peak_shared_bytes": 7929856,
+          "pid": "1007333"
+        }
+      ],
+      "observed_process_bytes": 1787129856,
+      "old_estimate_bytes": 3079438592,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 9,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "bitrate": 10800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1440",
+          "track_inhibit": "video=<2560x1440",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1440p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "qhd_2160p_cpus4",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 4,
+      "container_peak_bytes": 1645355008,
+      "observed_processes": [
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 57188352,
+          "peak_shared_bytes": 7573504,
+          "pid": "1029499"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1440",
+          "encode_threads": 4,
+          "decode_threads": 4,
+          "peak_anon_bytes": 340439040,
+          "peak_shared_bytes": 20664320,
+          "pid": "1029491"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 213999616,
+          "peak_shared_bytes": 14950400,
+          "pid": "1029492"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 227831808,
+          "peak_shared_bytes": 18968576,
+          "pid": "1029493"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 2,
+          "decode_threads": 4,
+          "peak_anon_bytes": 263946240,
+          "peak_shared_bytes": 19054592,
+          "pid": "1029495"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 210591744,
+          "peak_shared_bytes": 13168640,
+          "pid": "1029496"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 17842176,
+          "peak_shared_bytes": 1368064,
+          "pid": "1029498"
+        }
+      ],
+      "observed_process_bytes": 1427587072,
+      "old_estimate_bytes": 2894888192,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 2,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "bitrate": 10800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1440",
+          "track_inhibit": "video=<2560x1440",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1440p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "standard_1080p_cpus16",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 16,
+      "container_peak_bytes": 877289472,
+      "observed_processes": [
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 27910144,
+          "peak_shared_bytes": 9097216,
+          "pid": "1046059"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 3,
+          "decode_threads": 3,
+          "peak_anon_bytes": 76271616,
+          "peak_shared_bytes": 14204928,
+          "pid": "1046053"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 7,
+          "decode_threads": 3,
+          "peak_anon_bytes": 119377920,
+          "peak_shared_bytes": 15560704,
+          "pid": "1046054"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 16,
+          "decode_threads": 3,
+          "peak_anon_bytes": 304836608,
+          "peak_shared_bytes": 15413248,
+          "pid": "1046055"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 65449984,
+          "peak_shared_bytes": 12021760,
+          "pid": "1046056"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 17825792,
+          "peak_shared_bytes": 1286144,
+          "pid": "1046057"
+        }
+      ],
+      "observed_process_bytes": 679256064,
+      "old_estimate_bytes": 1120434688,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 3,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 7,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "standard_1080p_cpus4",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 4,
+      "container_peak_bytes": 632950784,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 70787072,
+          "peak_shared_bytes": 13193216,
+          "pid": "1055309"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 82612224,
+          "peak_shared_bytes": 16183296,
+          "pid": "1055310"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 4,
+          "decode_threads": 3,
+          "peak_anon_bytes": 148488192,
+          "peak_shared_bytes": 13598720,
+          "pid": "1055311"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 65490944,
+          "peak_shared_bytes": 11116544,
+          "pid": "1055312"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19709952,
+          "peak_shared_bytes": 1310720,
+          "pid": "1055313"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 30003200,
+          "peak_shared_bytes": 8826880,
+          "pid": "1055314"
+        }
+      ],
+      "observed_process_bytes": 481320960,
+      "old_estimate_bytes": 1026742528,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "standard_2160p_cpus16",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 16,
+      "container_peak_bytes": 1491664896,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 3,
+          "decode_threads": 4,
+          "peak_anon_bytes": 219414528,
+          "peak_shared_bytes": 10940416,
+          "pid": "1056571"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 7,
+          "decode_threads": 4,
+          "peak_anon_bytes": 263487488,
+          "peak_shared_bytes": 16363520,
+          "pid": "1056572"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 16,
+          "decode_threads": 4,
+          "peak_anon_bytes": 459345920,
+          "peak_shared_bytes": 18362368,
+          "pid": "1056573"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 208621568,
+          "peak_shared_bytes": 10551296,
+          "pid": "1056574"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19820544,
+          "peak_shared_bytes": 1327104,
+          "pid": "1056575"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 48431104,
+          "peak_shared_bytes": 7053312,
+          "pid": "1056576"
+        }
+      ],
+      "observed_process_bytes": 1283719168,
+      "old_estimate_bytes": 2420581888,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 3,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 7,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "standard_2160p_cpus4",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 4,
+      "container_peak_bytes": 1300561920,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 214016000,
+          "peak_shared_bytes": 15118336,
+          "pid": "1067200"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 227811328,
+          "peak_shared_bytes": 19828736,
+          "pid": "1067201"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 4,
+          "decode_threads": 4,
+          "peak_anon_bytes": 295059456,
+          "peak_shared_bytes": 18710528,
+          "pid": "1067203"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 210755584,
+          "peak_shared_bytes": 13066240,
+          "pid": "1067204"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19767296,
+          "peak_shared_bytes": 1335296,
+          "pid": "1067205"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 48427008,
+          "peak_shared_bytes": 7262208,
+          "pid": "1067206"
+        }
+      ],
+      "observed_process_bytes": 1091158016,
+      "old_estimate_bytes": 2326889728,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "uhd_1080p_cpus16",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 16,
+      "container_peak_bytes": 847466496,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 3,
+          "decode_threads": 3,
+          "peak_anon_bytes": 74289152,
+          "peak_shared_bytes": 13352960,
+          "pid": "1081633"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 7,
+          "decode_threads": 3,
+          "peak_anon_bytes": 120356864,
+          "peak_shared_bytes": 15237120,
+          "pid": "1081634"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 16,
+          "decode_threads": 3,
+          "peak_anon_bytes": 308838400,
+          "peak_shared_bytes": 13217792,
+          "pid": "1081635"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 67502080,
+          "peak_shared_bytes": 11317248,
+          "pid": "1081636"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19873792,
+          "peak_shared_bytes": 1294336,
+          "pid": "1081637"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 29995008,
+          "peak_shared_bytes": 8581120,
+          "pid": "1081638"
+        }
+      ],
+      "observed_process_bytes": 683855872,
+      "old_estimate_bytes": 1120434688,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 3,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 7,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "uhd_1080p_cpus4",
+      "source_width": 1920,
+      "source_height": 1080,
+      "cpu_quota": 4,
+      "container_peak_bytes": 635301888,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 70819840,
+          "peak_shared_bytes": 13045760,
+          "pid": "1090244"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 83386368,
+          "peak_shared_bytes": 14659584,
+          "pid": "1090245"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 4,
+          "decode_threads": 3,
+          "peak_anon_bytes": 144441344,
+          "peak_shared_bytes": 14671872,
+          "pid": "1090248"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 3,
+          "peak_anon_bytes": 67477504,
+          "peak_shared_bytes": 11952128,
+          "pid": "1090250"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19820544,
+          "peak_shared_bytes": 1306624,
+          "pid": "1090252"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 30003200,
+          "peak_shared_bytes": 9244672,
+          "pid": "1090253"
+        }
+      ],
+      "observed_process_bytes": 480829440,
+      "old_estimate_bytes": 1026742528,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 3,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "uhd_2160p_cpus16",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 16,
+      "container_peak_bytes": 2824376320,
+      "observed_processes": [
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 48439296,
+          "peak_shared_bytes": 8015872,
+          "pid": "1100345"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1440",
+          "encode_threads": 7,
+          "decode_threads": 4,
+          "peak_anon_bytes": 406904832,
+          "peak_shared_bytes": 19009536,
+          "pid": "1100338"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x2160",
+          "encode_threads": 16,
+          "decode_threads": 4,
+          "peak_anon_bytes": 1006268416,
+          "peak_shared_bytes": 18665472,
+          "pid": "1100339"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 214016000,
+          "peak_shared_bytes": 13557760,
+          "pid": "1100340"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 225652736,
+          "peak_shared_bytes": 18300928,
+          "pid": "1100341"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 4,
+          "decode_threads": 4,
+          "peak_anon_bytes": 292933632,
+          "peak_shared_bytes": 17866752,
+          "pid": "1100342"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 210608128,
+          "peak_shared_bytes": 12070912,
+          "pid": "1100343"
+        },
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 19935232,
+          "peak_shared_bytes": 1404928,
+          "pid": "1100344"
+        }
+      ],
+      "observed_process_bytes": 2533650432,
+      "old_estimate_bytes": 4036121856,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "bitrate": 10800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 7,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1440",
+          "track_inhibit": "video=<2560x1440",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1440p"
+        },
+        {
+          "bitrate": 15000000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 16,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x2160",
+          "track_inhibit": "video=<3840x2160",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "2160p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    },
+    {
+      "case": "uhd_2160p_cpus4",
+      "source_width": 3840,
+      "source_height": 2160,
+      "cpu_quota": 4,
+      "container_peak_bytes": 2069262336,
+      "observed_processes": [
+        {
+          "process": "AV",
+          "codec": "opus",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 1,
+          "peak_anon_bytes": 17854464,
+          "peak_shared_bytes": 1413120,
+          "pid": "1103598"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1440",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 274550784,
+          "peak_shared_bytes": 20623360,
+          "pid": "1103592"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x2160",
+          "encode_threads": 4,
+          "decode_threads": 4,
+          "peak_anon_bytes": 471240704,
+          "peak_shared_bytes": 19214336,
+          "pid": "1103593"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x480",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 211939328,
+          "peak_shared_bytes": 13557760,
+          "pid": "1103594"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x720",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 228012032,
+          "peak_shared_bytes": 19009536,
+          "pid": "1103595"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x1080",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 250200064,
+          "peak_shared_bytes": 17977344,
+          "pid": "1103596"
+        },
+        {
+          "process": "AV",
+          "codec": "H264",
+          "resolution": "x360",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 210677760,
+          "peak_shared_bytes": 13611008,
+          "pid": "1103597"
+        },
+        {
+          "process": "Thumbs",
+          "codec": "",
+          "resolution": "",
+          "encode_threads": 1,
+          "decode_threads": 4,
+          "peak_anon_bytes": 60567552,
+          "peak_shared_bytes": 7888896,
+          "pid": "1103599"
+        }
+      ],
+      "observed_process_bytes": 1838338048,
+      "old_estimate_bytes": 3652505856,
+      "processes": [
+        {
+          "bitrate": 900000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x360",
+          "track_inhibit": "video=<640x360",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "360p"
+        },
+        {
+          "bitrate": 1600000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x480",
+          "track_inhibit": "video=<850x480",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "480p"
+        },
+        {
+          "bitrate": 4500000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x720",
+          "track_inhibit": "video=<1280x720",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "720p"
+        },
+        {
+          "bitrate": 7800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1080",
+          "track_inhibit": "video=<1920x1080",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1080p"
+        },
+        {
+          "bitrate": 10800000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x1440",
+          "track_inhibit": "video=<2560x1440",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "1440p"
+        },
+        {
+          "bitrate": 15000000,
+          "codec": "H264",
+          "decode_threads": 4,
+          "encode_threads": 4,
+          "process": "AV",
+          "profile": "high",
+          "resolution": "x2160",
+          "track_inhibit": "video=<3840x2160",
+          "track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
+          "x-LSP-name": "2160p"
+        },
+        {
+          "codec": "AAC",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=aac",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "codec": "opus",
+          "decode_threads": 1,
+          "encode_threads": 1,
+          "process": "AV",
+          "track_inhibit": "audio=opus",
+          "track_select": "video=none&audio=all&subtitle=none&meta=none"
+        },
+        {
+          "decode_threads": 4,
+          "encode_threads": 1,
+          "inconsequential": true,
+          "process": "Thumbs",
+          "track_inhibit": "meta=thumbvtt",
+          "track_select": "video=maxbps"
+        }
+      ]
+    }
+  ]
+}

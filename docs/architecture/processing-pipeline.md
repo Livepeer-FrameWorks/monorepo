@@ -154,7 +154,9 @@ within (-180, 180]. FFmpeg input decomposes the full display matrix, preserving 
 
 Local AV and thumbnails apply orientation once at source resolution, before scaling.
 Software decoding uses FFmpeg CPU transpose/flip filters. On macOS, the actual transcoder
-uses VideoToolbox decoding, `transpose_vt`/`scale_vt`, and hardware encoding. CUDA may download
+uses VideoToolbox decoding, `transpose_vt`/`scale_vt`, and hardware encoding only
+when `accel=hw` is selected. The default `accel=auto` retains software decoding
+and encoding on macOS. CUDA may download
 before CPU filtering. VAAPI is not a selectable ProcAV backend or a mandatory release dependency;
 the generic filter helper supports caller-supplied VAAPI frames. Processed outputs carry upright
 pixels and identity orientation. Progressive MP4 and Matroska passthrough retain full
@@ -162,6 +164,13 @@ orientation. CMAF and fragmented MP4 signal rotation only; reflected sources nee
 rendition. Safari native HLS ignores the track matrix, and TS, FLV and SRT have no orientation
 field, so those paths depend on the upright transcode. Mist does not inject orientation SEI
 or negotiate WebRTC CVO.
+
+A hardware decoder refusal before its first frame is permanent only in forced
+hardware mode. Later decoder/device failures are retryable; the process does not
+silently switch permanently to software or replay a cached GOP. Corrupt packets
+are dropped, with a bounded consecutive-invalid-data guard to stop a silent stall.
+Unconfigured live AV restarts use exponential backoff from one to thirty seconds;
+explicit restart policy and controlled VOD retain their separate lifecycle rules.
 
 ### VOD upload
 
@@ -184,7 +193,8 @@ generated from that source by `make vod-formats`, checked by `verify-generated-c
 Container admission does not supply a decoder: the installed Mist/FFmpeg build owns codec
 support. An AC3/E-AC3 or other non-browser audio source requires a recorded AAC output when
 the processing policy includes AAC; optional enrichment cannot publish silent browser video.
-AAC output preserves supported source channel layouts, including 5.1; Opus output is stereo.
+AAC output preserves supported source channel layouts, including 5.1; Opus output caps
+channels at stereo and preserves mono.
 The pinned FFmpeg build includes the MPEG-4 Part 2, MPEG-1/2, AC3, E-AC3 and MP2 decoders,
 and local AV and thumbnails select the source decoder explicitly, including HEVC.
 
@@ -451,7 +461,9 @@ the recording still waits for its header; a killed buffer, which changes no
 state, is noticed by its heartbeat on the stream state page stopping for 30 s.
 
 **Memory admission.** Helmsman first reads source metadata with all process
-inputs inhibited, then stops that probe before admission. It reserves the work
+inputs inhibited. Mist pauses that source feed while admission is pending, then
+re-resolves the process override and starts the admitted ladder on the same input.
+A refused admission stops the probe before the job returns to its queue. Helmsman reserves the work
 that will run on the edge: Livepeer request buffers, local audio, thumbnails
 and any local video encoders. A Livepeer job reserves its local fallback only
 when that fallback is needed, before publishing or starting it. The reservation
@@ -461,31 +473,42 @@ is released only after the processing stream stops.
 The planner assigns explicit decoder and encoder thread counts within the
 node's memory budget. It retains the encoder preset's lookahead wherever it
 fits, reducing it for the largest renditions only when necessary. CPU scaling
-uses FFmpeg's default bicubic filter. Linux admission uses host available
+uses bilinear filtering, including conversions inserted before transpose. Linux admission uses host available
 memory and cgroup working-set pressure, excluding reclaimable inactive file
 cache. On macOS it uses installed capacity and the reservation ledger.
 
-The first metadata probe prices rotated, mirrored and unsupported-codec sources as
-local work before Livepeer can start. Every rendition's decoder concurrency follows
-the source dimensions and the node's CPU/memory budget, independently of its output
-size. A fallback drains the retiring generation and releases its reservation before
-measuring available memory.
+The metadata probe is cached per job and source identity, so memory deferrals do
+not repeatedly open the source. Every rendition's decoder concurrency follows the
+source dimensions, independently of its output size. Known source-size inhibitors
+are removed before publishing local encoders; they cannot start transiently outside
+the estimate. A fallback drains the retiring generation and releases its reservation
+before measuring available memory.
 
 Helmsman distinguishes an undersized node from temporarily occupied memory and
-reports the minimum required bytes with the intended policy. Foghorn persists both
-and routes subsequent attempts only to nodes in the artifact's origin cluster with
-a sufficient processing budget. If the cluster's eligible nodes cannot fit the
-ladder, the job and asset fail together with a clear capacity error. UHD remains
-available on every paid tier.
+reports minimum required bytes with the intended policy. Its processing budget,
+after host/container limits and the system reserve, is authoritative for placement.
+Foghorn retains each registered node's last reported budget, including disconnected
+nodes, and excludes only decommissioned/deleted nodes. An unknown budget or a warming
+inventory cannot establish permanent incapacity. A previously refused node becomes
+eligible when its reported budget grows enough to fit. Only a fully known cluster
+that cannot fit the ladder fails the job and asset with a capacity error.
 
-Busy jobs return to the durable queue for another attempt after 30 seconds without
-spending a processing-failure retry. The run of capacity waits is bounded by the
-existing 20-minute processing no-progress window; an expired wait fails visibly,
-including when no worker claims it again. Admitting a job or advancing its media
-ends the wait. Waiting jobs hold no source or encoder processes, and a fallback's
-local policy survives redispatch so it does not repeat a paid Livepeer attempt.
-Corrupt and unreadable source errors fail immediately; source stalls and actual
-resource failures retain their separate retry classifications.
+Deferred work stays queued with a reason: `memory`, `slots`,
+`fitting_node_unavailable`, or `cluster_unavailable`. Deferral has no separate timeout
+and spends no failure retries. An upload still has a whole-upload deadline of 24 hours.
+Completion, memory release, node recovery/undrain and budget increases wake the queue;
+the periodic sweep recovers missed notifications. Busy-node replanning lowers threads
+while preserving the quality selected against that node's full budget.
+
+Placement is best-effort FIFO, with smaller jobs allowed to pass a blocked one.
+After one minute the oldest memory waiter protects room on its best-fitting node.
+Other work must leave those bytes free. Protection survives dispatch until Helmsman
+acknowledges actual durable memory admission, including admission on another node.
+Versioned clears fence delayed updates, and persisted edge protection survives a
+Helmsman restart. Waiting work holds no source or encoder processes. A fallback's
+local policy survives redispatch, avoiding another paid Livepeer attempt.
+Corrupt and unreadable sources fail immediately; source stalls and actual resource
+failures retain their separate retry classifications.
 
 At source EOF, Livepeer's drain deadline includes every remaining segment's
 allowed resend budgets and sink flush time. A recording must still pass the
@@ -656,17 +679,20 @@ database bucket shared across replicas and gateways. The gateway also rejects ex
 locally. Original-download metadata reads do not lock the artifact or VOD metadata rows;
 original deletion takes the artifact lock before rechecking and changing retention metadata.
 
-Memory admission reads the running Mist processor capabilities. Explicit
-`encode_threads`, `decode_threads` and `lookahead` are budgeted only when the
-processor advertises them. Older Mist versions use a conservative automatic-thread
-estimate and receive no unsupported resource options. A policy that cannot fit
-fails with its required bytes and node budget. Temporary pressure returns the job
-to the durable queue without spending failure retries, within the existing
-20-minute no-progress window; after that window the job fails with a memory wait
-reason. The first infrastructure wait remains durable across dispatches.
+The bundled Mist accepts explicit `encode_threads`, `decode_threads` and
+`lookahead` resource controls. Helmsman budgets those controls directly.
+Transient memory-read or reservation-persistence errors remain retryable; a missing
+`active_streams` response cannot prove that an old generation has stopped.
 
 Processing results echo the dispatched tenant in their outputs. Foghorn checks that tenant
 against the assigned job before accepting a memory-policy update, capacity deferral or
 terminal result. During rolling upgrades, an older edge can omit the echo; its authenticated
 node identity must still match the job assignment, and the stored job supplies the tenant.
 Capacity-wait and stale-lease cutoffs use UTC when sent to the database timestamp columns.
+
+A confirmed processor OOM kill (SIGKILL/137 plus a new kernel `oom_kill` count)
+requeues the job as a memory wait rather than spending a tenant retry. Helmsman
+samples the resident memory of AV/Thumbs processes belonging to that exact source;
+the next admission retains the larger of the observed peak and the admitted
+reservation, plus 25% and 64 MiB. The required floor survives dispatch, replanning
+and further deferrals. An ordinary SIGKILL still follows the normal retry policy.

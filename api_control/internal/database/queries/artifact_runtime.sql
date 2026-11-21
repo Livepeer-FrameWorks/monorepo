@@ -34,7 +34,7 @@ SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.descripti
             WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
             ELSE 'processing' END::text AS status,
        c.error_message, c.storage_location, c.sync_status, c.is_synced, c.is_finalized,
-       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id
+       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id,c.processing_wait_reason
 FROM commodore.clips c
 WHERE c.tenant_id = $1 AND c.clip_hash = $2;
 

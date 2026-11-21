@@ -70,7 +70,7 @@ func TestReviewRound2TeardownAcknowledgementIsTenantBound_RealPG(t *testing.T) {
 	}
 }
 
-func TestReviewRound2IncompleteEffectPreservesAttemptBudget_RealPG(t *testing.T) {
+func TestIncompleteOfflineEffectResetsAttemptBudget_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	previous := db
 	SetDB(conn)
@@ -93,8 +93,8 @@ func TestReviewRound2IncompleteEffectPreservesAttemptBudget_RealPG(t *testing.T)
 	if err = conn.QueryRowContext(t.Context(), `SELECT attempts FROM foghorn.ingest_offline_effects WHERE tenant_id=$1::uuid AND id=$2`, tenant, e.ID).Scan(&attempts); err != nil {
 		t.Fatal(err)
 	}
-	if attempts < 6 {
-		t.Fatalf("successful incomplete dispatch reset retry budget: %d", attempts)
+	if attempts != 0 {
+		t.Fatalf("successful incomplete dispatch retained retry budget: %d, want 0", attempts)
 	}
 	if _, err = conn.ExecContext(t.Context(), `UPDATE foghorn.ingest_offline_effects SET attempts=11,next_attempt_at=NOW(),state='pending',lease_token=NULL,leased_until=NULL WHERE tenant_id=$1::uuid AND id=$2`, tenant, e.ID); err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestReviewRound2IncompleteEffectPreservesAttemptBudget_RealPG(t *testing.T)
 	if err = conn.QueryRowContext(t.Context(), `SELECT state,attempts FROM foghorn.ingest_offline_effects WHERE tenant_id=$1::uuid AND id=$2`, tenant, e.ID).Scan(&state, &attempts); err != nil {
 		t.Fatal(err)
 	}
-	if state != "failed" || attempts != 12 {
-		t.Fatalf("partial progress revived a persistently failing leg: state=%s attempts=%d", state, attempts)
+	if state != "pending" || attempts != 0 {
+		t.Fatalf("partial progress exhausted a successful dispatch: state=%s attempts=%d, want pending/0", state, attempts)
 	}
 
 }
