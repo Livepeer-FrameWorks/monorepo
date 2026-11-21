@@ -112,7 +112,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "GetMyClusterInvitesConnection": {"kind": "query", "since": "v0.3.16", "identity": "sha256:87e3dad844230f26ac317369adeebe7be3762fb79cdf2596150ccc4b223407e8"},
     "GetMySubscriptionsConnection": {"kind": "query", "since": "v0.3.16", "identity": "sha256:551f082deb65468b51bb6d0a704d312a0f7d2617a0823484aad0c04e31f0b47b"},
     "GetNetworkStatus": {"kind": "query", "since": "v0.3.16", "identity": "sha256:d8d1589a4cf703c093b5658710b02bfd5b831eecf651f67afa453372de59eaad"},
-    "GetNode": {"kind": "query", "since": "v0.3.16", "identity": "sha256:0756b4901042f2f38bcacef38e661d810671a2f6c373ce3b42c2bdbc93263866"},
+    "GetNode": {"kind": "query", "since": "v0.3.16", "identity": "sha256:4b2aeb3dd1e03c73afa4df508e7ecd78b49ca6c2b8a80de79d71426b3fe23794"},
     "GetNodeMetrics1hConnection": {"kind": "query", "since": "v0.3.16", "identity": "sha256:ad0a7bac3fd6a047f606a507146f57c294ac39b099b8c43902c1648dc1c316c9"},
     "GetNodeMetricsAggregated": {"kind": "query", "since": "v0.3.16", "identity": "sha256:990e1935c2bfceab3f280e4502984bd7c2f343195489345613fc429deb855720"},
     "GetNodeMetricsConnection": {"kind": "query", "since": "v0.3.16", "identity": "sha256:229a8ef3173aadd2babfb7b8a58ae49a2afeeb9950b6420d40b81a20397f99a5"},

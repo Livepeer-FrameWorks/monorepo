@@ -12206,6 +12206,8 @@ type ClipInNodeDefaultFields struct {
 	SizeBytes *float64 `json:"sizeBytes"`
 	// Processing status (queued, processing, ready, failed).
 	Status string `json:"status"`
+	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	ProcessingWaitReason *string `json:"processingWaitReason"`
 	// Processing failure detail from the artifact catalog.
 	ErrorMessage *string `json:"errorMessage"`
 	// When the clip was requested.
@@ -12289,6 +12291,9 @@ func (v *ClipInNodeDefaultFields) GetSizeBytes() *float64 { return v.SizeBytes }
 
 // GetStatus returns ClipInNodeDefaultFields.Status, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFields) GetStatus() string { return v.Status }
+
+// GetProcessingWaitReason returns ClipInNodeDefaultFields.ProcessingWaitReason, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFields) GetProcessingWaitReason() *string { return v.ProcessingWaitReason }
 
 // GetErrorMessage returns ClipInNodeDefaultFields.ErrorMessage, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFields) GetErrorMessage() *string { return v.ErrorMessage }
@@ -28070,7 +28075,7 @@ func (v *DeleteVodOriginalDeleteVodOriginalValidationError) __premarshalJSON() (
 
 // DeleteVodOriginalResponse is returned by DeleteVodOriginal on success.
 type DeleteVodOriginalResponse struct {
-	// Permanently delete only the retained upload; processed playback remains available.
+	// Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available.
 	DeleteVodOriginal DeleteVodOriginalDeleteVodOriginalDeleteVodOriginalResult `json:"-"`
 }
 
@@ -49107,6 +49112,11 @@ func (v *GetNodeNodeClip) GetSizeBytes() *float64 { return v.ClipInNodeDefaultFi
 // GetStatus returns GetNodeNodeClip.Status, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeClip) GetStatus() string { return v.ClipInNodeDefaultFields.Status }
 
+// GetProcessingWaitReason returns GetNodeNodeClip.ProcessingWaitReason, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeClip) GetProcessingWaitReason() *string {
+	return v.ClipInNodeDefaultFields.ProcessingWaitReason
+}
+
 // GetErrorMessage returns GetNodeNodeClip.ErrorMessage, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeClip) GetErrorMessage() *string { return v.ClipInNodeDefaultFields.ErrorMessage }
 
@@ -49225,6 +49235,8 @@ type __premarshalGetNodeNodeClip struct {
 
 	Status string `json:"status"`
 
+	ProcessingWaitReason *string `json:"processingWaitReason"`
+
 	ErrorMessage *string `json:"errorMessage"`
 
 	ClipCreatedAt *time.Time `json:"clipCreatedAt"`
@@ -49284,6 +49296,7 @@ func (v *GetNodeNodeClip) __premarshalJSON() (*__premarshalGetNodeNodeClip, erro
 	retval.StoragePath = v.ClipInNodeDefaultFields.StoragePath
 	retval.SizeBytes = v.ClipInNodeDefaultFields.SizeBytes
 	retval.Status = v.ClipInNodeDefaultFields.Status
+	retval.ProcessingWaitReason = v.ClipInNodeDefaultFields.ProcessingWaitReason
 	retval.ErrorMessage = v.ClipInNodeDefaultFields.ErrorMessage
 	retval.ClipCreatedAt = v.ClipInNodeDefaultFields.ClipCreatedAt
 	retval.UpdatedAt = v.ClipInNodeDefaultFields.UpdatedAt
@@ -53802,6 +53815,11 @@ func (v *GetNodeNodeVodAsset) GetVodAssetStatus() VodAssetStatus {
 	return v.VodAssetInNodeDefaultFields.VodAssetStatus
 }
 
+// GetProcessingWaitReason returns GetNodeNodeVodAsset.ProcessingWaitReason, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeVodAsset) GetProcessingWaitReason() *string {
+	return v.VodAssetInNodeDefaultFields.ProcessingWaitReason
+}
+
 // GetVodAssetStorageLocation returns GetNodeNodeVodAsset.VodAssetStorageLocation, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeVodAsset) GetVodAssetStorageLocation() string {
 	return v.VodAssetInNodeDefaultFields.VodAssetStorageLocation
@@ -53944,6 +53962,8 @@ type __premarshalGetNodeNodeVodAsset struct {
 
 	VodAssetStatus VodAssetStatus `json:"vodAssetStatus"`
 
+	ProcessingWaitReason *string `json:"processingWaitReason"`
+
 	VodAssetStorageLocation string `json:"vodAssetStorageLocation"`
 
 	SyncStatus *string `json:"syncStatus"`
@@ -54007,6 +54027,7 @@ func (v *GetNodeNodeVodAsset) __premarshalJSON() (*__premarshalGetNodeNodeVodAss
 	retval.Description = v.VodAssetInNodeDefaultFields.Description
 	retval.Filename = v.VodAssetInNodeDefaultFields.Filename
 	retval.VodAssetStatus = v.VodAssetInNodeDefaultFields.VodAssetStatus
+	retval.ProcessingWaitReason = v.VodAssetInNodeDefaultFields.ProcessingWaitReason
 	retval.VodAssetStorageLocation = v.VodAssetInNodeDefaultFields.VodAssetStorageLocation
 	retval.SyncStatus = v.VodAssetInNodeDefaultFields.SyncStatus
 	retval.HasLocalCopy = v.VodAssetInNodeDefaultFields.HasLocalCopy
@@ -81679,9 +81700,9 @@ type NodeMetricDefaultFields struct {
 	NodeId    string    `json:"nodeId"`
 	ClusterId *string   `json:"clusterId"`
 	CpuUsage  float64   `json:"cpuUsage"`
-	// Total memory in MiB.
+	// Total memory in bytes.
 	MemoryTotal *float64 `json:"memoryTotal"`
-	// Used memory in MiB.
+	// Used memory in bytes.
 	MemoryUsed *float64 `json:"memoryUsed"`
 	// Total disk capacity in bytes.
 	DiskTotal *float64 `json:"diskTotal"`
@@ -129909,6 +129930,8 @@ type VodAssetInNodeDefaultFields struct {
 	Filename *string `json:"filename"`
 	// Current processing/storage status of the asset.
 	VodAssetStatus VodAssetStatus `json:"vodAssetStatus"`
+	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	ProcessingWaitReason *string `json:"processingWaitReason"`
 	// Where the asset is stored (s3, local, freezing).
 	VodAssetStorageLocation string `json:"vodAssetStorageLocation"`
 	// Current S3 sync state (pending, in_progress, synced, failed, lost_local).
@@ -129985,6 +130008,11 @@ func (v *VodAssetInNodeDefaultFields) GetFilename() *string { return v.Filename 
 
 // GetVodAssetStatus returns VodAssetInNodeDefaultFields.VodAssetStatus, and is useful for accessing the field via an interface.
 func (v *VodAssetInNodeDefaultFields) GetVodAssetStatus() VodAssetStatus { return v.VodAssetStatus }
+
+// GetProcessingWaitReason returns VodAssetInNodeDefaultFields.ProcessingWaitReason, and is useful for accessing the field via an interface.
+func (v *VodAssetInNodeDefaultFields) GetProcessingWaitReason() *string {
+	return v.ProcessingWaitReason
+}
 
 // GetVodAssetStorageLocation returns VodAssetInNodeDefaultFields.VodAssetStorageLocation, and is useful for accessing the field via an interface.
 func (v *VodAssetInNodeDefaultFields) GetVodAssetStorageLocation() string {
@@ -137112,7 +137140,7 @@ fragment AuthErrorDefaultFields on AuthError {
 
 // DeleteVodOriginal executes the corresponding GraphQL operation.
 //
-// Permanently delete only the retained upload; processed playback remains available.
+// Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available.
 func DeleteVodOriginal(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -142316,6 +142344,7 @@ fragment ClipInNodeDefaultFields on Clip {
 	storagePath
 	sizeBytes
 	status
+	processingWaitReason
 	errorMessage
 	clipCreatedAt: createdAt
 	updatedAt
@@ -143986,6 +144015,7 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
 	description
 	filename
 	vodAssetStatus: status
+	processingWaitReason
 	vodAssetStorageLocation: storageLocation
 	syncStatus
 	hasLocalCopy

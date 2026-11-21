@@ -158,9 +158,13 @@ routed_rotation_streams="$(stream_names_logged_by '^edge' '"routing":"source_rot
   '"(stream(_name)?|artifact_hash)":"[A-Za-z0-9_+.-]+"' |
   awk -F'"' '{if ($2 == "artifact_hash") print "processing+" $4; else print $4}' | sort -u)"
 # A transport codec refusal is expected only after the same source gets local replacements.
-replaced_codec_streams="$(stream_names_logged_by '^edge' 'SOURCE_CODEC_UNSUPPORTED:' \
-  '"stream":"[A-Za-z0-9_+.-]+"' \
-  'PROCESS_REPLACE: local MistProcAV decodes the source codec' | cut -d'"' -f4)"
+replaced_codec_streams="$(
+  {
+    stream_names_logged_by '^edge' 'SOURCE_CODEC_UNSUPPORTED:' \
+      '"stream(_name)?":"[A-Za-z0-9_+.-]+"' 'PROCESS_REPLACE: local MistProcAV decodes the source codec'
+    stream_names_logged_by '^edge' 'SOURCE_CODEC_UNSUPPORTED:' \
+      '"stream(_name)?":"[A-Za-z0-9_+.-]+"' 'Source codec routed to local MistProcAV for decoding'
+  } | cut -d'"' -f4 | sort -u)"
 
 # A decoder's 422 refusal is recovered only if Helmsman confirms the same source's local replacement.
 replaced_refused_streams="$(stream_names_logged_by '^edge' 'Livepeer rejected segment' \

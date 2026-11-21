@@ -3,12 +3,18 @@ package mist
 import (
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sort"
 	"strings"
 )
 
 const ProcessingMemoryNoNodeReason = "no node in this cluster has enough memory for this ladder"
+
+const (
+	ProcessingWaitMemory                 = "memory"
+	ProcessingWaitSlots                  = "slots"
+	ProcessingWaitFittingNodeUnavailable = "fitting_node_unavailable"
+	ProcessingWaitClusterUnavailable     = "cluster_unavailable"
+)
 
 const processingMiB = uint64(1024 * 1024)
 
@@ -94,10 +100,7 @@ func localProcessRenditions(process map[string]any, source SourceMediaInfo) ([]E
 // EstimateProcessingMemory counts only processes running on this edge.
 // Livepeer owns compressed request/response buffers, not local video decoders.
 func EstimateProcessingMemory(raw string, source SourceMediaInfo) (uint64, error) {
-	return estimateProcessingMemory(raw, source, true)
-}
 
-func estimateProcessingMemory(raw string, source SourceMediaInfo, bounded bool) (uint64, error) {
 	if source.Width < 0 || source.Height < 0 || source.Width > 32768 || source.Height > 32768 {
 		return 0, fmt.Errorf("source dimensions outside memory admission range")
 	}
@@ -110,19 +113,17 @@ func estimateProcessingMemory(raw string, source SourceMediaInfo, bounded bool) 
 	for _, process := range processes {
 		decodeThreads := uint64(max(1, processOptionInt(process, "decode_threads", 1)))
 		encodeThreads := uint64(max(1, processOptionInt(process, "encode_threads", 1)))
-		if bounded {
-			if decodeThreads > 64 {
-				decodeThreads = 64
-			}
-			if encodeThreads > 64 {
-				encodeThreads = 64
-			}
+		if decodeThreads > 64 {
+			decodeThreads = 64
+		}
+		if encodeThreads > 64 {
+			encodeThreads = 64
 		}
 		switch process["process"] {
 		case "Livepeer":
 			bytes += 128 * processingMiB
 		case "Thumbs":
-			bytes += pixels*(32+3*(decodeThreads-1)) + 64*processingMiB
+			bytes += (32*processingMiB + pixels*4) * 115 / 100
 		case "AV":
 			rungs, err := localProcessRenditions(process, source)
 			if err != nil {
@@ -134,10 +135,12 @@ func estimateProcessingMemory(raw string, source SourceMediaInfo, bounded bool) 
 				if codec, ok := process["codec"].(string); ok && strings.EqualFold(codec, "H264") {
 					lookahead = uint64(processLookahead(process))
 				}
-				bytes += pixels*(32+3*(decodeThreads-1)) + outputPixels*(8+3*(encodeThreads-1)) + outputPixels*3*lookahead/2 + 64*processingMiB
+				// Fit from the 12 catalog/source/CPU cases in testdata/processing_memory_20261120.json.
+				// Include each decoder's source-sized surfaces and retain 15% allocation margin.
+				bytes += (48*processingMiB + pixels*(14+3*(decodeThreads-1)) + outputPixels*(8+6*(encodeThreads-1)) + outputPixels*2*lookahead/5) * 115 / 100
 			}
 			if codec, ok := process["codec"].(string); ok && (strings.EqualFold(codec, "AAC") || strings.EqualFold(codec, "opus")) {
-				bytes += 64 * processingMiB
+				bytes += 32 * processingMiB
 			}
 		}
 	}
@@ -148,6 +151,16 @@ func estimateProcessingMemory(raw string, source SourceMediaInfo, bounded bool) 
 // lookahead. Only a node that cannot fit even one codec thread per rendition
 // reduces lookahead, starting with the largest local H264 rendition.
 func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int) (ProcessingMemoryPlan, error) {
+	return planProcessingMemory(raw, source, budget, cpus, false)
+}
+
+// PlanProcessingMemoryThreads changes concurrency while preserving the quality
+// selected against the node's full budget, including any explicit lookahead.
+func PlanProcessingMemoryThreads(raw string, source SourceMediaInfo, budget uint64, cpus int) (ProcessingMemoryPlan, error) {
+	return planProcessingMemory(raw, source, budget, cpus, true)
+}
+
+func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int, preserveQuality bool) (ProcessingMemoryPlan, error) {
 	base, err := ProcessingMemoryDefaults(raw, cpus)
 	if err != nil {
 		return ProcessingMemoryPlan{}, err
@@ -156,6 +169,32 @@ func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 	if err = json.Unmarshal([]byte(base), &processes); err != nil {
 		return ProcessingMemoryPlan{}, err
 	}
+	if preserveQuality {
+		var original []map[string]any
+		if err = json.Unmarshal([]byte(raw), &original); err != nil {
+			return ProcessingMemoryPlan{}, err
+		}
+		for i := range processes {
+			if value, present := original[i]["lookahead"]; present {
+				processes[i]["lookahead"] = value
+			}
+		}
+	}
+	// Source-size inhibitors are known after the probe. Do not publish their
+	// encoders and rely on later graph retirement: even a short start allocates
+	// a full source decoder that the memory estimate deliberately excludes.
+	runnable := processes[:0]
+	for _, process := range processes {
+		if process["process"] == "AV" {
+			codec, knownCodec := process["codec"].(string)
+			inhibitor, knownInhibitor := process["track_inhibit"].(string)
+			if knownCodec && knownInhibitor && isAVVideoCodec(codec) && shouldInhibitLivepeerSelector(inhibitor, source) {
+				continue
+			}
+		}
+		runnable = append(runnable, process)
+	}
+	processes = runnable
 	type candidate struct {
 		index int
 		area  uint64
@@ -209,6 +248,9 @@ func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 	if fits, planErr := tryThreads(); planErr != nil || fits {
 		return result, planErr
 	}
+	if preserveQuality {
+		return result, nil
+	}
 	for _, rung := range local {
 		process := processes[rung.index]
 		codec, ok := process["codec"].(string)
@@ -223,50 +265,6 @@ func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 	return result, nil
 }
 
-// PlanProcessingMemoryForCapabilities never budgets controls an older Mist ignores.
-// Legacy FFmpeg decoders use up to sixteen auto threads; software encoders may
-// select more from the host CPU count, independently of the Go process quota.
-func PlanProcessingMemoryForCapabilities(raw string, source SourceMediaInfo, budget uint64, cpus int, controls map[string]bool) (ProcessingMemoryPlan, error) {
-	var processes []map[string]any
-	if err := json.Unmarshal([]byte(raw), &processes); err != nil {
-		return ProcessingMemoryPlan{}, err
-	}
-	modern := true
-	for _, process := range processes {
-		name, named := process["process"].(string)
-		if !named {
-			continue
-		}
-		if (name == "AV" || name == "Thumbs") && !controls[name] {
-			modern = false
-		}
-	}
-	if modern {
-		return PlanProcessingMemory(raw, source, budget, cpus)
-	}
-	for _, process := range processes {
-		for _, key := range []string{"memory_budgeted", "encode_threads", "decode_threads", "lookahead"} {
-			delete(process, key)
-		}
-	}
-	published, err := json.Marshal(processes)
-	if err != nil {
-		return ProcessingMemoryPlan{}, err
-	}
-	for _, process := range processes {
-		if process["process"] == "AV" || process["process"] == "Thumbs" {
-			process["decode_threads"] = 16
-			process["encode_threads"] = max(64, max(cpus, runtime.NumCPU())*2)
-		}
-	}
-	estimated, err := json.Marshal(processes)
-	if err != nil {
-		return ProcessingMemoryPlan{}, err
-	}
-	bytes, err := estimateProcessingMemory(string(estimated), source, false)
-	return ProcessingMemoryPlan{ProcessesJSON: string(published), Bytes: bytes, Fits: bytes <= budget}, err
-}
-
 // ProcessingMemoryBudget leaves headroom for the runtime and non-job work.
 func ProcessingMemoryBudget(total uint64) uint64 {
 	headroom := max(512*processingMiB, total/6)
@@ -274,12 +272,4 @@ func ProcessingMemoryBudget(total uint64) uint64 {
 		return 0
 	}
 	return total - headroom
-}
-
-// ProcessingSourcePolicy selects known local-only inputs before starting Livepeer.
-func ProcessingSourcePolicy(raw string, source SourceMediaInfo) string {
-	if source.Rotation%360 != 0 || source.Mirror || (source.VideoCodec != "" && !strings.EqualFold(source.VideoCodec, "H264") && !strings.EqualFold(source.VideoCodec, "HEVC")) {
-		return ReplaceLivepeerWithLocal(raw)
-	}
-	return raw
 }

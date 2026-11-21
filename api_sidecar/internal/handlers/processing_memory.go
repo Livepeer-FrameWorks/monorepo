@@ -9,10 +9,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
-	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/config"
+	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
@@ -22,7 +21,8 @@ const memoryMiB = uint64(1024 * 1024)
 
 // Source selection is empty even before metadata exists; inhibitors also keep
 // this entry out of the process graph once source tracks appear.
-const processingSourceProbePolicy = `[{"process":"AV","codec":"H264","track_select":"video=none&audio=none&subtitle=none&meta=none","track_inhibit":"video=all&audio=all"}]`
+const processingSourceProbePolicy = `[{"process":"AV","codec":"H264","track_select":"video=none&audio=none&subtitle=none&meta=none","track_inhibit":"video=all&audio=all","x-LSP-probe":true}]`
+const processingSourceIdlePolicy = `[{"process":"AV","codec":"H264","track_select":"video=none&audio=none&subtitle=none&meta=none","track_inhibit":"video=all&audio=all"}]`
 
 func processingMemorySnapshot() (total, available uint64, err error) {
 	return readProcessingMemorySnapshot(config.MemoryCapacityBytes(), os.ReadFile)
@@ -103,6 +103,7 @@ type processingCapacityError struct {
 	requiredBytes uint64
 	nodeTooSmall  bool
 	policy        string
+	budgetBytes   uint64
 }
 
 func (e *processingCapacityError) Error() string { return e.reason }
@@ -113,7 +114,7 @@ func processingMemoryFailureOutputs(err error) map[string]string {
 		if capacity.nodeTooSmall {
 			cause = mist.ProcessingRetryCauseMemoryNodeTooSmall
 		}
-		return map[string]string{mist.ProcessingResultRetryCause: cause, mist.ProcessingRequiredMemoryBytes: strconv.FormatUint(capacity.requiredBytes, 10), mist.ProcessingMemoryPolicy: capacity.policy}
+		return map[string]string{mist.ProcessingResultRetryCause: cause, mist.ProcessingRequiredMemoryBytes: strconv.FormatUint(capacity.requiredBytes, 10), mist.ProcessingMemoryPolicy: capacity.policy, mist.ProcessingNodeMemoryBudget: strconv.FormatUint(capacity.budgetBytes, 10)}
 	}
 	return processingReadinessFailureOutputs(err)
 }
@@ -124,7 +125,7 @@ func processingMemoryFailureOutputs(err error) map[string]string {
 func reserveProcessingMemory(stream, job string, desired string, bytes, total, available uint64) (bool, error) {
 	budget := processingMemoryBudget(total)
 	if bytes > budget {
-		return false, &processingCapacityError{reason: fmt.Sprintf("processing work needs %d memory bytes; node processing budget is %d", bytes, budget), requiredBytes: bytes, nodeTooSmall: true, policy: desired}
+		return false, &processingCapacityError{reason: fmt.Sprintf("processing work needs %d memory bytes; node processing budget is %d", bytes, budget), requiredBytes: bytes, nodeTooSmall: true, policy: desired, budgetBytes: budget}
 	}
 	processingProcessOverridesMu.Lock()
 	defer processingProcessOverridesMu.Unlock()
@@ -140,13 +141,16 @@ func reserveProcessingMemory(stream, job string, desired string, bytes, total, a
 	}
 	// An upgrade replaces this job's existing reservation after its source restarts.
 	extra := bytes - min(bytes, record.MemoryBytes)
-	if used > budget-bytes || (bytes > 0 && available < extra+128*memoryMiB) {
+	protected := config.ProcessingProtectedMemory(job)
+	remaining := budget - min(budget, protected)
+	physical := available - min(available, protected)
+	if bytes > remaining || used > remaining-bytes || (bytes > 0 && (physical < extra || physical-extra < 128*memoryMiB)) {
 		return false, nil
 	}
 	record.ProcessesJSON = desired
 	record.MemoryBytes = bytes
 	if err := persistProcessingOverrideLocked(record); err != nil {
-		return false, err
+		return false, &processingAdmissionError{err: err}
 	}
 	return true, nil
 }
@@ -158,80 +162,140 @@ func (h *ProcessingJobHandler) admitProcessingPolicy(log *logrus.Entry, req *ipc
 	}
 	total, available, err := snapshot()
 	if err != nil {
-		return "", err
+		return "", &processingAdmissionError{err: err}
 	}
-	controls := h.memoryControls
-	if controls == nil && h.mistServerURL != "" {
-		cfg := appconfig.MistClient()
-		cfg.BaseURL = h.mistServerURL
-		client := mist.NewClient(h.logger, cfg)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		var capabilityErr error
-		controls, capabilityErr = client.ProcessingResourceControls(ctx)
-		cancel()
-		if capabilityErr != nil {
-			log.WithError(capabilityErr).Warn("Mist resource controls unavailable; using conservative memory admission")
+	budget := processingMemoryBudget(total)
+	floor := uint64(0)
+	if raw := req.GetParams()[mist.ProcessingRequiredMemoryBytes]; raw != "" {
+		var parseErr error
+		floor, parseErr = strconv.ParseUint(raw, 10, 63)
+		if parseErr != nil {
+			return "", fmt.Errorf("invalid processing memory floor: %w", parseErr)
 		}
 	}
-	cpus := runtime.GOMAXPROCS(0)
-	plan, err := mist.PlanProcessingMemoryForCapabilities(desired, source, processingMemoryBudget(total), cpus, controls)
+	plan, err := mist.PlanProcessingMemory(desired, source, budget, runtime.GOMAXPROCS(0))
 	if err != nil {
 		return "", err
 	}
-	if !plan.Fits {
-		return "", &processingCapacityError{reason: "processing ladder exceeds this node's memory budget", requiredBytes: plan.Bytes, nodeTooSmall: true, policy: desired}
-	}
-	// Mist treats an empty override as a request for its wildcard processes.
-	// Keep an explicit inhibited entry when this job needs no extra processes.
-	var processes []json.RawMessage
-	if err = json.Unmarshal([]byte(plan.ProcessesJSON), &processes); err != nil {
+	minimum, err := mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, 0, 1)
+	if err != nil {
 		return "", err
 	}
-	if len(processes) == 0 {
-		plan.ProcessesJSON = processingSourceProbePolicy
+	minimum.Bytes = max(minimum.Bytes, floor)
+	plan.Fits = plan.Fits && floor <= budget
+	if !plan.Fits {
+		minimum, err = mist.PlanProcessingMemory(desired, source, 0, 1)
+		if err != nil {
+			return "", err
+		}
+		minimum.Bytes = max(minimum.Bytes, floor)
+		return "", &processingCapacityError{reason: "processing ladder exceeds this node's memory budget", requiredBytes: minimum.Bytes, nodeTooSmall: true, policy: desired, budgetBytes: budget}
 	}
-	admitted, err := reserveProcessingMemory(stream, req.GetJobId(), plan.ProcessesJSON, plan.Bytes, total, available)
+	reserve := func(candidate *mist.ProcessingMemoryPlan) (bool, error) {
+		candidate.Bytes = max(candidate.Bytes, floor)
+		var processes []json.RawMessage
+		if parseErr := json.Unmarshal([]byte(candidate.ProcessesJSON), &processes); parseErr != nil {
+			return false, parseErr
+		}
+		if len(processes) == 0 {
+			candidate.ProcessesJSON = processingSourceIdlePolicy
+		}
+		return reserveProcessingMemory(stream, req.GetJobId(), candidate.ProcessesJSON, candidate.Bytes, total, available)
+	}
+	admitted, err := reserve(&plan)
 	if err != nil {
 		return "", err
 	}
 	if !admitted {
-		minimum, minimumErr := mist.PlanProcessingMemoryForCapabilities(desired, source, 0, 1, controls)
-		if minimumErr != nil {
-			return "", minimumErr
+		free, freeErr := processingMemoryRemainder(stream, req.GetJobId(), total, available)
+		if freeErr != nil {
+			return "", freeErr
 		}
-		return "", &processingCapacityError{reason: "waiting for processing memory", requiredBytes: minimum.Bytes, policy: desired}
+		plan, err = mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, free, runtime.GOMAXPROCS(0))
+		if err != nil {
+			return "", err
+		}
+		if plan.Fits {
+			admitted, err = reserve(&plan)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if !admitted {
+		return "", &processingCapacityError{reason: "waiting for processing memory", requiredBytes: minimum.Bytes, policy: desired, budgetBytes: budget}
 	}
 	log.WithFields(logrus.Fields{"memory_bytes": plan.Bytes, "node_memory_bytes": total}).Info("Processing work admitted by memory")
-	minimum, minimumErr := mist.PlanProcessingMemoryForCapabilities(desired, source, 0, 1, controls)
-	if minimumErr != nil {
-		return "", minimumErr
-	}
-	h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), plan.ProcessesJSON, minimum.Bytes)
+	h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), plan.ProcessesJSON, minimum.Bytes, plan.Bytes)
 	return plan.ProcessesJSON, nil
 }
 
+func processingMemoryRemainder(stream, job string, total, available uint64) (uint64, error) {
+	processingProcessOverridesMu.Lock()
+	defer processingProcessOverridesMu.Unlock()
+	record, ok := processingOverrideRecords[stream]
+	if !ok || record.JobID != job {
+		return 0, errors.New("processing memory reservation lost its policy owner")
+	}
+	var used uint64
+	for name, other := range processingOverrideRecords {
+		if name != stream {
+			used += other.MemoryBytes
+		}
+	}
+	budget := processingMemoryBudget(total)
+	if used >= budget {
+		return 0, nil
+	}
+	physical := uint64(0)
+	if available > 128*memoryMiB {
+		physical = available - 128*memoryMiB
+	}
+	protected := config.ProcessingProtectedMemory(job)
+	logical := budget - used
+	logical -= min(logical, protected)
+	// Existing bytes belong to this generation and can be reused on upgrade.
+	physical += record.MemoryBytes
+	physical -= min(physical, protected)
+	return min(logical, physical), nil
+}
+
+type processingAdmissionError struct{ err error }
+
+func (e *processingAdmissionError) Error() string { return e.err.Error() }
+func (e *processingAdmissionError) Unwrap() error { return e.err }
+
 func (h *ProcessingJobHandler) prepareProcessingMemory(log *logrus.Entry, client *mist.Client, req *ipcpb.ProcessingJobRequest, stream, outputPath, desired string, exitCh <-chan ProcessExitEvent, send func(*ipcpb.ControlMessage)) (string, mist.SourceMediaInfo, error) {
-	outputs, _, err := h.waitForProcessingStreamReady(context.Background(), log, client, req, stream, "[]", exitCh, nil, nil, nil)
-	if err != nil {
-		return "", mist.SourceMediaInfo{}, err
+
+	probe, cached := cachedProcessingProbe(req)
+	var err error
+	if !cached {
+		outputs, _, probeErr := h.waitForProcessingStreamReady(context.Background(), log, client, req, stream, "[]", exitCh, nil, nil, nil)
+		if probeErr != nil {
+			return "", mist.SourceMediaInfo{}, probeErr
+		}
+		source, _ := sourceFromReadinessOutputs(outputs)
+		probe = mist.ProcessingSourceProbe{SourceKey: processingProbeIdentity(req), Source: source, Outputs: outputs}
 	}
-	source, _ := sourceFromReadinessOutputs(outputs)
-	desired = mist.ProcessingSourcePolicy(desired, source)
-	desired, err = mist.EnsureRotatedSourceRendition(desired, source)
-	if err != nil {
-		return "", source, err
+	if err = saveProcessingProbe(req, stream, probe, send); err != nil {
+		return "", probe.Source, err
 	}
-	estimated, err := processingMemoryEstimate(desired, source)
-	if err != nil {
-		return "", source, err
+	source := probe.Source
+
+	if !mist.HasLivepeerProcesses(desired) {
+		desired, err = mist.EnsureRotatedSourceRendition(desired, source)
+		if err != nil {
+			return "", source, err
+		}
 	}
 	processingProcessOverridesMu.Lock()
 	previous := processingOverrideRecords[stream].MemoryBytes
 	processingProcessOverridesMu.Unlock()
-	// The probe must not retain input buffers while this attempt waits in Foghorn's queue.
-	if estimated > 0 || previous > 0 {
+	// A running generation must drain before its reservation can be replaced.
+	// A fresh probe stays paused until admission publishes its final policy.
+	if previous > 0 {
 		if err = h.restartProcessingStreamForLocalFallback(log, client, stream, outputPath, 0); err != nil {
-			return "", source, err
+			return "", source, &processingAdmissionError{err: err}
 		}
 		clearProcessingResourceFailures(stream)
 		if err = releaseStoppedProcessingMemory(stream, req.GetJobId()); err != nil {
@@ -258,18 +322,27 @@ func (h *ProcessingJobHandler) finishProcessingMemory(log *logrus.Entry, client 
 		return
 	}
 	processingProcessOverridesMu.Lock()
-	defer processingProcessOverridesMu.Unlock()
+
 	current, ok := processingOverrideRecords[stream]
 	if !ok || current.JobID != job {
+		processingProcessOverridesMu.Unlock()
 		return
 	}
 	current.MemoryBytes = 0
 	if err := persistProcessingOverrideLocked(current); err != nil {
+		processingProcessOverridesMu.Unlock()
 		log.WithError(err).Warn("Could not release durable processing memory reservation")
+		return
 	}
+	processingProcessOverridesMu.Unlock()
+	notifyProcessingMemoryReleased(job)
 }
 
-func processingMemoryResultStatus(err error) string {
+func processingMemoryFailureStatus(err error) string {
+	var admission *processingAdmissionError
+	if errors.As(err, &admission) {
+		return processingResultRetryable
+	}
 	var capacity *processingCapacityError
 	if errors.As(err, &capacity) {
 		return processingResultRetryable
@@ -279,7 +352,7 @@ func processingMemoryResultStatus(err error) string {
 
 func (h *ProcessingJobHandler) admitLocalProcessingFallback(log *logrus.Entry, client processingRuntimeClient, req *ipcpb.ProcessingJobRequest, stream, output string, pushID int, desired string, source mist.SourceMediaInfo, send func(*ipcpb.ControlMessage)) (string, error) {
 	if err := h.restartProcessingStreamForLocalFallback(log, client, stream, output, pushID); err != nil {
-		return "", err
+		return "", &processingAdmissionError{err: err}
 	}
 	if err := releaseStoppedProcessingMemory(stream, req.GetJobId()); err != nil {
 		return "", err
@@ -291,11 +364,26 @@ func (h *ProcessingJobHandler) admitLocalProcessingFallback(log *logrus.Entry, c
 // The caller must have confirmed the generation drained before releasing it.
 func releaseStoppedProcessingMemory(stream, job string) error {
 	processingProcessOverridesMu.Lock()
-	defer processingProcessOverridesMu.Unlock()
 	record, ok := processingOverrideRecords[stream]
 	if !ok || record.JobID != job {
+		processingProcessOverridesMu.Unlock()
 		return errors.New("processing memory reservation lost its policy owner")
 	}
+	released := record.MemoryBytes > 0
 	record.MemoryBytes = 0
-	return persistProcessingOverrideLocked(record)
+	err := persistProcessingOverrideLocked(record)
+	processingProcessOverridesMu.Unlock()
+	if err != nil {
+		return &processingAdmissionError{err: err}
+	}
+	if released {
+		notifyProcessingMemoryReleased(job)
+	}
+	return nil
+}
+
+func notifyProcessingMemoryReleased(job string) {
+	if err := control.SendProcessingMemoryReleased(job); err != nil && logger != nil {
+		logger.WithError(err).Warn("Could not announce released processing memory")
+	}
 }

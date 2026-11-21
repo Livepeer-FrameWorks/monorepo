@@ -263,6 +263,6 @@ Tenant policy changes emit `media.retention_policy.changed`. Per-asset changes e
 Successful file uploads keep their original by default. The original and processed file both
 count toward storage usage and the cap; the original is billed at the same storage rate.
 Change **Keep original uploads** in account storage settings or `keepOriginal` on an individual
-upload. This affects future uploads. `deleteVodOriginal` frees only the retained source;
+upload. This affects future uploads. `deleteVodOriginal` removes original access and schedules cleanup of the retained source;
 deleting or expiring the whole video removes both. URL imports and failed uploads retain no
 original. See [original upload access](/builders/recordings#original-uploads).

@@ -189,3 +189,31 @@ func TestProcessNodeLifecycleUsesAudienceWithLegacyFallback(t *testing.T) {
 		t.Fatalf("node viewers=%v, want audience 2+0 and legacy 4", row[21])
 	}
 }
+
+func TestProcessLegacyNodeMemoryIsStoredAsBytes(t *testing.T) {
+	batch := &captureBatch{}
+	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
+	update := &ipcpb.NodeLifecycleUpdate{NodeId: "legacy", RamMax: 4 * 1024 * 1024, RamCurrent: 2 * 1024 * 1024, ShmTotalBytes: 1024, ShmUsedBytes: 512}
+	if err := h.processNodeLifecycle(t.Context(), nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "cluster", time.Now(), update)); err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.rows) != 2 {
+		t.Fatalf("state and historical facts missing: %v", batch.rows)
+	}
+	state, samples := batch.rows[0], batch.rows[1]
+	if state[4] != uint64(2*1024*1024*1024) || state[5] != uint64(4*1024*1024*1024) || samples[5] != uint64(4*1024*1024*1024) || samples[6] != uint64(2*1024*1024*1024) {
+		t.Fatalf("legacy KiB counters were labelled bytes: state=%v samples=%v", state[4:6], samples[5:7])
+	}
+}
+
+func TestByteMarkedNodeMemoryIsNotConvertedTwice(t *testing.T) {
+	batch := &captureBatch{}
+	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
+	update := &ipcpb.NodeLifecycleUpdate{NodeId: "current", RamMax: 4 * 1024 * 1024 * 1024, RamCurrent: 2 * 1024 * 1024 * 1024, MemoryMetricsAreBytes: true}
+	if err := h.processNodeLifecycle(t.Context(), nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "cluster", time.Now(), update)); err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.rows) != 2 || batch.rows[1][5] != update.GetRamMax() || batch.rows[1][6] != update.GetRamCurrent() || batch.rows[1][26] != uint16(1) {
+		t.Fatalf("byte marker was lost or converted twice: %v", batch.rows)
+	}
+}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
@@ -71,6 +72,7 @@ func cloneNodeStateLocked(n *NodeState) *NodeState {
 	c.ProcessingClasses = cloneProcessingClasses(n.ProcessingClasses)
 	c.Capacity = proto.CloneOf(n.Capacity)
 	c.CapacityRevisionApplied = cloneUint64Ptr(n.CapacityRevisionApplied)
+	c.ProcessingMemoryBudgetBytes = cloneUint64Ptr(n.ProcessingMemoryBudgetBytes)
 	c.Artifacts = cloneStoredArtifacts(n.Artifacts)
 	return &c
 }
@@ -429,6 +431,7 @@ type NodeState struct {
 	CPU                           float64                      `json:"cpu,omitempty"`
 	RAMMax                        float64                      `json:"ram_max,omitempty"`
 	RAMCurrent                    float64                      `json:"ram_current,omitempty"`
+	ProcessingMemoryBudgetBytes   *uint64                      `json:"processing_memory_budget_bytes,omitempty"`
 	UpSpeed                       float64                      `json:"up_speed,omitempty"`
 	DownSpeed                     float64                      `json:"down_speed,omitempty"`
 	BWLimit                       float64                      `json:"bw_limit,omitempty"`
@@ -533,8 +536,9 @@ type StreamStateManager struct {
 	evictedNodes map[string]nodeEvictionTombstone
 	mu           sync.RWMutex
 	// playbackAuthorityHandler receives peers' authority announcements.
-	playbackAuthorityHandler func(PlaybackAuthorityChange)
-	nodeClusterObserver      func(string)
+	playbackAuthorityHandler  func(PlaybackAuthorityChange)
+	nodeClusterObserver       func(string)
+	processingCapacityHandler func(string)
 
 	nodeStreamCounts      map[string]nodeStreamCountsState
 	nodeCountsPublishMu   sync.Mutex
@@ -1782,6 +1786,7 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
+	recovered := isHealthy && (!n.IsHealthy || n.LastHeartbeat.IsZero())
 	n.IsHealthy = isHealthy
 	n.IsStale = false
 	// Deliberately does NOT disarm the announced-restart window: the dying
@@ -1799,6 +1804,9 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 		sm.persistNodeWriteThrough(nodeID, nodePayload)
 	}
 	sm.MarkNodeDNSChanged(nodeID)
+	if recovered {
+		sm.processingCapacityChanged(nodeID)
+	}
 }
 
 // SetProbeVerified marks whether Foghorn has verified the node's HTTPS endpoint.
@@ -1920,8 +1928,8 @@ func (sm *StreamStateManager) mergeRehydratedNode(record NodeRecord) {
 	}
 }
 
-// UpdateNodeMetrics updates node metrics, capabilities, roles, and storage info
-func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
+// NodeMetrics is the runtime observation of utilization and capabilities.
+type NodeMetrics struct {
 	CPU                  float64
 	RAMMax               float64
 	RAMCurrent           float64
@@ -1936,7 +1944,13 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	StorageCapacityBytes uint64
 	StorageUsedBytes     uint64
 	ProcessingClasses    map[string]ClassCapacity
-}) {
+}
+
+func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics NodeMetrics) {
+	sm.updateNodeMetrics(nodeID, metrics, nil)
+}
+
+func (sm *StreamStateManager) updateNodeMetrics(nodeID string, metrics NodeMetrics, processingBudget *uint64) {
 	sm.mu.Lock()
 	if _, evicted := sm.evictedNodes[nodeID]; evicted {
 		sm.mu.Unlock()
@@ -1946,6 +1960,18 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	if n == nil {
 		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
+	}
+
+	capacityAvailable := !n.CapProcessing && metrics.CapProcessing
+	if processingBudget != nil && (n.ProcessingMemoryBudgetBytes == nil || *n.ProcessingMemoryBudgetBytes != *processingBudget) {
+		capacityAvailable = capacityAvailable || n.ProcessingMemoryBudgetBytes == nil || *processingBudget > *n.ProcessingMemoryBudgetBytes
+		value := *processingBudget
+		n.ProcessingMemoryBudgetBytes = &value
+	}
+	if old, ok := n.ProcessingClasses["video_transcode"]; ok {
+		if current, present := metrics.ProcessingClasses["video_transcode"]; present && current.Used < old.Used {
+			capacityAvailable = true
+		}
 	}
 	n.CPU = metrics.CPU
 	n.RAMMax = metrics.RAMMax
@@ -1975,6 +2001,9 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
 	sm.MarkNodeDNSChanged(nodeID)
+	if capacityAvailable {
+		sm.processingCapacityChanged(nodeID)
+	}
 }
 
 // UpdateNodeDiskUsage updates the disk usage statistics for a node
@@ -2065,6 +2094,7 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
+	wasMode := n.OperationalMode
 	n.OperationalMode = normalized
 	n.OperationalModeSetBy = setBy
 	n.LastUpdate = now
@@ -2079,6 +2109,9 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		sm.persistNodeModeWriteThrough(nodeID, modePayload)
 	}
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	if normalized == NodeModeNormal && wasMode != normalized {
+		sm.processingCapacityChanged(nodeID)
+	}
 	return nil
 }
 
@@ -4054,6 +4087,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	if update == nil {
 		return nil
 	}
+	ramTotal, ramUsed, _, _ := mist.NodeMemoryBytes(update)
 	// Update in-memory node info and metrics
 	var latPtr, lonPtr *float64
 	if geo.IsValidLatLon(update.GetLatitude(), update.GetLongitude()) {
@@ -4069,25 +4103,10 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	sm.SetNodeProvisionedConfig(update.GetNodeId(), update.GetProvisionedConfig())
 	sm.setNodeDiskUsageForLifecycle(update.GetNodeId(), update.GetDiskTotalBytes(), update.GetDiskUsedBytes())
 	budget, up, down := sm.nodeCapacityObservation(update)
-	sm.UpdateNodeMetrics(update.GetNodeId(), struct {
-		CPU                  float64
-		RAMMax               float64
-		RAMCurrent           float64
-		UpSpeed              float64
-		DownSpeed            float64
-		BWLimit              float64
-		CapIngest            bool
-		CapEdge              bool
-		CapStorage           bool
-		CapProcessing        bool
-		Roles                []string
-		StorageCapacityBytes uint64
-		StorageUsedBytes     uint64
-		ProcessingClasses    map[string]ClassCapacity
-	}{
+	sm.updateNodeMetrics(update.GetNodeId(), NodeMetrics{
 		CPU:           float64(update.GetCpuTenths()) / 10.0,
-		RAMMax:        float64(update.GetRamMax()),
-		RAMCurrent:    float64(update.GetRamCurrent()),
+		RAMMax:        float64(ramTotal),
+		RAMCurrent:    float64(ramUsed),
 		UpSpeed:       up,
 		DownSpeed:     down,
 		BWLimit:       budget,
@@ -4114,7 +4133,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 			return update.GetLimits().GetStorageUsedBytes()
 		}(),
 		ProcessingClasses: ProcessingClassesFromLimits(update.GetLimits()),
-	})
+	}, update.ProcessingMemoryBudgetBytes)
 
 	if update.ObservedValid == nil || update.GetObservedValid() {
 		if err := sm.SettleNodeBandwidth(ctx, update.GetNodeId(), update.GetSampleWindowStartMs(), update.GetSampleWindowEndMs(), time.Now()); err != nil {

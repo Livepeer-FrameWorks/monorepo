@@ -696,36 +696,37 @@ type ComplexityRoot struct {
 	}
 
 	Clip struct {
-		ClipHash           func(childComplexity int) int
-		ClipMode           func(childComplexity int) int
-		CreatedAt          func(childComplexity int) int
-		Description        func(childComplexity int) int
-		Duration           func(childComplexity int) int
-		EffectiveRetention func(childComplexity int) int
-		ErrorMessage       func(childComplexity int) int
-		ExpiresAt          func(childComplexity int) int
-		HasLocalCopy       func(childComplexity int) int
-		ID                 func(childComplexity int) int
-		IsExpired          func(childComplexity int) int
-		IsFinalized        func(childComplexity int) int
-		IsSynced           func(childComplexity int) int
-		NodeID             func(childComplexity int) int
-		PlaybackId         func(childComplexity int) int
-		PlaybackPolicy     func(childComplexity int) int
-		RequestedParams    func(childComplexity int) int
-		SizeBytes          func(childComplexity int) int
-		SourceStreamID     func(childComplexity int) int
-		StartTime          func(childComplexity int) int
-		Status             func(childComplexity int) int
-		StorageCost        func(childComplexity int) int
-		StorageLocation    func(childComplexity int) int
-		StoragePath        func(childComplexity int) int
-		Stream             func(childComplexity int) int
-		StreamID           func(childComplexity int) int
-		SyncStatus         func(childComplexity int) int
-		ThumbnailAssets    func(childComplexity int) int
-		Title              func(childComplexity int) int
-		UpdatedAt          func(childComplexity int) int
+		ClipHash             func(childComplexity int) int
+		ClipMode             func(childComplexity int) int
+		CreatedAt            func(childComplexity int) int
+		Description          func(childComplexity int) int
+		Duration             func(childComplexity int) int
+		EffectiveRetention   func(childComplexity int) int
+		ErrorMessage         func(childComplexity int) int
+		ExpiresAt            func(childComplexity int) int
+		HasLocalCopy         func(childComplexity int) int
+		ID                   func(childComplexity int) int
+		IsExpired            func(childComplexity int) int
+		IsFinalized          func(childComplexity int) int
+		IsSynced             func(childComplexity int) int
+		NodeID               func(childComplexity int) int
+		PlaybackId           func(childComplexity int) int
+		PlaybackPolicy       func(childComplexity int) int
+		ProcessingWaitReason func(childComplexity int) int
+		RequestedParams      func(childComplexity int) int
+		SizeBytes            func(childComplexity int) int
+		SourceStreamID       func(childComplexity int) int
+		StartTime            func(childComplexity int) int
+		Status               func(childComplexity int) int
+		StorageCost          func(childComplexity int) int
+		StorageLocation      func(childComplexity int) int
+		StoragePath          func(childComplexity int) int
+		Stream               func(childComplexity int) int
+		StreamID             func(childComplexity int) int
+		SyncStatus           func(childComplexity int) int
+		ThumbnailAssets      func(childComplexity int) int
+		Title                func(childComplexity int) int
+		UpdatedAt            func(childComplexity int) int
 	}
 
 	ClipFailed struct {
@@ -3200,39 +3201,40 @@ type ComplexityRoot struct {
 	}
 
 	StorageArtifact struct {
-		CreatedAt          func(childComplexity int) int
-		DeleteID           func(childComplexity int) int
-		Description        func(childComplexity int) int
-		DurationSeconds    func(childComplexity int) int
-		EffectiveRetention func(childComplexity int) int
-		ErrorMessage       func(childComplexity int) int
-		ExpiresAt          func(childComplexity int) int
-		HasLocalCopy       func(childComplexity int) int
-		Hash               func(childComplexity int) int
-		ID                 func(childComplexity int) int
-		IsFinalized        func(childComplexity int) int
-		IsSynced           func(childComplexity int) int
-		Key                func(childComplexity int) int
-		Kind               func(childComplexity int) int
-		OriginType         func(childComplexity int) int
-		OriginalFile       func(childComplexity int) int
-		ParentRecordingID  func(childComplexity int) int
-		PlaybackID         func(childComplexity int) int
-		RetentionID        func(childComplexity int) int
-		SecondaryLabel     func(childComplexity int) int
-		SizeBytes          func(childComplexity int) int
-		Status             func(childComplexity int) int
-		StorageClusterID   func(childComplexity int) int
-		StorageCost        func(childComplexity int) int
-		StorageLocation    func(childComplexity int) int
-		StreamID           func(childComplexity int) int
-		StreamTitle        func(childComplexity int) int
-		SyncStatus         func(childComplexity int) int
-		ThumbnailAssets    func(childComplexity int) int
-		ThumbnailURL       func(childComplexity int) int
-		Title              func(childComplexity int) int
-		Tracks             func(childComplexity int) int
-		UpdatedAt          func(childComplexity int) int
+		CreatedAt            func(childComplexity int) int
+		DeleteID             func(childComplexity int) int
+		Description          func(childComplexity int) int
+		DurationSeconds      func(childComplexity int) int
+		EffectiveRetention   func(childComplexity int) int
+		ErrorMessage         func(childComplexity int) int
+		ExpiresAt            func(childComplexity int) int
+		HasLocalCopy         func(childComplexity int) int
+		Hash                 func(childComplexity int) int
+		ID                   func(childComplexity int) int
+		IsFinalized          func(childComplexity int) int
+		IsSynced             func(childComplexity int) int
+		Key                  func(childComplexity int) int
+		Kind                 func(childComplexity int) int
+		OriginType           func(childComplexity int) int
+		OriginalFile         func(childComplexity int) int
+		ParentRecordingID    func(childComplexity int) int
+		PlaybackID           func(childComplexity int) int
+		ProcessingWaitReason func(childComplexity int) int
+		RetentionID          func(childComplexity int) int
+		SecondaryLabel       func(childComplexity int) int
+		SizeBytes            func(childComplexity int) int
+		Status               func(childComplexity int) int
+		StorageClusterID     func(childComplexity int) int
+		StorageCost          func(childComplexity int) int
+		StorageLocation      func(childComplexity int) int
+		StreamID             func(childComplexity int) int
+		StreamTitle          func(childComplexity int) int
+		SyncStatus           func(childComplexity int) int
+		ThumbnailAssets      func(childComplexity int) int
+		ThumbnailURL         func(childComplexity int) int
+		Title                func(childComplexity int) int
+		Tracks               func(childComplexity int) int
+		UpdatedAt            func(childComplexity int) int
 	}
 
 	StorageArtifactKindCounts struct {
@@ -4323,36 +4325,37 @@ type ComplexityRoot struct {
 	}
 
 	VodAsset struct {
-		ArtifactHash       func(childComplexity int) int
-		AudioCodec         func(childComplexity int) int
-		BitrateKbps        func(childComplexity int) int
-		CreatedAt          func(childComplexity int) int
-		Description        func(childComplexity int) int
-		DurationMs         func(childComplexity int) int
-		EffectiveRetention func(childComplexity int) int
-		ErrorMessage       func(childComplexity int) int
-		ExpiresAt          func(childComplexity int) int
-		Filename           func(childComplexity int) int
-		HasLocalCopy       func(childComplexity int) int
-		ID                 func(childComplexity int) int
-		IsFinalized        func(childComplexity int) int
-		IsSynced           func(childComplexity int) int
-		OriginID           func(childComplexity int) int
-		OriginType         func(childComplexity int) int
-		OriginalFile       func(childComplexity int) int
-		PlaybackID         func(childComplexity int) int
-		PlaybackPolicy     func(childComplexity int) int
-		Resolution         func(childComplexity int) int
-		SizeBytes          func(childComplexity int) int
-		Status             func(childComplexity int) int
-		StorageCost        func(childComplexity int) int
-		StorageLocation    func(childComplexity int) int
-		StreamID           func(childComplexity int) int
-		SyncStatus         func(childComplexity int) int
-		ThumbnailAssets    func(childComplexity int) int
-		Title              func(childComplexity int) int
-		UpdatedAt          func(childComplexity int) int
-		VideoCodec         func(childComplexity int) int
+		ArtifactHash         func(childComplexity int) int
+		AudioCodec           func(childComplexity int) int
+		BitrateKbps          func(childComplexity int) int
+		CreatedAt            func(childComplexity int) int
+		Description          func(childComplexity int) int
+		DurationMs           func(childComplexity int) int
+		EffectiveRetention   func(childComplexity int) int
+		ErrorMessage         func(childComplexity int) int
+		ExpiresAt            func(childComplexity int) int
+		Filename             func(childComplexity int) int
+		HasLocalCopy         func(childComplexity int) int
+		ID                   func(childComplexity int) int
+		IsFinalized          func(childComplexity int) int
+		IsSynced             func(childComplexity int) int
+		OriginID             func(childComplexity int) int
+		OriginType           func(childComplexity int) int
+		OriginalFile         func(childComplexity int) int
+		PlaybackID           func(childComplexity int) int
+		PlaybackPolicy       func(childComplexity int) int
+		ProcessingWaitReason func(childComplexity int) int
+		Resolution           func(childComplexity int) int
+		SizeBytes            func(childComplexity int) int
+		Status               func(childComplexity int) int
+		StorageCost          func(childComplexity int) int
+		StorageLocation      func(childComplexity int) int
+		StreamID             func(childComplexity int) int
+		SyncStatus           func(childComplexity int) int
+		ThumbnailAssets      func(childComplexity int) int
+		Title                func(childComplexity int) int
+		UpdatedAt            func(childComplexity int) int
+		VideoCodec           func(childComplexity int) int
 	}
 
 	VodOriginalDownload struct {
@@ -8257,6 +8260,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Clip.PlaybackPolicy(childComplexity), true
+	case "Clip.processingWaitReason":
+		if e.ComplexityRoot.Clip.ProcessingWaitReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Clip.ProcessingWaitReason(childComplexity), true
 	case "Clip.requestedParams":
 		if e.ComplexityRoot.Clip.RequestedParams == nil {
 			break
@@ -19987,6 +19996,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StorageArtifact.PlaybackID(childComplexity), true
+	case "StorageArtifact.processingWaitReason":
+		if e.ComplexityRoot.StorageArtifact.ProcessingWaitReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StorageArtifact.ProcessingWaitReason(childComplexity), true
 	case "StorageArtifact.retentionId":
 		if e.ComplexityRoot.StorageArtifact.RetentionID == nil {
 			break
@@ -24943,6 +24958,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.VodAsset.PlaybackPolicy(childComplexity), true
+	case "VodAsset.processingWaitReason":
+		if e.ComplexityRoot.VodAsset.ProcessingWaitReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VodAsset.ProcessingWaitReason(childComplexity), true
 	case "VodAsset.resolution":
 		if e.ComplexityRoot.VodAsset.Resolution == nil {
 			break
@@ -28158,7 +28179,7 @@ type Mutation {
   setVodOriginalPolicy(keepVodOriginals: Boolean): SetMediaRetentionPolicyResult!
   "Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5."
   createVodOriginalDownload(id: ID!): CreateVodOriginalDownloadResult!
-  "Permanently delete only the retained upload; processed playback remains available."
+  "Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available."
   deleteVodOriginal(id: ID!): DeleteVodOriginalResult!
 
   """
@@ -29148,6 +29169,8 @@ type VodAsset implements Node {
   filename: String
   "Current processing/storage status of the asset."
   status: VodAssetStatus!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   "Where the asset is stored (s3, local, freezing)."
   storageLocation: String!
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
@@ -29263,6 +29286,8 @@ type StorageArtifact {
   errorMessage: String
   sizeBytes: Float
   status: String!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   storageLocation: String
   "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
   storageClusterId: String
@@ -32431,6 +32456,8 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
+  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  processingWaitReason: String
   "Processing failure detail from the artifact catalog."
   errorMessage: String
   "When the clip was requested."
@@ -33203,9 +33230,9 @@ type NodeMetric implements Node {
   cpuUsage: Float!
 
   # Resource metrics (RAM in MiB; disk/shm in bytes)
-  "Total memory in MiB."
+  "Total memory in bytes."
   memoryTotal: Float
-  "Used memory in MiB."
+  "Used memory in bytes."
   memoryUsed: Float
   "Total disk capacity in bytes."
   diskTotal: Float
@@ -52957,6 +52984,35 @@ func (ec *executionContext) fieldContext_Clip_status(_ context.Context, field gr
 		Field:      field,
 		IsMethod:   true,
 		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Clip_processingWaitReason(ctx context.Context, field graphql.CollectedField, obj *sharedpb.ClipInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Clip_processingWaitReason,
+		func(ctx context.Context) (any, error) {
+			return obj.ProcessingWaitReason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Clip_processingWaitReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Clip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -100765,6 +100821,8 @@ func (ec *executionContext) fieldContext_Query_clip(ctx context.Context, field g
 				return ec.fieldContext_Clip_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_Clip_status(ctx, field)
+			case "processingWaitReason":
+				return ec.fieldContext_Clip_processingWaitReason(ctx, field)
 			case "errorMessage":
 				return ec.fieldContext_Clip_errorMessage(ctx, field)
 			case "createdAt":
@@ -104091,6 +104149,8 @@ func (ec *executionContext) fieldContext_Query_vodAsset(ctx context.Context, fie
 				return ec.fieldContext_VodAsset_filename(ctx, field)
 			case "status":
 				return ec.fieldContext_VodAsset_status(ctx, field)
+			case "processingWaitReason":
+				return ec.fieldContext_VodAsset_processingWaitReason(ctx, field)
 			case "storageLocation":
 				return ec.fieldContext_VodAsset_storageLocation(ctx, field)
 			case "syncStatus":
@@ -112569,6 +112629,35 @@ func (ec *executionContext) fieldContext_StorageArtifact_status(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _StorageArtifact_processingWaitReason(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StorageArtifact_processingWaitReason,
+		func(ctx context.Context) (any, error) {
+			return obj.ProcessingWaitReason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_StorageArtifact_processingWaitReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StorageArtifact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifact_storageLocation(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -113340,6 +113429,8 @@ func (ec *executionContext) fieldContext_StorageArtifactsConnection_nodes(_ cont
 				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_StorageArtifact_status(ctx, field)
+			case "processingWaitReason":
+				return ec.fieldContext_StorageArtifact_processingWaitReason(ctx, field)
 			case "storageLocation":
 				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
 			case "storageClusterId":
@@ -118028,6 +118119,8 @@ func (ec *executionContext) fieldContext_StreamArtifactEdge_node(_ context.Conte
 				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_StorageArtifact_status(ctx, field)
+			case "processingWaitReason":
+				return ec.fieldContext_StorageArtifact_processingWaitReason(ctx, field)
 			case "storageLocation":
 				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
 			case "storageClusterId":
@@ -118160,6 +118253,8 @@ func (ec *executionContext) fieldContext_StreamArtifactsConnection_nodes(_ conte
 				return ec.fieldContext_StorageArtifact_sizeBytes(ctx, field)
 			case "status":
 				return ec.fieldContext_StorageArtifact_status(ctx, field)
+			case "processingWaitReason":
+				return ec.fieldContext_StorageArtifact_processingWaitReason(ctx, field)
 			case "storageLocation":
 				return ec.fieldContext_StorageArtifact_storageLocation(ctx, field)
 			case "storageClusterId":
@@ -139795,6 +139890,35 @@ func (ec *executionContext) fieldContext_VodAsset_status(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _VodAsset_processingWaitReason(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_VodAsset_processingWaitReason,
+		func(ctx context.Context) (any, error) {
+			return obj.ProcessingWaitReason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_VodAsset_processingWaitReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VodAsset",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _VodAsset_storageLocation(ctx context.Context, field graphql.CollectedField, obj *model.VodAsset) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -160182,6 +160306,8 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "processingWaitReason":
+			out.Values[i] = ec._Clip_processingWaitReason(ctx, field, obj)
 		case "errorMessage":
 			out.Values[i] = ec._Clip_errorMessage(ctx, field, obj)
 		case "createdAt":
@@ -187576,6 +187702,8 @@ func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "processingWaitReason":
+			out.Values[i] = ec._StorageArtifact_processingWaitReason(ctx, field, obj)
 		case "storageLocation":
 			out.Values[i] = ec._StorageArtifact_storageLocation(ctx, field, obj)
 		case "storageClusterId":
@@ -201278,6 +201406,8 @@ func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "processingWaitReason":
+			out.Values[i] = ec._VodAsset_processingWaitReason(ctx, field, obj)
 		case "storageLocation":
 			out.Values[i] = ec._VodAsset_storageLocation(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

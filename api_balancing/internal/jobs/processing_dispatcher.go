@@ -76,12 +76,15 @@ type ProcessingDispatcher struct {
 	jobTTL          time.Duration
 	stopCh          chan struct{}
 	wakeCh          chan struct{}
+	capacityCh      chan string
 	wg              sync.WaitGroup
 	configCacher    ProcessConfigCacher
 	gatewayResolver GatewayResolver
 	onCatalogDirty  func()
 	// random returns a number in [0, 1); nil uses math/rand.
-	random func() float64
+	random          func() float64
+	startedAt       time.Time
+	fairnessEnabled bool
 }
 
 var (
@@ -104,6 +107,12 @@ type GatewayResolver interface {
 
 type processingJob struct {
 	RequiredMemoryBytes int64
+	MemoryRejectedNodes []string
+	WaitReason          sql.NullString
+	WaitStartedAt       sql.NullTime
+	SourceProbe         sql.NullString
+	CreatedAt           sql.NullTime
+	UploadedAt          sql.NullTime
 	JobID               string
 	TenantID            string
 	ArtifactHash        sql.NullString
@@ -172,6 +181,7 @@ func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatch
 		jobTTL:         jobTTL,
 		stopCh:         make(chan struct{}),
 		wakeCh:         make(chan struct{}, 1),
+		capacityCh:     make(chan string, 128),
 		onCatalogDirty: cfg.OnCatalogDirty,
 	}
 }
@@ -185,6 +195,10 @@ func (d *ProcessingDispatcher) SetGatewayResolver(r GatewayResolver) {
 }
 
 func (d *ProcessingDispatcher) Start() {
+	d.startedAt = time.Now()
+	d.fairnessEnabled = true
+	state.DefaultManager().SetProcessingCapacityHandler(d.capacityChanged)
+	control.SetProcessingCapacityHandler(d.capacityChanged)
 	registerProcessingDispatcherWake(d.wakeCh)
 	control.SetNodeJobInventoryHandler(func(nodeID string, reported []string, registeredAt time.Time, current func() bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -209,6 +223,8 @@ func (d *ProcessingDispatcher) Start() {
 }
 
 func (d *ProcessingDispatcher) Stop() {
+	state.DefaultManager().SetProcessingCapacityHandler(nil)
+	control.SetProcessingCapacityHandler(nil)
 	control.SetNodeJobInventoryHandler(nil)
 	unregisterProcessingDispatcherWake(d.wakeCh)
 	close(d.stopCh)
@@ -230,6 +246,9 @@ func (d *ProcessingDispatcher) run() {
 			d.dispatch()
 			d.recoverStale()
 		case <-d.wakeCh:
+			d.dispatch()
+		case nodeID := <-d.capacityCh:
+			d.wakeCapacity(nodeID)
 			d.dispatch()
 		case <-d.stopCh:
 			return
@@ -265,7 +284,15 @@ func NotifyProcessingJobQueued() {
 func (d *ProcessingDispatcher) dispatch() {
 	ctx, cancel := stoppable(d.stopCh, 30*time.Second)
 	defer cancel()
+	defer d.observeWaitingJobs(ctx)
 
+	tick := newProcessingTickInventory(d.startedAt.IsZero() || time.Since(d.startedAt) >= processingInventoryGrace)
+	if d.fairnessEnabled {
+		if err := d.refreshProcessingReservations(ctx, tick); err != nil {
+			d.logger.WithError(err).Warn("Processing fairness unavailable; leaving jobs queued")
+			return
+		}
+	}
 	// Atomically claim queued jobs via CTE — prevents double-dispatch when
 	// multiple Foghorn instances poll concurrently. FOR UPDATE SKIP LOCKED
 	// ensures each instance claims a non-overlapping set.
@@ -276,7 +303,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	}
 	for _, row := range rows {
 		job := processingJob{
-			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash, RequiredMemoryBytes: row.RequiredMemoryBytes,
+			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash, RequiredMemoryBytes: row.RequiredMemoryBytes, MemoryRejectedNodes: row.MemoryRejectedNodes, WaitReason: row.WaitReason, WaitStartedAt: row.WaitStartedAt, SourceProbe: row.SourceProbe, CreatedAt: row.CreatedAt, UploadedAt: row.UploadCreatedAt,
 			ArtifactType: sql.NullString{String: row.ArtifactType, Valid: row.ArtifactType != ""}, JobType: row.JobType,
 			InputCodec: row.InputCodec, OutputProfiles: row.OutputProfiles,
 			Status: row.Status, RetryCount: int(row.RetryCount.Int32), S3URL: row.S3Url,
@@ -285,7 +312,7 @@ func (d *ProcessingDispatcher) dispatch() {
 			StreamID: sql.NullString{String: row.StreamID, Valid: row.StreamID != ""}, StreamInternal: row.StreamInternalName,
 			DurableLocal: row.DurableBackendLocal, OriginCluster: row.OriginClusterID,
 		}
-		d.dispatchJob(ctx, &job)
+		d.dispatchJobWithInventory(ctx, &job, tick)
 	}
 }
 
@@ -307,13 +334,18 @@ const (
 
 // deferUnroutable puts a claimed job no node can run back in the queue until
 // its deferral passes.
-func (d *ProcessingDispatcher) deferUnroutable(ctx context.Context, jobID string) {
+func (d *ProcessingDispatcher) deferUnroutable(ctx context.Context, jobID, tenantID, reason string) {
 	deferral := float64(unroutableJobDeferral) * (1 - unroutableJobJitter + 2*unroutableJobJitter*d.jitter())
 	if err := foghorndb.New(d.db).DeferUnroutableProcessingJob(ctx, foghorndb.DeferUnroutableProcessingJobParams{
 		DeferSeconds: time.Duration(deferral).Seconds(),
 		JobID:        jobID,
+		TenantID:     tenantID, WaitReason: reason,
 	}); err != nil {
 		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to defer unroutable job")
+		return
+	}
+	if d.onCatalogDirty != nil {
+		d.onCatalogDirty()
 	}
 }
 
@@ -325,7 +357,17 @@ func (d *ProcessingDispatcher) jitter() float64 {
 }
 
 func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJob) {
-	nodeID, reason := routeProcessingJob(job)
+	d.dispatchJobWithInventory(ctx, job, newProcessingTickInventory(d.startedAt.IsZero() || time.Since(d.startedAt) >= processingInventoryGrace))
+}
+
+func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job *processingJob, tick *processingTickInventory) {
+	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid && !job.UploadedAt.Time.Add(24*time.Hour).After(time.Now()) {
+		if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "upload processing timed out after 24 hours", d.logger); err != nil {
+			d.logger.WithError(err).Warn("Failed to settle expired upload")
+		}
+		return
+	}
+	nodeID, reason, waitReason := routeProcessingJobWithInventory(ctx, job, tick)
 	if nodeID == "" {
 		if reason == mist.ProcessingMemoryNoNodeReason {
 			if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, reason, d.logger); err != nil {
@@ -339,7 +381,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			"origin_cluster": job.OriginCluster,
 			"reason":         reason,
 		}).Debug("No processing node available for job")
-		d.deferUnroutable(ctx, job.JobID)
+		d.deferUnroutable(ctx, job.JobID, job.TenantID, waitReason)
 		d.markArtifactQueued(ctx, job, "no processing node available")
 		return
 	}
@@ -411,6 +453,14 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		internalName = job.InternalName.String
 	}
 
+	if job.RequiredMemoryBytes > 0 {
+		params[mist.ProcessingRequiredMemoryBytes] = fmt.Sprint(job.RequiredMemoryBytes)
+	}
+	params[mist.ProcessingSourceKeyParam] = mist.ProcessingSourceIdentity(job.TenantID, job.JobID, artifactHash, job.SourceURL.String+"\x00"+job.S3URL.String+"\x00"+job.SourceParams.String)
+	if job.SourceProbe.Valid {
+		params[mist.ProcessingSourceProbeParam] = job.SourceProbe.String
+	}
+
 	attachProcessingSourceCredential(params, job.TenantID, nodeID, artifactHash, time.Now())
 
 	req := &ipcpb.ProcessingJobRequest{
@@ -422,6 +472,9 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		Params:          params,
 		InternalName:    internalName,
 		ProcessingClass: mist.ProcessingClassVideoTranscode,
+	}
+	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid {
+		req.DeadlineUnixMs = job.UploadedAt.Time.UTC().Add(24 * time.Hour).UnixMilli()
 	}
 	// Foghorn-authoritative runtime name for the processed OUTPUT
 	// artifact's DTSH boot post-transcode. Outputs are always vod+.
@@ -488,9 +541,9 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		d.configCacher.CacheProcessConfig(artifactHash, authoritativeProcessesJSON)
 	}
 	if authoritativeProcessesJSON != "" && job.ArtifactHash.Valid {
-		if _, err := queries.UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{
-			JobID: job.JobID, ArtifactHash: job.ArtifactHash,
-			ProcessesJson: sql.NullString{String: authoritativeProcessesJSON, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+		if _, err := queries.CacheProcessingJobDispatchPolicy(ctx, foghorndb.CacheProcessingJobDispatchPolicyParams{
+			JobID: job.JobID, TenantID: job.TenantID,
+			ProcessesJson: sql.NullString{String: authoritativeProcessesJSON, Valid: true}, NodeID: sql.NullString{String: nodeID, Valid: true},
 		}); err != nil {
 			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to persist authoritative processing config before dispatch")
 			d.revertToQueued(ctx, job.JobID)
@@ -498,6 +551,20 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		}
 	}
 
+	if d.fairnessEnabled {
+		protection, err := control.ProcessingMemoryReservationSnapshot(ctx, nodeID)
+		if err == nil && protection == nil {
+			err = errors.New("processing protection snapshot unavailable")
+		}
+		if err == nil {
+			err = control.SendProcessingMemoryReservation(ctx, nodeID, protection)
+		}
+		if err != nil {
+			d.logger.WithError(err).WithField("node_id", nodeID).Warn("Processing protection could not be delivered before job")
+			d.deferUnroutable(ctx, job.JobID, job.TenantID, mist.ProcessingWaitFittingNodeUnavailable)
+			return
+		}
+	}
 	if err := control.SendProcessingJob(nodeID, req); err != nil {
 		d.logger.WithError(err).WithFields(logging.Fields{
 			"job_id":  job.JobID,
@@ -527,7 +594,7 @@ func (d *ProcessingDispatcher) resolveStoredProcesses(stored string) string {
 	resolved := mist.MaskLivepeerSourceForVOD(stored)
 	// Specs stored before the canonical selector shape leave track types
 	// unnamed, which Mist would add to the selection.
-	resolved = mist.NormalizeProcessConfigSelectors(resolved)
+	resolved = mist.ApplyAudioChannelPolicy(mist.NormalizeProcessConfigSelectors(resolved))
 	// One-shot job: finished processes must not be supervisor-restarted
 	// (restart churn blocks the buffer's output-drain signal).
 	resolved = mist.DisableProcessRestarts(resolved)
@@ -790,7 +857,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// stays queued and dispatches when capacity returns, so a cluster-wide
 	// processing outage no longer permanently fails recoverable jobs. Keyed on
 	// created_at, since revert refreshes updated_at every cycle.
-	queuedCutoff := time.Now().UTC().Add(-d.jobTTL * time.Duration(d.maxRetries+2))
+	queuedCutoff := time.Now().UTC().Add(-24 * time.Hour)
 	// Enumerate exhausted/stuck candidates WITHOUT terminalizing them — each is then failed in its
 	// own transaction so the job-failed, artifact-failed, and lifecycle-outbox writes commit
 	// together (or not at all). The old batch CTE terminalized the job first and updated the
@@ -799,7 +866,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// The progress watchdog adds active jobs whose media position has not advanced for
 	// control.ProcessingProgressStallTimeout. Helmsman's lease heartbeat keeps updated_at fresh for
 	// as long as its job goroutine lives, so without it a wedged job never goes stale.
-	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
+	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, UploadDeadline: queuedCutoff, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to list exhausted processing jobs")
 		return
@@ -833,7 +900,7 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 		// Terminalize the job ONLY if it still matches the exhausted/stuck predicate, and resolve its
 		// artifact in the same tx. ErrNoRows ⇒ the job recovered/completed since enumeration ⇒ no-op.
 		queries := foghorndb.New(tx)
-		failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
+		failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, UploadDeadline: queuedCutoff, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			abortLog = func() {} // recovered/completed since enumeration
 			return errExhaustionAborted

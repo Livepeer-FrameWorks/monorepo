@@ -56,6 +56,7 @@ export function translateCodec(track: TrackInfo): string {
       case "AC-3":
         return "ac-3";
       case "EAC3":
+      case "EAC-3":
       case "EC3":
       case "E-AC3":
       case "EC-3":

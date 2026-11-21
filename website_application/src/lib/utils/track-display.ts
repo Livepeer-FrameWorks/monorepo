@@ -24,7 +24,7 @@ export interface TrackLike {
 }
 
 const VIDEO_CODECS = new Set(["H264", "H265", "HEVC", "AV1", "VP8", "VP9"]);
-const AUDIO_CODECS = new Set(["AAC", "OPUS", "MP3", "VORBIS", "AC3", "EAC3"]);
+const AUDIO_CODECS = new Set(["AAC", "OPUS", "MP3", "VORBIS", "AC3", "EAC3", "EAC-3"]);
 const GENERATED_CODECS = new Set(["JPEG", "JPG", "MJPEG", "THUMBVTT", "VTT"]);
 
 export type TrackDisplayKind = "video" | "audio" | "generated" | "metadata" | "unknown";

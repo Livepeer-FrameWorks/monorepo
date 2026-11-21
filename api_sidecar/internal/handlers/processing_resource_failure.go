@@ -1,10 +1,17 @@
 package handlers
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Processing processes use code 1 for transient runtime failures. A signal
 // kill also says nothing about the source's validity, even with restart disabled.
 func retryableProcessingExit(evt ProcessExitEvent) bool {
+	var oom *processingOOMError
+	if errors.As(processingExitError(evt), &oom) {
+		return true
+	}
 	return isCriticalProcess(evt) && (evt.ExitCode == -9 || evt.ExitCode == 137 || evt.ExitCode == 1)
 }
 
@@ -22,7 +29,7 @@ func processingResourceFailure(stream string, ignored map[string]int) error {
 	defer processExitListenersMu.Unlock()
 	for _, evt := range processResourceFailures[stream] {
 		if !shouldIgnoreProcessExit(evt, ignored) {
-			return &processingResourceError{event: evt}
+			return processingExitError(evt)
 		}
 	}
 	return nil

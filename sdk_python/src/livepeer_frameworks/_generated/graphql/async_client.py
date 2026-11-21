@@ -1783,7 +1783,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return DeleteSkipperConversation.model_validate(data)
 
     async def delete_vod_original(self, id: str, **kwargs: Any) -> DeleteVodOriginal:
-        """Permanently delete only the retained upload; processed playback remains available."""
+        """Remove access to the retained upload and schedule permanent storage deletion; processed playback remains available."""
         query = gql("""
             mutation DeleteVodOriginal($id: ID!) {
               deleteVodOriginal(id: $id) {
@@ -8103,6 +8103,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
               storagePath
               sizeBytes
               status
+              processingWaitReason
               errorMessage
               clipCreatedAt: createdAt
               updatedAt
@@ -9798,6 +9799,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
               description
               filename
               vodAssetStatus: status
+              processingWaitReason
               vodAssetStorageLocation: storageLocation
               syncStatus
               hasLocalCopy

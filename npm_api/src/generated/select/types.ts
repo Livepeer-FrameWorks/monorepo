@@ -2120,6 +2120,9 @@ const types: CompressedTypeMap<number> = {
             "status": [
                 1
             ],
+            "processingWaitReason": [
+                1
+            ],
             "errorMessage": [
                 1
             ],
@@ -12000,6 +12003,9 @@ const types: CompressedTypeMap<number> = {
             "status": [
                 1
             ],
+            "processingWaitReason": [
+                1
+            ],
             "storageLocation": [
                 1
             ],
@@ -15437,6 +15443,9 @@ const types: CompressedTypeMap<number> = {
             ],
             "status": [
                 624
+            ],
+            "processingWaitReason": [
+                1
             ],
             "storageLocation": [
                 1

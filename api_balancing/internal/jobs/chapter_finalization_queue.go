@@ -348,7 +348,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		}
 		// Thread the DVR's tenant so the alternate node is entitled for it: chapter finalization for tenant
 		// A's recording must not land on a cluster not entitled to A (nil tenant would drop the gate).
-		altNode, reason := routeProcessingJob(&processingJob{TenantID: parent.tenantID})
+		altNode, reason, _ := routeProcessingJobWithInventory(ctx, &processingJob{TenantID: parent.tenantID, OriginCluster: parent.originClusterID}, newProcessingTickInventory(false))
 		if altNode == "" {
 			q.logger.WithFields(logging.Fields{
 				"chapter_id": c.ChapterID,

@@ -58,6 +58,7 @@ message ForwardCommandRequest {
     // recording node's stream.
     helmsmancontrol.ReclaimDVRSegment reclaim_dvr_segment = 30;
     helmsmancontrol.StopSessionsRequest stop_claimed_sessions = 31;
+    helmsmancontrol.ProcessingMemoryReservation processing_memory_reservation = 32;
   }
 }
 

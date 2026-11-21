@@ -3487,7 +3487,17 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	}
 
 	keepOriginal := req.GetKeepOriginal()
+	existingChecked := false
 	if keepOriginal {
+		replay, checked, replayErr := s.replayVodOriginalUpload(ctx, req)
+		if replayErr != nil {
+			return nil, replayErr
+		}
+		if replay != nil {
+			return replay, nil
+		}
+		existingChecked = checked
+
 		if err := s.requireOriginalRetentionReady(ctx); err != nil {
 			if status.Code(err) != codes.FailedPrecondition {
 				return nil, err
@@ -3560,7 +3570,7 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	// creating a second multipart/artifact/outbox event. Presigned URLs are
 	// re-derived from the persisted s3_key + upload_id, so the retry response is
 	// equivalent to the original.
-	if req.GetVodHash() != "" {
+	if req.GetVodHash() != "" && !existingChecked {
 		resp, found, existErr := s.existingVodUploadResult(ctx, req.TenantId, artifactHash, req.GetPlaybackId(), partSize)
 		if existErr != nil {
 			return nil, existErr

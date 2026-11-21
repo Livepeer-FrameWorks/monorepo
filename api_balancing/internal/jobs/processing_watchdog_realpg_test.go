@@ -17,6 +17,10 @@ func TestProcessingProgressWatchdogFailsHeartbeatingStall_RealPG(t *testing.T) {
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = prevLocal })
 	conn := startRealPGForCleanup(t)
+	conn.SetMaxOpenConns(1)
+	if _, err := conn.Exec("SET TIME ZONE 'UTC'"); err != nil {
+		t.Fatal(err)
+	}
 	const tenant = "7a1e0000-0000-4000-8000-0000000000e1"
 	seed := func(jobID, hash, advancedAgo string) {
 		t.Helper()

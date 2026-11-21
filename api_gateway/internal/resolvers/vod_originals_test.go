@@ -74,3 +74,17 @@ func TestDeleteOriginalDoesNotReportAnAbsentOriginalAsDeleted(t *testing.T) {
 		t.Fatalf("absent original reported as deleted: %T %+v", result, result)
 	}
 }
+
+func TestOriginalDownloadExplainsMissingOriginal(t *testing.T) {
+	client := &clientstest.FakeCommodore{CreateVodOriginalDownloadFn: func(context.Context, *sharedpb.CreateVodOriginalDownloadRequest) (*sharedpb.CreateVodOriginalDownloadResponse, error) {
+		return nil, status.Error(codes.FailedPrecondition, "original_not_kept")
+	}}
+	result, err := commoR(client).DoCreateVodOriginalDownload(clientstest.AuthedCtx("original-readable-error"), globalid.Encode(globalid.TypeVodAsset, "asset"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation, ok := result.(*model.ValidationError)
+	if !ok || validation.Message != "No original upload is retained for this video" {
+		t.Fatalf("raw original disposition shown to user: %+v", result)
+	}
+}

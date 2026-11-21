@@ -86,7 +86,7 @@ func TestStreamArtifactsCursorWindowAndTenantFence(t *testing.T) {
 			mock.ExpectQuery(`SELECT kind, COUNT`).WithArgs(tenant, stream).WillReturnRows(sqlmock.NewRows([]string{"kind", "count"}).AddRow("clip", 8))
 			rows := storageArtifactRows()
 			for _, id := range ids {
-				rows.AddRow("clip", id, "hash-"+id, "play", stream, "Stream", "Clip", "", nil, nil, "ready", nil, cursorTime, cursorTime, nil, "", "", "", "", false, nil, nil, nil, nil, nil, "", "", "")
+				rows.AddRow("clip", id, "hash-"+id, "play", stream, "Stream", "Clip", "", nil, nil, "ready", nil, cursorTime, cursorTime, nil, "", "", "", "", false, nil, nil, nil, nil, nil, "", "", "", "")
 			}
 			mock.ExpectQuery(`AND \(created_at, id\) `+comparison+` \(\$4, \$5\) ORDER BY created_at `+order+`, id `+order+` LIMIT \$6`).WithArgs(tenant, stream, "clip", cursorTime, decoded.ID, 3).WillReturnRows(rows)
 			response, err := server.ListStreamArtifacts(ctx, &pb.ListStreamArtifactsRequest{StreamId: stream, Kind: "clip", Pagination: request})

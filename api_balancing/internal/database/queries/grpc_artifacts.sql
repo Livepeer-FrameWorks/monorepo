@@ -493,7 +493,12 @@ WHERE node_id = sqlc.arg(node_id)
 ORDER BY component;
 
 -- name: SumTenantActiveArtifactBytes :one
-SELECT COALESCE(SUM(COALESCE(a.size_bytes, 0) + COALESCE(v.original_size_bytes, 0)), 0)::bigint AS total_bytes
+SELECT COALESCE(SUM(
+ CASE WHEN a.artifact_type='vod' AND a.status IN ('queued','processing')
+       AND COALESCE(a.active_object_key=v.original_s3_key,false)
+      THEN GREATEST(COALESCE(a.size_bytes,0),COALESCE(v.original_size_bytes,0))
+      ELSE COALESCE(a.size_bytes,0)+COALESCE(v.original_size_bytes,0) END
+),0)::bigint AS total_bytes
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid

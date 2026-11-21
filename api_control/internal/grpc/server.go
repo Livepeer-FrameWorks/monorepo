@@ -1537,7 +1537,7 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 	return s.resolveProcessesJSONWithLadder(ctx, tenantID, streamID, clusterID, lifecycle, "")
 }
 
-func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, tenantID, streamID, clusterID, lifecycle, assetLadder string) (string, error) {
+func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, tenantID, streamID, clusterID, lifecycle, assetLadder string) (resolved string, resolveErr error) {
 	if s.purserClient == nil {
 		return "[]", nil
 	}
@@ -1592,18 +1592,26 @@ func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, te
 		}
 		return true
 	}
+	var overrideLookupErr error
+	defer func() { resolveErr = errors.Join(resolveErr, overrideLookupErr) }()
 	if streamID != "" {
-		if override := s.getStreamProcessingOverride(ctx, tenantID, streamID, lifecycle); validOverride(override) {
+		override, err := s.getStreamProcessingOverride(ctx, tenantID, streamID, lifecycle)
+		overrideLookupErr = errors.Join(overrideLookupErr, err)
+		if validOverride(override) {
 			processesJSON = override
 			tierDerived = false
 		} else if tier.GetFeatures().GetProcessingCustomizable() {
-			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(tenantOverride) {
+			tenantOverride, err := s.getTenantProcessingOverride(ctx, tenantID, lifecycle)
+			overrideLookupErr = errors.Join(overrideLookupErr, err)
+			if validOverride(tenantOverride) {
 				processesJSON = tenantOverride
 				tierDerived = false
 			}
 		}
 	} else if tier.GetFeatures().GetProcessingCustomizable() {
-		if override := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(override) {
+		override, err := s.getTenantProcessingOverride(ctx, tenantID, lifecycle)
+		overrideLookupErr = errors.Join(overrideLookupErr, err)
+		if validOverride(override) {
 			processesJSON = override
 			tierDerived = false
 		}
@@ -1615,7 +1623,10 @@ func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, te
 
 	// Connected callers retain the entitled base policy on transient choice failures.
 	// Signed authority compilation still rejects the accompanying error.
-	fallback := mist.NormalizeProcessConfigSelectors(processesJSON)
+	fallback := mist.ApplyAudioChannelPolicy(mist.NormalizeProcessConfigSelectors(processesJSON))
+	if lifecycle == "live" {
+		fallback = mist.BoundLiveProcessRestarts(fallback)
+	}
 	var streamChoice string
 	liveVideoABR := "INHERIT"
 	if streamID != "" && (lifecycle == "live" || (tierDerived && mist.HasTranscodeProcesses(processesJSON))) {
@@ -1660,32 +1671,44 @@ func (s *CommodoreServer) resolveProcessesJSONWithLadder(ctx context.Context, te
 	// Livepeer entries carry no hardcoded_broadcasters — Foghorn fills the
 	// broadcaster list from its cluster's Livepeer gateway instances at
 	// cache/dispatch time.
-	return mist.NormalizeProcessConfigSelectors(processesJSON), nil
+	normalized := mist.ApplyAudioChannelPolicy(mist.NormalizeProcessConfigSelectors(processesJSON))
+	if lifecycle == "live" {
+		normalized = mist.BoundLiveProcessRestarts(normalized)
+	}
+	return normalized, nil
 }
 
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
 // per-stream override. Returns "" when no row exists or the column is NULL.
-func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, tenantID, streamID, lifecycle string) string {
+func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, tenantID, streamID, lifecycle string) (string, error) {
 	row, err := commodoredb.New(s.db).GetStreamProcessingOverrides(ctx, commodoredb.GetStreamProcessingOverridesParams{StreamID: streamID, TenantID: tenantID})
 	if err != nil {
-		return ""
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "stream_id": streamID, "lifecycle": lifecycle}).Warn("Stream processing override lookup failed; using fallback")
+			return "", err
+		}
+		return "", nil
 	}
 	return processingOverrideForLifecycle(
 		lifecycle, row.ProcessesLive, row.ProcessesDvr, row.ProcessesClip,
 		row.ProcessesDvrFinalize, row.ProcessesVod,
-	)
+	), nil
 }
 
 // getTenantProcessingOverride checks commodore.tenant_processing_config for a tenant override.
-func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, lifecycle string) string {
+func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, lifecycle string) (string, error) {
 	row, err := commodoredb.New(s.db).GetTenantProcessingOverrides(ctx, tenantID)
 	if err != nil {
-		return ""
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "lifecycle": lifecycle}).Warn("Tenant processing override lookup failed; using fallback")
+			return "", err
+		}
+		return "", nil
 	}
 	return processingOverrideForLifecycle(
 		lifecycle, row.ProcessesLive, row.ProcessesDvr, row.ProcessesClip,
 		row.ProcessesDvrFinalize, row.ProcessesVod,
-	)
+	), nil
 }
 
 func processingOverrideForLifecycle(lifecycle string, live, dvr, clip, dvrFinalize, vod string) string {
@@ -9598,6 +9621,9 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 		CreatedAt:  timestamppb.New(row.CreatedAt.Time),
 		UpdatedAt:  timestamppb.New(row.UpdatedAt.Time),
 	}
+	if row.ProcessingWaitReason.Valid {
+		clip.ProcessingWaitReason = &row.ProcessingWaitReason.String
+	}
 	if row.Title.Valid {
 		clip.Title = row.Title.String
 	}
@@ -11284,6 +11310,9 @@ func (s *CommodoreServer) storageArtifactFromCatalogRow(row commodoredb.StorageA
 	}
 	if row.Description != "" {
 		artifact.Description = &row.Description
+	}
+	if row.ProcessingWaitReason != "" {
+		artifact.ProcessingWaitReason = &row.ProcessingWaitReason
 	}
 	if row.ErrorMessage != "" {
 		artifact.ErrorMessage = &row.ErrorMessage

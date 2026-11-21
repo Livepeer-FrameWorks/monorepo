@@ -26,11 +26,11 @@ func TestDeferUnroutableSpreadsTheDeferral(t *testing.T) {
 			t.Fatal(err)
 		}
 		mock.ExpectExec(deferUnroutablePattern).
-			WithArgs(approxSeconds(tc.want), "job-1").
+			WithArgs(approxSeconds(tc.want), "slots", "job-1", "tenant-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
 		d.random = func() float64 { return tc.random }
-		d.deferUnroutable(context.Background(), "job-1")
+		d.deferUnroutable(context.Background(), "job-1", "tenant-1", "slots")
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("random %v: %v", tc.random, err)
 		}

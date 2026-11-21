@@ -241,7 +241,7 @@ func TestStreamProcessingOverrideSurvivesOtherNullLifecycles(t *testing.T) {
 	const policy = `[{"process":"Thumbs","track_select":"video=maxbps"}]`
 	mock.ExpectQuery("GetStreamProcessingOverrides[\\s\\S]*COALESCE").WithArgs("stream-one", testTenantID).WillReturnRows(
 		sqlmock.NewRows([]string{"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod"}).AddRow(policy, "", "", "", ""))
-	if got := server.getStreamProcessingOverride(context.Background(), testTenantID, "stream-one", "live"); got != policy {
+	if got, err := server.getStreamProcessingOverride(context.Background(), testTenantID, "stream-one", "live"); err != nil || got != policy {
 		t.Fatalf("explicit live override was discarded when unrelated lifecycle columns were SQL NULL: got %q, want %s", got, policy)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -40,7 +40,12 @@ This document defines the authoritative units and semantics for all metrics in t
 | `shm_total_bytes`                         | bytes     | Gauge   | Total shared memory                                  |
 | `operational_mode`                        | enum      | Gauge   | Node mode: `normal`, `draining`, or `maintenance`    |
 
-**Note:** RAM fields are currently captured as **bytes** (from MistServer `mem_total`/`mem_used`) and stored as bytes. The proto comments still mention MiB, but the actual data path is bytes.
+Mist reports `mem_total`, `mem_used` and shared-memory counters in KiB.
+Helmsman converts them to bytes and sets the lifecycle unit marker. Consumers
+normalize unmarked legacy reports from KiB. Historical ClickHouse samples carry
+`memory_unit_bytes`: legacy rows default to 1024; normalized writes explicitly use
+`1`. Queries multiply by that marker so histories remain consistent across the
+unit change.
 
 `node_state_snapshots.egress_budget` is the effective node budget in bytes/s;
 `budget_source` is DEFAULT or OPERATOR. Node metadata carries NIC/MIST measurement

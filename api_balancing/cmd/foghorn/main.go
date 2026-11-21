@@ -559,6 +559,7 @@ func main() {
 		artifactDeletionOutcomes.WithLabelValues(outcome).Add(0)
 	}
 	control.SetMetrics(&control.ControlMetrics{
+		ProcessingWaitingJobs:          metricsCollector.NewGauge("processing_waiting_jobs", "Processing jobs queued by capacity wait reason", []string{"reason"}),
 		PublisherAdmissionDuration:     metricsCollector.NewHistogram("publisher_admission_duration_seconds", "Publisher admission phase duration including pool and lock waits", []string{"phase", "outcome"}, []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 8}),
 		PublisherRecoveryOldestPending: metricsCollector.NewGauge("publisher_admission_recovery_oldest_pending_seconds", "Age of the oldest pending publisher recovery item, or zero when empty", []string{"queue"}),
 		MistTriggers: metricsCollector.NewCounter(

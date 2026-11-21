@@ -607,8 +607,8 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.16",
     },
     "GetNode": {
-      "hash": "sha256:76fe1910673668c88a3086921bc390f475e8f88364f4ad6edee25cf51509bf5e",
-      "identity": "sha256:0756b4901042f2f38bcacef38e661d810671a2f6c373ce3b42c2bdbc93263866",
+      "hash": "sha256:39fd90cacb5177d196df027e790bc6f97914817f0d842eeaaba208b4c179ea91",
+      "identity": "sha256:4b2aeb3dd1e03c73afa4df508e7ecd78b49ca6c2b8a80de79d71426b3fe23794",
       "kind": "query",
       "since": "v0.3.16",
     },

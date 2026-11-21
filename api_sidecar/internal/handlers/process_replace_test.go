@@ -14,7 +14,6 @@ import (
 	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 )
 
 // A Livepeer config as Mist supervised it: one process with a two-rung ladder,
@@ -35,8 +34,16 @@ func callProcessReplace(t *testing.T, body string) (int, string) {
 	return rec.Code, rec.Body.String()
 }
 
+func stubLiveReplacementAdmission(t *testing.T) {
+	t.Helper()
+	old := admitLiveProcessReplacement
+	admitLiveProcessReplacement = func(_ ProcessReplaceEvent, policy string) (string, error) { return policy, nil }
+	t.Cleanup(func() { admitLiveProcessReplacement = old })
+}
+
 func stubDegradedReports(t *testing.T) (func() []ProcessReplaceEvent, *sync.WaitGroup) {
 	t.Helper()
+	stubLiveReplacementAdmission(t)
 	oldLogger := logger
 	logger = logging.NewLogger()
 	t.Cleanup(func() { logger = oldLogger })
@@ -181,11 +188,12 @@ func TestProcessReplaceRoutesRotatedSourceWithoutDegradation(t *testing.T) {
 }
 
 func TestProcessReplaceRoutesUnsupportedSourceCodecWithoutDegradation(t *testing.T) {
-	testSourceRoutingWithoutDegradation(t, "FORMAT_SPECIFIC", "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry VP9; local AV must decode this source")
+	testSourceRoutingWithoutDegradation(t, "SOURCE_CODEC_UNSUPPORTED", "Livepeer transport cannot carry VP9; local AV must decode this source")
 }
 
 func testSourceRoutingWithoutDegradation(t *testing.T, shortReason, reason string) {
 	t.Helper()
+	stubLiveReplacementAdmission(t)
 	oldLogger := logger
 	logger = logging.NewLogger()
 	t.Cleanup(func() { logger = oldLogger })
@@ -241,68 +249,6 @@ func TestLivepeerExitFallbackDecision(t *testing.T) {
 	}
 }
 
-// A VOD callback cannot start its local ladder until the job has reserved it.
-// The empty replacement wakes the job so it can restart through admission.
-func TestLivepeer403RestartsProcessingJobThroughAdmission(t *testing.T) {
-	_, wg := stubDegradedReports(t)
-	wg.Add(1)
-	const stream = "processing+importhash"
-	replaceCh := RegisterProcessReplaceListener(stream)
-	defer UnregisterProcessReplaceListener(stream)
-	processAVCh := make(chan ProcessAVSegmentCompleteEvent, 1)
-	exitCh := make(chan ProcessExitEvent, 1)
-
-	exit := ProcessExitEvent{StreamName: stream, ProcessType: "Livepeer", Status: "unrecoverable", ExitCode: 2, BootCount: 1, Reason: "Livepeer upload fatal HTTP status 403 Forbidden"}
-	if livepeerExitFallbackDecision(exit) != livepeerFallbackInPlace {
-		t.Fatal("a 403 Livepeer exit must take the in-place path")
-	}
-	ignored := map[string]int{}
-	ignoreProcessExitThrough(ignored, exit.ProcessType, exit.BootCount)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), exitCh, processAVCh, replaceCh, ignored, time.Second, 2*time.Second)
-	}()
-	if code, body := callProcessReplace(t, processReplaceBody(stream, "Livepeer", failedLivepeerConfig)); code != http.StatusOK || body != noProcessReplacement {
-		t.Fatalf("PROCESS_REPLACE status %d body %q", code, body)
-	}
-	if err := <-done; err == nil || !strings.Contains(err.Error(), "without a replacement") {
-		t.Fatalf("unadmitted in-place replacement result = %v", err)
-	}
-	wg.Wait()
-}
-
-// A Mist build without PROCESS_REPLACE never asks for a replacement; the job
-// must not wait out the output window before restarting on local processes.
-func TestInPlaceReplacementGivesUpWithoutProcessReplace(t *testing.T) {
-	start := time.Now()
-	err := awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), nil, nil, nil, map[string]int{}, 150*time.Millisecond, 5*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "PROCESS_REPLACE") {
-		t.Fatalf("err = %v, want a missing PROCESS_REPLACE error", err)
-	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatalf("waited %s, want the confirm window", time.Since(start))
-	}
-}
-
-func TestInPlaceReplacementFailsOnEmptyAnswerOrCriticalExit(t *testing.T) {
-	replaceCh := make(chan ProcessReplaceEvent, 1)
-	replaceCh <- ProcessReplaceEvent{ProcessType: "Livepeer"}
-	if err := awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), nil, nil, replaceCh, map[string]int{}, time.Second, time.Second); err == nil {
-		t.Fatal("an empty PROCESS_REPLACE answer must end the in-place wait")
-	}
-
-	exitCh := make(chan ProcessExitEvent, 1)
-	exitCh <- ProcessExitEvent{ProcessType: "AV", Status: "unrecoverable", Config: `{"process":"AV","codec":"H264"}`, Reason: "encoder died"}
-	err := awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), exitCh, nil, nil, map[string]int{}, time.Second, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "encoder died") {
-		t.Fatalf("err = %v, want the replacement's failure", err)
-	}
-}
-
-// A node whose MistServer runtime has no NVIDIA encoder answers with
-// software-only renditions, so MistProcAV does not probe NVENC first; a CUDA
-// node leaves the choice to MistProcAV.
 func TestProcessReplaceEncoderAccelerationFollowsNodeRuntime(t *testing.T) {
 	for profile, wantAccel := range map[string]any{"cpu": "sw", "openvino": "sw", "cuda": nil} {
 		appconfigtest.Setenv(t, "MIST_ONNX_PROFILE", profile)
@@ -316,23 +262,5 @@ func TestProcessReplaceEncoderAccelerationFollowsNodeRuntime(t *testing.T) {
 				t.Errorf("%s: rendition %v accel = %v, want %v", profile, p["resolution"], p["accel"], wantAccel)
 			}
 		}
-	}
-}
-
-func TestInPlaceReplacementExpiry(t *testing.T) {
-	start := time.Unix(1000, 0)
-	r := &inPlaceLivepeerReplacement{startedAt: start}
-	if reason := r.expiredReason(start.Add(5*time.Second), 10*time.Second, 45*time.Second); reason != "" {
-		t.Fatalf("expired early: %s", reason)
-	}
-	if reason := r.expiredReason(start.Add(11*time.Second), 10*time.Second, 45*time.Second); !strings.Contains(reason, "PROCESS_REPLACE") {
-		t.Fatalf("unconfirmed replacement reason = %q", reason)
-	}
-	r.confirmed = true
-	if reason := r.expiredReason(start.Add(11*time.Second), 10*time.Second, 45*time.Second); reason != "" {
-		t.Fatalf("confirmed replacement expired at 11s: %s", reason)
-	}
-	if reason := r.expiredReason(start.Add(46*time.Second), 10*time.Second, 45*time.Second); reason == "" {
-		t.Fatal("confirmed replacement without output must expire after the output window")
 	}
 }

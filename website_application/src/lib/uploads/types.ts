@@ -37,6 +37,7 @@ export interface FileIdentity {
 }
 
 export interface UploadSessionRecord {
+  keepOriginal?: boolean;
   uploadId: string;
   file: FileIdentity;
   partSize: number;

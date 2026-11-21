@@ -70,6 +70,7 @@ SET size_bytes = sqlc.narg(size_bytes),
     origin_cluster_id = COALESCE(origin_cluster_id, sqlc.arg(origin_cluster_id)),
     retention_until = to_timestamp(sqlc.narg(retention_until_unix)::bigint),
     error_message = sqlc.narg(error_message),
+    processing_wait_reason = sqlc.narg(processing_wait_reason)::text,
     thumbnail_serving_cluster_id = COALESCE(sqlc.narg(thumbnail_serving_cluster_id)::varchar, thumbnail_serving_cluster_id),
     catalog_revision = sqlc.arg(source_revision)::bigint,
     updated_at = NOW()
@@ -92,6 +93,7 @@ SET size_bytes = sqlc.narg(size_bytes), duration = sqlc.narg(duration_ms),
     origin_cluster_id = COALESCE(origin_cluster_id, sqlc.arg(origin_cluster_id)),
     retention_until = to_timestamp(sqlc.narg(retention_until_unix)::bigint),
     error_message = sqlc.narg(error_message),
+    processing_wait_reason = sqlc.narg(processing_wait_reason)::text,
     thumbnail_serving_cluster_id = COALESCE(sqlc.narg(thumbnail_serving_cluster_id)::varchar, thumbnail_serving_cluster_id),
     catalog_revision = sqlc.arg(source_revision)::bigint, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND dvr_hash = sqlc.arg(asset_key)
@@ -113,6 +115,7 @@ SET size_bytes = sqlc.narg(size_bytes), duration = sqlc.narg(duration_ms),
     origin_cluster_id = COALESCE(origin_cluster_id, sqlc.arg(origin_cluster_id)),
     retention_until = to_timestamp(sqlc.narg(retention_until_unix)::bigint),
     error_message = sqlc.narg(error_message),
+    processing_wait_reason = sqlc.narg(processing_wait_reason)::text,
     thumbnail_serving_cluster_id = COALESCE(sqlc.narg(thumbnail_serving_cluster_id)::varchar, thumbnail_serving_cluster_id),
     catalog_revision = sqlc.arg(source_revision)::bigint, updated_at = NOW(),
     original_size_bytes = sqlc.narg(original_size_bytes)::bigint

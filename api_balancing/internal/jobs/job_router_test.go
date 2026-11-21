@@ -3,10 +3,13 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 // A processing job's source media must NOT be placed on a node whose virtual cluster is NOT entitled to the
@@ -19,7 +22,7 @@ func TestRouteProcessingJob_ExcludesCrossTenantDedicatedNode(t *testing.T) {
 
 	// Injected entitlement (no live Quartermaster): cluster-b serves only tenant-b; cluster-shared serves any.
 	origAccess := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(clusterID, tenantID string) bool {
+	clusterAccessibleForTenant = func(_ context.Context, clusterID, tenantID string) bool {
 		switch clusterID {
 		case "cluster-shared":
 			return true
@@ -59,7 +62,7 @@ func TestRouteProcessingJob_OnlyOriginClusterNodes(t *testing.T) {
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	t.Cleanup(sm.Shutdown)
 	origAccess := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 
 	touchInCluster(sm, "us-edge", "platform-us")
@@ -90,7 +93,7 @@ func TestRouteProcessingJob_HonorsOperationalMode(t *testing.T) {
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	t.Cleanup(sm.Shutdown)
 	origAccess := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 	ctx := context.Background()
 
@@ -153,7 +156,7 @@ func TestRouteProcessingJob(t *testing.T) {
 	// These subtests exercise capacity/class routing, not the tenant boundary — make every cluster entitled
 	// so eligibility isolates to capacity. The cross-tenant boundary has its own test.
 	origAccess := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 
 	t.Run("no alive nodes", func(t *testing.T) {
@@ -246,11 +249,12 @@ func TestRouteProcessingJob(t *testing.T) {
 }
 
 func TestRouteProcessingJobSkipsInsufficientRAM(t *testing.T) {
+	useRuntimeProcessingInventory(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	old := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = old })
 	for _, id := range []string{"small", "large"} {
 		touchInCluster(sm, id, routeTestCluster)
@@ -290,4 +294,140 @@ func setNodeMemory(sm *state.StreamStateManager, nodeID string, ram float64, cla
 		CapProcessing:     true,
 		ProcessingClasses: classes,
 	})
+	sm.SetNodeProcessingMemoryBudget(nodeID, mist.ProcessingMemoryBudget(uint64(ram)))
+}
+
+func TestRegisteredLargeNodeMayRecoverBeforePlacement(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	old := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = old })
+	for _, id := range []string{"small", "large"} {
+		touchInCluster(sm, id, routeTestCluster)
+	}
+	setNodeMemory(sm, "small", 4*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	setNodeMemory(sm, "large", 32*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	sm.MarkNodeDisconnected("large")
+	job := originJob()
+	job.RequiredMemoryBytes = 6 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "" || reason == mist.ProcessingMemoryNoNodeReason {
+		t.Fatalf("temporary large-node absence made job permanently impossible: %s %s", id, reason)
+	}
+	sm.TouchNode("large", true)
+	if id, reason := routeProcessingJob(job); id != "large" {
+		t.Fatalf("recovered large node not selected: %s %s", id, reason)
+	}
+}
+
+func TestMistMemoryLifecyclePlacesUsingEffectiveBudget(t *testing.T) {
+	useRuntimeProcessingInventory(t)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	old := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = old })
+	report := func(id string, hostGiB uint64, budget uint64) {
+		t.Helper()
+		update := &ipcpb.NodeLifecycleUpdate{NodeId: id, IsHealthy: true, BaseUrl: "http://" + id + ".invalid", Capabilities: &ipcpb.NodeCapabilities{Processing: true}, Limits: &ipcpb.NodeLimits{ProcessingClasses: []*ipcpb.ProcessingClassCapacity{{Class: mist.ProcessingClassVideoTranscode, SlotsTotal: 8}}}, ProcessingMemoryBudgetBytes: &budget}
+		mist.ApplyMemoryMetrics(update, map[string]any{"mem_total": float64(hostGiB * 1024 * 1024), "mem_used": float64(1024 * 1024)})
+		data, err := proto.Marshal(update)
+		if err != nil {
+			t.Fatal(err)
+		}
+		received := &ipcpb.NodeLifecycleUpdate{}
+		if err = proto.Unmarshal(data, received); err != nil {
+			t.Fatal(err)
+		}
+		touchInCluster(sm, id, routeTestCluster)
+		if err = sm.ApplyNodeLifecycle(context.Background(), received); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report("container", 16, mist.ProcessingMemoryBudget(3*1024*1024*1024))
+	node := sm.GetNodeState("container")
+	if node.RAMMax != 16*1024*1024*1024 || node.RAMCurrent != 1024*1024*1024 {
+		t.Fatalf("Mist-shaped metrics lost byte units: %+v", node)
+	}
+	job := originJob()
+	job.RequiredMemoryBytes = 2 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "container" {
+		t.Fatalf("16 GiB host cannot fit 2 GiB job: %s %s", id, reason)
+	}
+	job.RequiredMemoryBytes = 4 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "" || reason != mist.ProcessingMemoryNoNodeReason {
+		t.Fatalf("host RAM overrode 3 GiB container: %s %s", id, reason)
+	}
+	report("larger", 16, mist.ProcessingMemoryBudget(8*1024*1024*1024))
+	if id, reason := routeProcessingJob(job); id != "larger" {
+		t.Fatalf("larger effective budget not selected: %s %s", id, reason)
+	}
+	job.MemoryRejectedNodes = []string{"larger"}
+	report("larger", 16, mist.ProcessingMemoryBudget(3*1024*1024*1024))
+	if id, reason := routeProcessingJob(job); id != "" || reason != mist.ProcessingMemoryNoNodeReason {
+		t.Fatalf("undersized refused node was reused: %s %s", id, reason)
+	}
+	report("larger", 16, mist.ProcessingMemoryBudget(8*1024*1024*1024))
+	if id, reason := routeProcessingJob(job); id != "larger" {
+		t.Fatalf("budget increase did not restore refused node: %s %s", id, reason)
+	}
+}
+
+func TestRegisteredNodeMissingFromRuntimeIsNotImpossible(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	oldAccess, oldInventory := clusterAccessibleForTenant, registeredProcessingNodes
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
+	registeredProcessingNodes = func(context.Context, string) ([]string, error) { return []string{"small", "evicted-large"}, nil }
+	t.Cleanup(func() { clusterAccessibleForTenant, registeredProcessingNodes = oldAccess, oldInventory })
+	touchInCluster(sm, "small", routeTestCluster)
+	setNodeMemory(sm, "small", 4*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	job := originJob()
+	job.RequiredMemoryBytes = 6 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "" || reason == mist.ProcessingMemoryNoNodeReason {
+		t.Fatalf("evicted registered node turned unknown capacity into permanent failure: %s %s", id, reason)
+	}
+}
+
+func useRuntimeProcessingInventory(t *testing.T) {
+	t.Helper()
+	previous := registeredProcessingNodes
+	registeredProcessingNodes = func(_ context.Context, clusterID string) ([]string, error) {
+		var ids []string
+		for _, n := range state.DefaultManager().GetAllNodesSnapshot().Nodes {
+			if n.ClusterID == clusterID {
+				ids = append(ids, n.NodeID)
+			}
+		}
+		return ids, nil
+	}
+	t.Cleanup(func() { registeredProcessingNodes = previous })
+}
+
+func TestInventoryOutageCannotProvePermanentCapacityFailure(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	oldAccess, oldInventory := clusterAccessibleForTenant, registeredProcessingNodes
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
+	registeredProcessingNodes = func(context.Context, string) ([]string, error) {
+		return nil, fmt.Errorf("temporary Quartermaster outage")
+	}
+	t.Cleanup(func() { clusterAccessibleForTenant, registeredProcessingNodes = oldAccess, oldInventory })
+	touchInCluster(sm, "small", routeTestCluster)
+	setNodeMemory(sm, "small", 4*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	job := originJob()
+	job.RequiredMemoryBytes = 6 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "" || reason == mist.ProcessingMemoryNoNodeReason {
+		t.Fatalf("inventory outage failed upload permanently: %s %s", id, reason)
+	}
+}
+
+// Unit routing checks use a warm inventory; dispatcher tests cover restart grace.
+func routeProcessingJob(job *processingJob) (string, string) {
+	node, reason, _ := routeProcessingJobWithInventory(context.Background(), job, newProcessingTickInventory(true))
+	return node, reason
 }

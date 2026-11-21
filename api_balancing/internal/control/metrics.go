@@ -59,12 +59,26 @@ type ControlMetrics struct {
 	OfflineEffectDeadLetters *prometheus.CounterVec
 	// StreamTranscodeDegraded counts transcode processes Mist replaced after a
 	// hard failure (PROCESS_REPLACE). Labels: failed_process_type, stream_kind
-	// (live|pull|processing|other), replaced ("true"|"false").
+	// (live|pull|processing|other), replaced ("true"|"false"|"deferred").
 	StreamTranscodeDegraded *prometheus.CounterVec
 	// ProcessingResultsIgnored counts Helmsman processing results Foghorn
 	// refused to apply. Labels: status (reported status), reason (unknown_job|
 	// inactive_job|unassigned_job|node_mismatch).
 	ProcessingResultsIgnored *prometheus.CounterVec
+	ProcessingWaitingJobs    *prometheus.GaugeVec
+}
+
+func ProcessingWaitingMetricsEnabled() bool {
+	return controlMetrics != nil && controlMetrics.ProcessingWaitingJobs != nil
+}
+
+func ObserveProcessingWaiting(counts map[string]int64) {
+	if !ProcessingWaitingMetricsEnabled() {
+		return
+	}
+	for _, reason := range []string{"memory", "slots", "fitting_node_unavailable", "cluster_unavailable"} {
+		controlMetrics.ProcessingWaitingJobs.WithLabelValues(reason).Set(float64(counts[reason]))
+	}
 }
 
 // MediaRequestContext tags a bounded request-path name. The shared service
@@ -124,6 +138,8 @@ func incStreamTranscodeDegraded(failedProcessType, streamKind string, replaced b
 	r := "false"
 	if replaced {
 		r = "true"
+	} else if failedProcessType == "Livepeer" && streamKind == "processing" {
+		r = "deferred"
 	}
 	controlMetrics.StreamTranscodeDegraded.WithLabelValues(failedProcessType, streamKind, r).Inc()
 }

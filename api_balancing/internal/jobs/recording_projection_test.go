@@ -27,7 +27,7 @@ func TestRecordingCaptureProjectionWaitsForConsumerAcknowledgement(t *testing.T)
 			}}
 			reconciler := newTestReconciler(t, db, nil, client, nil)
 			reconciler.clusterID = "origin"
-			mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow("recording", "dvr", "tenant", "origin", false, nil, nil, nil, "synced", true, "s3", int64(7), "completed", nil, nil, nil, nil, start, end))
+			mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow("recording", "dvr", "tenant", "origin", false, nil, nil, nil, "synced", true, "s3", int64(7), "completed", nil, nil, nil, nil, start, end, ""))
 			if ack {
 				mock.ExpectExec("AdvanceCatalogWatermark").WillReturnResult(sqlmock.NewResult(0, 1))
 			} else {
@@ -57,7 +57,7 @@ func TestRecordingCaptureProjectionRepairsPreviouslyAcknowledgedRevision(t *test
 	client := &mockCommodoreClient{}
 	reconciler := newTestReconciler(t, db, nil, client, nil)
 	reconciler.clusterID = "origin"
-	mock.ExpectQuery("catalog_capture_times_synced_rev").WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow("recording", "dvr", "tenant", "origin", false, nil, nil, nil, "synced", true, "s3", int64(7), "completed", nil, nil, nil, nil, nil, nil))
+	mock.ExpectQuery("catalog_capture_times_synced_rev").WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow("recording", "dvr", "tenant", "origin", false, nil, nil, nil, "synced", true, "s3", int64(7), "completed", nil, nil, nil, nil, nil, nil, ""))
 	mock.ExpectExec("catalog_capture_times_synced_rev").WillReturnResult(sqlmock.NewResult(0, 1))
 	advanced, scanned := reconciler.projectCommodoreArtifactState(context.Background())
 	if advanced != 1 || scanned != 1 || len(client.snapshotCalls) != 1 {

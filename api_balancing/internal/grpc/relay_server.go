@@ -85,6 +85,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 		err = control.SendLocalProcessingJob(req.TargetNodeId, cmd.ProcessingJob)
 	case *foghornrelaypb.ForwardCommandRequest_Freeze:
 		err = control.SendLocalFreezeRequest(req.TargetNodeId, cmd.Freeze)
+	case *foghornrelaypb.ForwardCommandRequest_ProcessingMemoryReservation:
+		err = control.SendLocalProcessingMemoryReservation(req.TargetNodeId, cmd.ProcessingMemoryReservation)
 	case *foghornrelaypb.ForwardCommandRequest_DesiredStateUpdate:
 		err = control.SendLocalDesiredStateUpdate(req.TargetNodeId, cmd.DesiredStateUpdate)
 	case *foghornrelaypb.ForwardCommandRequest_ApplyManagedStream:

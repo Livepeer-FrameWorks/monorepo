@@ -568,11 +568,12 @@ func storageArtifactToVodAsset(a *commodorepb.StorageArtifactInfo) *model.VodAss
 	}
 	resolution, videoCodec, audioCodec, bitrateKbps := catalogview.TrackSummary(a.GetTracks())
 	asset := &model.VodAsset{
-		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
-		ArtifactHash:    a.GetArtifactHash(),
-		PlaybackID:      a.GetPlaybackId(),
-		Status:          storageStatusToVodAssetStatus(a.GetStatus()),
-		StorageLocation: a.GetStorageLocation(),
+		ProcessingWaitReason: a.ProcessingWaitReason,
+		ID:                   globalid.Encode(globalid.TypeVodAsset, vodID),
+		ArtifactHash:         a.GetArtifactHash(),
+		PlaybackID:           a.GetPlaybackId(),
+		Status:               storageStatusToVodAssetStatus(a.GetStatus()),
+		StorageLocation:      a.GetStorageLocation(),
 		// hasLocalCopy is a placement fact: preserve the pointer so nil = live placement overlay
 		// unavailable (unknown), NOT "no local copy". isSynced/isFinalized are durable catalog facts.
 		IsSynced:        a.GetIsSynced(),
@@ -664,16 +665,17 @@ func protoToVodAsset(p *sharedpb.VodAssetInfo) *model.VodAsset {
 	// signal; the GraphQL field is nullable, so surface the known value as a non-nil pointer.
 	hasLocalCopy := p.HasLocalCopy
 	asset := &model.VodAsset{
-		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
-		ArtifactHash:    p.ArtifactHash,
-		PlaybackID:      "",
-		Status:          status,
-		StorageLocation: p.StorageLocation,
-		IsSynced:        p.GetIsSynced(),
-		IsFinalized:     p.GetIsFinalized(),
-		HasLocalCopy:    &hasLocalCopy,
-		CreatedAt:       p.CreatedAt.AsTime(),
-		UpdatedAt:       p.UpdatedAt.AsTime(),
+		ProcessingWaitReason: p.ProcessingWaitReason,
+		ID:                   globalid.Encode(globalid.TypeVodAsset, vodID),
+		ArtifactHash:         p.ArtifactHash,
+		PlaybackID:           "",
+		Status:               status,
+		StorageLocation:      p.StorageLocation,
+		IsSynced:             p.GetIsSynced(),
+		IsFinalized:          p.GetIsFinalized(),
+		HasLocalCopy:         &hasLocalCopy,
+		CreatedAt:            p.CreatedAt.AsTime(),
+		UpdatedAt:            p.UpdatedAt.AsTime(),
 	}
 	if p.GetSyncStatus() != "" {
 		syncStatus := p.GetSyncStatus()

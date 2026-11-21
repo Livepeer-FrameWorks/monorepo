@@ -27,7 +27,7 @@ func TestCatalogProjectionUsesAssignedOriginAuthority(t *testing.T) {
 		mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, origin).
 			WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow(
 				origin+"-artifact", "vod", "tenant", origin, true, int64(128), int64(6000), nil,
-				"synced", true, "s3", int64(7), lifecycle, nil, nil, nil, nil, nil, nil))
+				"synced", true, "s3", int64(7), lifecycle, nil, nil, nil, nil, nil, nil, ""))
 		mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 			WithArgs(int64(7), origin+"-artifact").WillReturnResult(sqlmock.NewResult(0, 1))
 	}

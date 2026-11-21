@@ -119,6 +119,7 @@ message ClipInfo {
   reserved 12, 19, 28;                // 28 was is_frozen
   reserved "access_count", "last_accessed";
   optional string error_message = 29;
+  optional string processing_wait_reason = 30;
 }
 
 // GetClipRequest - request to get a single clip
@@ -720,6 +721,7 @@ message VodAssetInfo {
   bool is_finalized = 30;
   reserved 31;                       // was is_frozen
   optional int64 original_size_bytes = 32; // Size in bytes of the byte-identical retained upload.
+  optional string processing_wait_reason = 33;
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)

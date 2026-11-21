@@ -157,7 +157,7 @@ func TestDispatchJobNoNodeRevertsRecon(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec(deferUnroutablePattern).
-		WithArgs(unroutableDeferralSeconds{}, "job-nonode-recon").
+		WithArgs(unroutableDeferralSeconds{}, "cluster_unavailable", "job-nonode-recon", "tenant-nonode").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs("queued", "hash-nonode-recon", "tenant-nonode").
@@ -214,7 +214,7 @@ func TestFailExhaustedJobAtomic_CommitsAllOrNothing(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`WITH failed AS`).
-		WithArgs("job-vodfail", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "job-vodfail", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
 			AddRow("vod-fail-hash-recon", "vod", mockTenantUUID, "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -248,7 +248,7 @@ func TestFailExhaustedJobAtomic_RollsBackOnArtifactError(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`WITH failed AS`).
-		WithArgs("job-vodfail2", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "job-vodfail2", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
 			AddRow("vod-fail-hash-recon2", "vod", "tenant-vodfail2", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -279,7 +279,7 @@ func TestFailExhaustedJobAtomic_NoOpWhenRecovered(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`WITH failed AS`).
-		WithArgs("job-recovered", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "job-recovered", sqlmock.AnyArg()).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 

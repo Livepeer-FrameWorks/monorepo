@@ -2805,10 +2805,12 @@ type StorageArtifact struct {
 	// User-provided description (VOD uploads and clips); null when unset.
 	Description *string `json:"description,omitempty"`
 	// Processing failure detail for a failed artifact; null when not failed.
-	ErrorMessage    *string  `json:"errorMessage,omitempty"`
-	SizeBytes       *float64 `json:"sizeBytes,omitempty"`
-	Status          string   `json:"status"`
-	StorageLocation *string  `json:"storageLocation,omitempty"`
+	ErrorMessage *string  `json:"errorMessage,omitempty"`
+	SizeBytes    *float64 `json:"sizeBytes,omitempty"`
+	Status       string   `json:"status"`
+	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	ProcessingWaitReason *string `json:"processingWaitReason,omitempty"`
+	StorageLocation      *string `json:"storageLocation,omitempty"`
 	// ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
 	StorageClusterID *string `json:"storageClusterId,omitempty"`
 	SyncStatus       *string `json:"syncStatus,omitempty"`
@@ -3575,6 +3577,8 @@ type VodAsset struct {
 	Filename *string `json:"filename,omitempty"`
 	// Current processing/storage status of the asset.
 	Status VodAssetStatus `json:"status"`
+	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	ProcessingWaitReason *string `json:"processingWaitReason,omitempty"`
 	// Where the asset is stored (s3, local, freezing).
 	StorageLocation string `json:"storageLocation"`
 	// Current S3 sync state (pending, in_progress, synced, failed, lost_local).

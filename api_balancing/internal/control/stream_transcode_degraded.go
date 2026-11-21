@@ -70,7 +70,13 @@ func processStreamTranscodeDegraded(msg *ipcpb.StreamTranscodeDegraded, nodeID s
 		"reason":              msg.GetReason(),
 		"replacement_count":   msg.GetReplacementCount(),
 	}
-	logger.WithFields(fields).Warn("Stream transcode degraded to local processing")
+	if kind == "processing" && failedType == "Livepeer" && msg.GetReplacementCount() == 0 {
+		logger.WithFields(fields).Warn("Stream transcode failed; local replacement awaits job admission")
+	} else if msg.GetReplacementCount() == 0 {
+		logger.WithFields(fields).Warn("Stream transcode failed; no local replacement was admitted")
+	} else {
+		logger.WithFields(fields).Warn("Stream transcode degraded to local processing")
+	}
 
 	if kind != "live" && kind != "pull" {
 		return

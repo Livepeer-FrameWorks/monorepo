@@ -1854,8 +1854,9 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *periscopepb.G
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, cluster_id, node_id, cpu_usage, ram_max, ram_current,
-		       shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
+		SELECT timestamp, cluster_id, node_id, cpu_usage,
+               ram_max * memory_unit_bytes AS ram_max, ram_current * memory_unit_bytes AS ram_current,
+               shm_total_bytes * memory_unit_bytes AS shm_total_bytes, shm_used_bytes * memory_unit_bytes AS shm_used_bytes, disk_total_bytes, disk_used_bytes,
 		       bandwidth_in, bandwidth_out, up_speed, down_speed,
 		       connections_current, stream_count, is_healthy,
 		       latitude, longitude

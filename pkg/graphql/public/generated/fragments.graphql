@@ -1067,6 +1067,7 @@ fragment ClipInNodeDefaultFields on Clip {
   storagePath
   sizeBytes
   status
+  processingWaitReason
   errorMessage
   clipCreatedAt: createdAt
   updatedAt
@@ -6596,6 +6597,7 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
   description
   filename
   vodAssetStatus: status
+  processingWaitReason
   vodAssetStorageLocation: storageLocation
   syncStatus
   hasLocalCopy

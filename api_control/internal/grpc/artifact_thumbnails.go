@@ -240,7 +240,7 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 				StorageLocation: nullableString(req.StorageLocation), StorageClusterID: nullableString(req.StorageClusterId),
 				HasThumbnails: nullableBool(req.HasThumbnails), LifecycleStatus: nullableString(req.LifecycleStatus),
 				OriginClusterID: sql.NullString{String: sourceCluster, Valid: true}, RetentionUntilUnix: nullableInt64(req.RetentionUntilUnix),
-				ErrorMessage: nullableString(req.ErrorMessage), ThumbnailServingClusterID: nullableString(req.ThumbnailServingClusterId),
+				ErrorMessage: nullableString(req.ErrorMessage), ProcessingWaitReason: nullableString(req.ProcessingWaitReason), ThumbnailServingClusterID: nullableString(req.ThumbnailServingClusterId),
 				SourceRevision: req.GetSourceRevision(), TenantID: tenantID, AssetKey: assetKey,
 			}
 			newRevision, appliedServingCluster, execErr := applyArtifactCatalogSnapshot(ctx, queries, req.GetAssetType(), params, nullableInt64(req.OriginalSizeBytes))
@@ -341,7 +341,7 @@ func applyArtifactCatalogSnapshot(ctx context.Context, queries *commodoredb.Quer
 		row, err := queries.ApplyDVRCatalogSnapshot(ctx, commodoredb.ApplyDVRCatalogSnapshotParams(params))
 		return row.CatalogRevision, row.ThumbnailServingClusterID, err
 	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD:
-		row, err := queries.ApplyVODCatalogSnapshot(ctx, commodoredb.ApplyVODCatalogSnapshotParams{SizeBytes: params.SizeBytes, DurationMs: params.DurationMs, TracksPresent: params.TracksPresent, Tracks: params.Tracks, SyncStatus: params.SyncStatus, IsSynced: params.IsSynced, IsFinalized: params.IsFinalized, StorageLocation: params.StorageLocation, StorageClusterID: params.StorageClusterID, HasThumbnails: params.HasThumbnails, LifecycleStatus: params.LifecycleStatus, OriginClusterID: params.OriginClusterID, RetentionUntilUnix: params.RetentionUntilUnix, ErrorMessage: params.ErrorMessage, ThumbnailServingClusterID: params.ThumbnailServingClusterID, SourceRevision: params.SourceRevision, TenantID: params.TenantID, AssetKey: params.AssetKey, OriginalSizeBytes: originalSize})
+		row, err := queries.ApplyVODCatalogSnapshot(ctx, commodoredb.ApplyVODCatalogSnapshotParams{SizeBytes: params.SizeBytes, DurationMs: params.DurationMs, TracksPresent: params.TracksPresent, Tracks: params.Tracks, SyncStatus: params.SyncStatus, IsSynced: params.IsSynced, IsFinalized: params.IsFinalized, StorageLocation: params.StorageLocation, StorageClusterID: params.StorageClusterID, HasThumbnails: params.HasThumbnails, LifecycleStatus: params.LifecycleStatus, OriginClusterID: params.OriginClusterID, RetentionUntilUnix: params.RetentionUntilUnix, ErrorMessage: params.ErrorMessage, ProcessingWaitReason: params.ProcessingWaitReason, ThumbnailServingClusterID: params.ThumbnailServingClusterID, SourceRevision: params.SourceRevision, TenantID: params.TenantID, AssetKey: params.AssetKey, OriginalSizeBytes: originalSize})
 		return row.CatalogRevision, row.ThumbnailServingClusterID, err
 	default:
 		return sql.NullInt64{}, sql.NullString{}, status.Errorf(codes.InvalidArgument, "unsupported asset_type: %s", assetType.String())

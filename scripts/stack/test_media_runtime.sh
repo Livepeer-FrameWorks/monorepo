@@ -36,3 +36,33 @@ OOM_SERVICE=$ORCHESTRATOR
 after=$(media_runtime_state all)
 if [ "$before" = "$after" ]; then echo 'orchestrator OOM went unnoticed' >&2; exit 1; fi
 echo 'media runtime guard covers both edges, orchestrators and gateways'
+
+
+eval "$(sed -n '/^no_upload_degradation() {/,/^}/p' "$here/scenarios/79-rotated-upload.sh")"
+FIXTURE_LOGS=''
+log_json() { printf '%s\n' "$FIXTURE_LOGS" | jq -c "$2"; }
+if no_upload_degradation hash now; then echo 'empty logs falsely proved no degradation' >&2; exit 1; fi
+FIXTURE_LOGS='{"msg":"Stream transcode failed; local replacement awaits job admission","stream":"processing+hash"}'
+if no_upload_degradation hash now; then echo 'deferred fallback escaped degradation assertion' >&2; exit 1; fi
+FIXTURE_LOGS='{"msg":"ordinary processing event","stream":"processing+hash"}'
+no_upload_degradation hash now || { echo 'ordinary processing event refused' >&2; exit 1; }
+echo 'rotation degradation assertion requires readable logs and detects deferred failures'
+
+
+eval "$(sed -n '/^gateway_present() {/,/^}/p' "$here/scenarios/69-vod-ladder-geometry.sh")"
+FIXTURE_NOW=100
+FIXTURE_GATEWAY=healthy
+GATEWAY_HEALTHY_AT=0
+date() { printf '%s\n' "$FIXTURE_NOW"; }
+gateway_state() { printf '%s\n' "$FIXTURE_GATEWAY"; }
+if gateway_present; then echo 'healthy gateway skipped consumer refresh window' >&2; exit 1; fi
+FIXTURE_NOW=106
+if gateway_present; then echo 'six seconds falsely proved gateway pool refreshed' >&2; exit 1; fi
+FIXTURE_NOW=165
+gateway_present || { echo 'stable gateway never became usable after refresh window' >&2; exit 1; }
+FIXTURE_GATEWAY=unhealthy
+gateway_present && { echo 'unhealthy gateway retained readiness' >&2; exit 1; }
+FIXTURE_NOW=200
+FIXTURE_GATEWAY=healthy
+if gateway_present; then echo 'gateway health flap skipped a fresh refresh window' >&2; exit 1; fi
+echo 'gateway readiness covers consumer refresh and resets after a health flap'

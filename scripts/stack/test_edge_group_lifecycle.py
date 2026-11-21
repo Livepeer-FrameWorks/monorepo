@@ -88,6 +88,26 @@ class EdgeLifecycleRestartTest(unittest.TestCase):
         _, connection = self.exercise('restart', listener_not_ready=True)
         connection.request.assert_called_once_with('/crossdomain.xml')
 
+    def test_shutdown_failure_names_surviving_processes(self):
+        from edge_group_lifecycle import exercise
+        http, viewer = MagicMock(), MagicMock()
+        survivors = {20: (10, 10, 'S', 'MistOutHTTP'), 25: (10, 10, 'S', 'MistProcAV'),
+                     99: (1, 99, 'S', 'unrelated')}
+
+        def immediate(check, seconds, message):
+            if seconds == 15:
+                raise AssertionError(message)
+            return check()
+
+        with patch('edge_group_lifecycle.Connection', side_effect=[http, viewer]), \
+             patch('edge_group_lifecycle.table', side_effect=[{}, survivors, survivors]), \
+             patch('edge_group_lifecycle.angel', return_value=(10, 10)), \
+             patch('edge_group_lifecycle.execute'), \
+             patch('edge_group_lifecycle.eventually', side_effect=immediate):
+            with self.assertRaisesRegex(AssertionError, r'20.*MistOutHTTP.*25.*MistProcAV') as error:
+                exercise('edge', 'source', 'crash')
+            self.assertNotIn('unrelated', str(error.exception))
+
 
 if __name__ == '__main__':
     unittest.main()

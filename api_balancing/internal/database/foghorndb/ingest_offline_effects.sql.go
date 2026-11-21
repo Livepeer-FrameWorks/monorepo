@@ -517,7 +517,8 @@ WITH progress AS (
       AND owed.lease_token = $6::text::uuid
 )
 UPDATE foghorn.ingest_offline_effects e
-SET set_node_offline_done = $1,
+SET attempts = 0,
+    set_node_offline_done = $1,
     teardown_done = $2,
     broadcast_offline_done = $3,
     decklog_done = $4,
@@ -527,23 +528,23 @@ SET set_node_offline_done = $1,
     state = CASE
         WHEN p.complete THEN CASE WHEN p.source_superseded THEN 'superseded' ELSE 'applied' END
         WHEN $5::boolean
-          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN 'failed'
+          AND (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12) THEN 'failed'
         ELSE 'pending' END,
     applied_at = CASE
         WHEN p.complete THEN NOW()
         WHEN $5::boolean
-          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN NOW()
+          AND (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12) THEN NOW()
         ELSE e.applied_at END,
     next_attempt_at = CASE WHEN $5::boolean THEN
         NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2,
-            LEAST(CASE WHEN p.awaiting_ack THEN e.ack_wait_attempts + 1 ELSE e.attempts END, 8)))
+            LEAST(CASE WHEN p.awaiting_ack THEN e.ack_wait_attempts + 1 ELSE 0 END, 8)))
         ELSE e.next_attempt_at END,
     updated_at = NOW(),
     leased_until = CASE WHEN $5::boolean THEN NULL ELSE e.leased_until END,
     lease_token = CASE WHEN $5::boolean THEN NULL ELSE e.lease_token END,
     last_error = CASE
         WHEN $5::boolean
-          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12))
+          AND (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)
           THEN COALESCE(NULLIF(e.last_error, ''), 'offline obligation exhausted retry budget')
         WHEN $5::boolean THEN NULL ELSE e.last_error END
 FROM progress p

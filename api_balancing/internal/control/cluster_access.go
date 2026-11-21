@@ -26,13 +26,14 @@ var clusterAccessCache = cache.New(cache.Options{
 	MaxEntries:           10000,
 }, cache.MetricsHooks{})
 
-// cachedClusterRouting returns the tenant's entitlement envelope through clusterAccessCache. Fail-closed: a
-// resolver miss/error yields ok=false (cached briefly), so callers deny rather than leak.
-func cachedClusterRouting(tenantID string) (tenantStorageRouting, bool) {
-	v, ok, err := clusterAccessCache.Get(context.Background(), "access:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+// A missing or failed entitlement lookup denies access and is cached briefly.
+func cachedClusterRoutingContext(ctx context.Context, tenantID string) (tenantStorageRouting, bool) {
+	// A shared cache load can outlive the caller waiting for its result.
+	routingLookup := tenantStorageRoutingFn
+	v, ok, err := clusterAccessCache.Get(ctx, "access:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
 		lookupCtx, cancel := context.WithTimeout(loadCtx, clusterAccessLookupBudget)
 		defer cancel()
-		routing, rok := tenantStorageRoutingFn(lookupCtx, tenantID)
+		routing, rok := routingLookup(lookupCtx, tenantID)
 		if !rok {
 			return tenantStorageRouting{}, false, nil
 		}
@@ -60,6 +61,15 @@ func cachedClusterRouting(tenantID string) (tenantStorageRouting, bool) {
 // predicate itself carries no operation scope. Node capability/capacity (CapProcessing, CanRunClass, slots)
 // remain scheduler input, never authorization.
 func ClusterAccessibleForTenant(clusterID, tenantID string) bool {
+	return ClusterAccessibleForTenantContext(context.Background(), clusterID, tenantID)
+}
+
+// ClusterAccessibleForTenantContext applies the same workload authority gate
+// within the caller's deadline. Cancellation cannot grant cluster access.
+func ClusterAccessibleForTenantContext(ctx context.Context, clusterID, tenantID string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	clusterID = strings.TrimSpace(clusterID)
 	tenantID = strings.TrimSpace(tenantID)
 	// FAIL CLOSED on unresolved authority: an empty tenant is NOT "all tenants".
@@ -70,7 +80,7 @@ func ClusterAccessibleForTenant(clusterID, tenantID string) bool {
 	// from GetClusterRouting) — the "storage" naming is incidental; the peer membership IS the generic
 	// cluster↔tenant entitlement with no per-operation scope. Read it through the short-TTL cache so repeated
 	// checks don't hit Quartermaster per request.
-	routing, ok := cachedClusterRouting(tenantID)
+	routing, ok := cachedClusterRoutingContext(ctx, tenantID)
 	if !ok {
 		return false
 	}

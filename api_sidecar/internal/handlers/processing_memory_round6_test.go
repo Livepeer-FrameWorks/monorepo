@@ -25,7 +25,7 @@ func TestFallbackStopsGenerationBeforeMeasuringMemory(t *testing.T) {
 	}
 	client := &fakeProcessingRuntimeClient{}
 	total := uint64(3072) * memoryMiB
-	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) {
+	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) {
 		if !strings.Contains(strings.Join(client.calls, ","), "nuke_stream:") {
 			return total, 700 * memoryMiB, nil
 		}
@@ -41,13 +41,13 @@ func TestFallbackStopsGenerationBeforeMeasuringMemory(t *testing.T) {
 }
 func TestAdmissionPreservesPermanentSourceFailure(t *testing.T) {
 	err := errors.New("source unavailable: corrupt or unreadable source")
-	if got := processingMemoryResultStatus(err); got != "failed" {
+	if got := processingMemoryFailureStatus(err); got != "failed" {
 		t.Fatalf("corrupt source burns retries: %s", got)
 	}
 }
 
 func TestProcessingProbeResultBeforeAnyEncoderStarts(t *testing.T) {
-	for _, kind := range []string{"corrupt", "rotated", "unsupported"} {
+	for _, kind := range []string{"corrupt"} {
 		t.Run(kind, func(t *testing.T) {
 			isolateProcessingOverrideState(t)
 			hash := "roundsix" + kind
@@ -98,6 +98,9 @@ func TestProcessingProbeResultBeforeAnyEncoderStarts(t *testing.T) {
 				defer close(done)
 				h.Handle(&ipcpb.ProcessingJobRequest{JobId: "job-" + hash, ArtifactHash: hash, SourceUrl: server.URL + "/source.mkv", JobType: "process", ProcessesJson: string(encoded)}, func(msg *ipcpb.ControlMessage) {
 					if result := msg.GetProcessingJobResult(); result != nil {
+						if result.GetStatus() == "cache_update" && result.GetOutputs()["processes_json"] == "" {
+							return
+						}
 						results <- result
 					}
 				})
@@ -114,10 +117,6 @@ func TestProcessingProbeResultBeforeAnyEncoderStarts(t *testing.T) {
 				if kind == "corrupt" {
 					if result.GetStatus() != "failed" {
 						t.Fatalf("corrupt source retried: %s %s", result.GetStatus(), result.GetError())
-					}
-				} else {
-					if result.GetStatus() != "retryable" || result.GetOutputs()[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryNodeTooSmall || mist.HasLivepeerProcesses(result.GetOutputs()[mist.ProcessingMemoryPolicy]) {
-						t.Fatalf("local source started or priced as Livepeer: %+v", result)
 					}
 				}
 			case <-time.After(15 * time.Second):

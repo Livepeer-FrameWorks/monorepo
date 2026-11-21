@@ -40,6 +40,24 @@ media_runtime_state() {
     docker inspect --format '{{.Id}} {{.State.OOMKilled}} {{.RestartCount}} {{.State.Status}} {{.State.StartedAt}} {{.HostConfig.Memory}}' "$id" || return 1
   done
 }
+livepeer_produced() {
+  local processes rows quoted
+  processes=$(pg "$FOGHORN_A_DB" "SELECT processes_json FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$1' ORDER BY created_at DESC LIMIT 1") || return 1
+  json_has "$processes" 'any(.[]; .process=="Livepeer")' || return 1
+  quoted=$(jq -cn --arg stream "processing+$1" '$stream') || return 1
+  rows=$(log_json "$2" "select(.trigger_type==\"LIVEPEER_SEGMENT_COMPLETE\" and .stream_name==$quoted and (.rendition_count|tonumber)>0)" edge edge-b) || return 1
+  [ -n "$rows" ]
+}
+local_job_waited_for_memory() {
+  [ "$(pg "$FOGHORN_A_DB" "SELECT EXISTS (
+    SELECT 1 FROM foghorn.processing_jobs AS waiting
+    JOIN foghorn.processing_jobs AS running ON running.tenant_id=waiting.tenant_id AND running.job_id<>waiting.job_id
+    WHERE waiting.tenant_id='$STACK_TENANT_ID'
+      AND waiting.artifact_hash IN ('${local_hashes[0]}','${local_hashes[1]}')
+      AND running.artifact_hash IN ('${local_hashes[0]}','${local_hashes[1]}')
+      AND waiting.status='queued' AND waiting.wait_reason='memory' AND waiting.retry_count=0
+      AND running.status IN ('dispatched','processing') AND running.memory_reserved_bytes>0)")" = t ]
+}
 before_media=$(media_runtime_state all) || { fail 'read media service state before Livepeer ladders'; finish; }
 printf '%s\n' "$before_media" >"$STACK_STATE_DIR/media-runtime-livepeer-before.tsv"
 if printf '%s\n' "$before_media" | grep -v ' running ' >/dev/null; then fail 'media services are not running before Livepeer ladders'; finish; fi
@@ -49,10 +67,14 @@ for entry in '2560x1440 qhd 1440' '3840x2160 uhd 2160' '3840x2160 inherit 1080';
   render_mp4 "$file" "$geometry" 10 8 || { fail "render $geometry"; continue; }
   options='{"keepOriginal":false}'
   [ "$ladder" = inherit ] || options=$(jq -cn --arg ladder "$ladder" '{transcodeLadder:$ladder,keepOriginal:false}')
+  started=$(utc_now)
   result=$(upload_vod "$file" "stack named ladder $ladder" "$options")
   id=$(echo "$result" | jq -r '.id // empty'); hash=$(echo "$result" | jq -r '.artifactHash // empty')
   [ -n "$id" ] || { fail "upload $ladder: $result"; continue; }
-  eventually 900 "$ladder upload completes" ready "$id" && check "$ladder recorded ceiling is $ceiling" recorded_ceiling "$hash" "$ceiling"
+  if eventually 900 "$ladder upload completes" ready "$id"; then
+    check "$ladder recorded ceiling is $ceiling" recorded_ceiling "$hash" "$ceiling"
+    eventually 20 "$ladder actually completed through Livepeer" livepeer_produced "$hash" "$started"
+  fi
 done
 
 after_media=$(media_runtime_state all) || { fail 'read media service state after Livepeer ladders'; finish; }
@@ -74,16 +96,18 @@ stack_ctl stop "$GATEWAY" || { fail 'stop gateway for 4K memory test'; finish; }
 GATEWAY_STOPPED=1
 DISCOVERY_DRAIN_AT=$(($(date +%s) + 65))
 eventually 180 'gateway discovery drained for local 4K jobs' gateway_drained || finish
+render_mp4 "$STACK_STATE_DIR/local-4k-queue.mp4" 3840x2160 30 30 || { fail 'render sustained local 4K memory workload'; finish; }
 local_jobs=()
 local_hashes=()
 for job in first second; do
-  result=$(upload_vod "$STACK_STATE_DIR/ladder-uhd.mp4" "stack local 4K $job" '{"transcodeLadder":"uhd","keepOriginal":false}')
+  result=$(upload_vod "$STACK_STATE_DIR/local-4k-queue.mp4" "stack local 4K $job" '{"transcodeLadder":"uhd","keepOriginal":false}')
   id=$(echo "$result" | jq -r '.id // empty')
   hash=$(echo "$result" | jq -r '.artifactHash // empty')
   [ -n "$id" ] && [ -n "$hash" ] || { fail "create local 4K $job: $result"; finish; }
   local_jobs+=("$id")
   local_hashes+=("$hash")
 done
+eventually 300 'one local 4K upload queues behind the running job without spending retries' local_job_waited_for_memory || finish
 for job in 0 1; do
   if eventually 900 "local 4K job $job completes" ready "${local_jobs[$job]}"; then
     check "local 4K job $job retains its 2160 rung" recorded_ceiling "${local_hashes[$job]}" 2160
@@ -92,7 +116,7 @@ for job in 0 1; do
       [.[] | select((.track_type // .trackType // .type)=="video" and (.codec|ascii_downcase)!="jpeg") | ([.width,.height]|min)] as $heights |
       ($heights|length)==6 and all([360,480,720,1080,1440,2160][]; . as $height | any($heights[]; (.-$height|fabs)<=32))'
     processes=$(pg "$FOGHORN_A_DB" "SELECT processes_json FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='${local_hashes[$job]}' ORDER BY created_at DESC LIMIT 1")
-    check "local 4K job $job uses budgeted local encoders" json_has "$processes" 'any(.[]; .process=="AV" and .codec=="H264") and all(.[]; .process!="Livepeer") and all(.[]|select(.process=="AV" or .process=="Thumbs"); .memory_budgeted==true)'
+    check "local 4K job $job uses budgeted local encoders" json_has "$processes" 'any(.[]; .process=="AV" and .codec=="H264") and all(.[]; .process!="Livepeer") and all(.[]|select(.process=="AV" or .process=="Thumbs"); .decode_threads>=1 and .encode_threads>=1)'
   fi
 done
 after_edges=$(media_runtime_state local) || { fail 'read edge state after local 4K jobs'; finish; }

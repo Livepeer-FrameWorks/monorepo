@@ -835,9 +835,18 @@ func (q *Queries) UpdateCompletedVODMetadata(ctx context.Context, arg UpdateComp
 }
 
 const updateProcessingJobCache = `-- name: UpdateProcessingJobCache :execrows
-UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,$5::bigint), capacity_wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
-AND job.tenant_id::text = COALESCE(NULLIF($6::text, ''),
+WITH admitted AS (
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,$5::bigint), memory_reserved_bytes=$6::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+AND job.tenant_id::text = COALESCE(NULLIF($7::text, ''),
  (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$1 AND assigned.processing_node_id=$4))
+ RETURNING job.artifact_hash,job.tenant_id
+)
+UPDATE foghorn.artifacts AS asset
+SET catalog_revision=GREATEST(asset.catalog_revision+1,4503599627370496),updated_at=NOW(),
+ status=CASE WHEN asset.status='queued' THEN 'processing' ELSE asset.status END
+FROM admitted
+WHERE asset.artifact_hash=admitted.artifact_hash AND asset.tenant_id=admitted.tenant_id
+ AND asset.status NOT IN ('failed','deleted','expired','aborted')
 `
 
 type UpdateProcessingJobCacheParams struct {
@@ -846,6 +855,7 @@ type UpdateProcessingJobCacheParams struct {
 	ProcessesJson       sql.NullString `db:"processes_json" json:"processes_json"`
 	ProcessingNodeID    sql.NullString `db:"processing_node_id" json:"processing_node_id"`
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
+	MemoryReservedBytes int64          `db:"memory_reserved_bytes" json:"memory_reserved_bytes"`
 	TenantID            string         `db:"tenant_id" json:"tenant_id"`
 }
 
@@ -857,6 +867,7 @@ func (q *Queries) UpdateProcessingJobCache(ctx context.Context, arg UpdateProces
 		arg.ProcessesJson,
 		arg.ProcessingNodeID,
 		arg.RequiredMemoryBytes,
+		arg.MemoryReservedBytes,
 		arg.TenantID,
 	)
 	if err != nil {
@@ -869,7 +880,6 @@ const updateProcessingJobProgress = `-- name: UpdateProcessingJobProgress :one
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $1::int), progress_last_ms = GREATEST(progress_last_ms, $2::bigint),
   progress_advanced_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
-  capacity_wait_started_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE capacity_wait_started_at END,
   updated_at = NOW()
 WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress, job_type
 `

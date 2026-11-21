@@ -25,7 +25,7 @@ func seedProcessingNode(t *testing.T, sm *state.StreamStateManager, nodeID strin
 	sm.TouchNode(nodeID, true)
 	setNodeProcessing(sm, nodeID, true, 0, 0)
 	origAccess := clusterAccessibleForTenant
-	clusterAccessibleForTenant = func(string, string) bool { return true }
+	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 }
 

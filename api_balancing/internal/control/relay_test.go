@@ -803,8 +803,11 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"deactivate_push_targets": func() error {
 			return SendDeactivatePushTargets(context.Background(), "node-1", &ipcpb.DeactivatePushTargets{})
 		},
-		"processing_job":         func() error { return SendProcessingJob("node-1", &ipcpb.ProcessingJobRequest{}) },
-		"freeze":                 func() error { return SendFreezeRequest("node-1", &ipcpb.FreezeRequest{}) },
+		"processing_job": func() error { return SendProcessingJob("node-1", &ipcpb.ProcessingJobRequest{}) },
+		"freeze":         func() error { return SendFreezeRequest("node-1", &ipcpb.FreezeRequest{}) },
+		"processing_memory_reservation": func() error {
+			return SendProcessingMemoryReservation(context.Background(), "node-1", &ipcpb.ProcessingMemoryReservation{})
+		},
 		"desired_state_update":   func() error { return SendDesiredStateUpdate("node-1", &ipcpb.DesiredStateUpdate{}) },
 		"apply_managed_stream":   func() error { return SendApplyManagedStream("node-1", &ipcpb.ApplyManagedStream{Name: "demo"}) },
 		"retract_managed_stream": func() error { return SendRetractManagedStream("node-1", &ipcpb.RetractManagedStream{Name: "demo"}) },

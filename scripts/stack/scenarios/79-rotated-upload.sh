@@ -7,10 +7,13 @@
 need ffmpeg ffprobe jq curl python3 || finish
 
 no_upload_degradation() {
-  local quoted rows
-  quoted=$(jq -cn --arg stream "processing+$1" '$stream') || return 1
-  rows=$(log_json "$2" "select(.msg==\"Stream transcode degraded to local processing\" and .stream==$quoted)" foghorn foghorn-2 foghorn-b foghorn-b-2) || return 1
-  [ -z "$rows" ]
+  local rows
+  rows=$(log_json "$2" '.' foghorn foghorn-2 foghorn-b foghorn-b-2) || return 1
+  [ -n "$rows" ] || return 1
+  printf '%s\n' "$rows" | jq -se --arg stream "processing+$1" '
+    all(.[]; .stream != $stream or
+      (.msg != "Stream transcode degraded to local processing" and
+       .msg != "Stream transcode failed; local replacement awaits job admission"))' >/dev/null
 }
 source_routed() {
   local quoted rows

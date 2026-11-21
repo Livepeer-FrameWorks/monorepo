@@ -1191,6 +1191,8 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "processing_job"
 	case *foghornrelaypb.ForwardCommandRequest_Freeze:
 		return "freeze"
+	case *foghornrelaypb.ForwardCommandRequest_ProcessingMemoryReservation:
+		return "processing_memory_reservation"
 	case *foghornrelaypb.ForwardCommandRequest_DesiredStateUpdate:
 		return "desired_state_update"
 	case *foghornrelaypb.ForwardCommandRequest_ApplyManagedStream:
@@ -6145,20 +6147,21 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
 	seed := &ipcpb.ConfigSeed{
-		NodeId:              nodeID,
-		Latitude:            lat,
-		Longitude:           lon,
-		LocationName:        loc,
-		Templates:           templates,
-		OperationalMode:     operationalMode,
-		Tls:                 tlsBundle,
-		Site:                siteConfig,
-		CaBundle:            caBundle,
-		TenantId:            ownerTenantID,
-		Telemetry:           telemetry,
-		FoghornBalancerBase: FoghornBalancerBaseForNode(resolvedClusterID, nodeID),
-		SeedVersion:         0,
-		Capacity:            budget,
+		ProcessingMemoryReservation: processingReservationForSeed(nodeID),
+		NodeId:                      nodeID,
+		Latitude:                    lat,
+		Longitude:                   lon,
+		LocationName:                loc,
+		Templates:                   templates,
+		OperationalMode:             operationalMode,
+		Tls:                         tlsBundle,
+		Site:                        siteConfig,
+		CaBundle:                    caBundle,
+		TenantId:                    ownerTenantID,
+		Telemetry:                   telemetry,
+		FoghornBalancerBase:         FoghornBalancerBaseForNode(resolvedClusterID, nodeID),
+		SeedVersion:                 0,
+		Capacity:                    budget,
 	}
 	if tlsBundle != nil {
 		seed.TlsBundles = []*ipcpb.TLSCertBundle{tlsBundle}
@@ -8554,6 +8557,15 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 	jobStatus := result.GetStatus()
 
+	capacityCause := result.GetOutputs()[mist.ProcessingResultRetryCause]
+	if jobStatus == "completed" || jobStatus == "failed" || (jobStatus == "retryable" && capacityCause != mist.ProcessingRetryCauseMemoryPressure && capacityCause != mist.ProcessingRetryCauseMemoryNodeTooSmall) {
+		defer func() {
+			if deliveryErr == nil {
+				NotifyProcessingCapacity(nodeID)
+			}
+		}()
+	}
+
 	// Chapter finalization jobs use an attempt-fenced string job_id
 	// ("chapter-finalize-v2-<attempt>-<chapter_id>")
 	// and have no row in foghorn.processing_jobs (its job_id is UUID). Route
@@ -8564,8 +8576,33 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		return
 	}
 
+	if raw := result.GetOutputs()[mist.ProcessingSourceProbeParam]; raw != "" {
+		var probe mist.ProcessingSourceProbe
+		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+			return fmt.Errorf("invalid source probe: %w", err)
+		}
+		if _, err := mist.DecodeProcessingSourceProbe(raw, probe.SourceKey); err != nil {
+			return err
+		}
+		tenant := strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID]))
+		if tenant == "" {
+			return fmt.Errorf("source probe update requires tenant_id")
+		}
+		n, err := foghorndb.New(db).UpdateProcessingSourceProbe(ctx, foghorndb.UpdateProcessingSourceProbeParams{JobID: result.GetJobId(), TenantID: tenant, NodeID: sql.NullString{String: nodeID, Valid: true}, SourceProbe: json.RawMessage(raw)})
+		if err != nil {
+			return fmt.Errorf("persist source probe: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+	}
+
 	switch jobStatus {
+	case "memory_released":
+		NotifyProcessingCapacity(nodeID)
+		return nil
 	case "cache_update":
+
 		artifactHash := result.GetOutputs()["artifact_hash"]
 		processesJSON := result.GetOutputs()["processes_json"]
 		if artifactHash != "" && processesJSON != "" {
@@ -8581,7 +8618,16 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 					return fmt.Errorf("invalid processing memory requirement %q", raw)
 				}
 			}
-			n, err := foghorndb.New(db).UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])),
+			reserved := int64(0)
+			if raw := result.GetOutputs()[mist.ProcessingReservedMemoryBytes]; raw != "" {
+				value, err := strconv.ParseInt(raw, 10, 64)
+				if err != nil || value < 0 {
+					return fmt.Errorf("invalid reserved processing memory %q", raw)
+				}
+				reserved = value
+			}
+
+			n, err := foghorndb.New(db).UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{MemoryReservedBytes: reserved, RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])),
 				JobID: result.GetJobId(), ArtifactHash: sql.NullString{String: artifactHash, Valid: true},
 				ProcessesJson: sql.NullString{String: processesJSON, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
 			})
@@ -8596,6 +8642,8 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			if onProcessConfigCacheUpdate != nil {
 				onProcessConfigCacheUpdate(artifactHash, processesJSON)
 			}
+			NotifyProcessingCapacity(nodeID)
+			NotifyCatalogDirty()
 			logger.WithField("artifact_hash", artifactHash).Info("Updated process config for Livepeer fallback")
 		}
 		return
@@ -8886,9 +8934,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		return failProcessingJobOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
 
 	case "retryable":
-		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseInsufficientMemory {
-			return failProcessingJobOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
-		}
+
 		if cause := result.GetOutputs()[mist.ProcessingResultRetryCause]; cause == mist.ProcessingRetryCauseMemoryPressure || cause == mist.ProcessingRetryCauseMemoryNodeTooSmall {
 			return requeueCapacityDeferredProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields, result.GetOutputs())
 		}
@@ -8909,6 +8955,10 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 const ProcessingMaxRetries = 3
 
 func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, reportingNode string, logger logging.Logger, fields logging.Fields, outputs map[string]string) error {
+	if strings.TrimSpace(outputs[mist.ProcessingResultTenantID]) == "" {
+		return fmt.Errorf("processing capacity deferral requires tenant_id")
+	}
+
 	required := int64(0)
 	if raw := outputs[mist.ProcessingRequiredMemoryBytes]; raw != "" {
 		var parseErr error
@@ -8923,13 +8973,28 @@ func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, re
 			return fmt.Errorf("invalid processing memory policy: %w", parseErr)
 		}
 	}
-	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, WaitWindow: ProcessingProgressStallTimeout.String(), ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: sql.NullString{String: reportingNode, Valid: true}})
+	tooSmall := outputs[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseMemoryNodeTooSmall
+	var budget *uint64
+	if raw := outputs[mist.ProcessingNodeMemoryBudget]; raw != "" {
+		value, parseErr := strconv.ParseUint(raw, 10, 64)
+		if parseErr != nil {
+			return fmt.Errorf("invalid processing memory budget %q", raw)
+		}
+		budget = &value
+	}
+
+	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{NodeTooSmall: tooSmall, RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: reportingNode})
 	if err != nil {
 		return fmt.Errorf("defer processing for memory capacity: %w", err)
 	}
 	if n == 0 {
-		return failProcessingJobOnDB(ctx, db, jobID, "processing memory remained busy beyond the processing wait window", reportingNode, strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), logger, fields)
+		logger.WithFields(fields).Warn("Ignoring memory deferral from a job not assigned to this tenant and node")
+		return nil
 	}
+	if budget != nil {
+		state.DefaultManager().SetNodeProcessingMemoryBudget(reportingNode, *budget)
+	}
+
 	NotifyCatalogDirty()
 	logger.WithFields(fields).Info("Processing job returned to queue while memory is occupied")
 	return nil

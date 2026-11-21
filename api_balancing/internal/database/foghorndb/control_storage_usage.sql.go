@@ -34,9 +34,9 @@ SELECT tenant_id::text AS tenant_id, artifact_type,
        SUM(file_count)::bigint AS file_count
 FROM (
     SELECT a.tenant_id, a.artifact_type,
-           CASE WHEN a.sync_status = 'synced' THEN COALESCE(a.size_bytes, 0) ELSE 0 END
+           CASE WHEN a.sync_status = 'synced' AND NOT (a.artifact_type = 'vod' AND a.status IN ('queued', 'processing') AND COALESCE(a.active_object_key = v.original_s3_key, false)) THEN COALESCE(a.size_bytes, 0) ELSE 0 END
              + COALESCE(v.original_size_bytes, 0) AS billed_bytes,
-           CASE WHEN a.sync_status = 'synced' THEN 1 ELSE 0 END
+           CASE WHEN a.sync_status = 'synced' AND NOT (a.artifact_type = 'vod' AND a.status IN ('queued', 'processing') AND COALESCE(a.active_object_key = v.original_s3_key, false)) THEN 1 ELSE 0 END
              + CASE WHEN v.original_size_bytes IS NOT NULL THEN 1 ELSE 0 END AS file_count
     FROM foghorn.artifacts a
     LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash

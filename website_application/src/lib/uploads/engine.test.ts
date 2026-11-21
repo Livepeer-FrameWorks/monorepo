@@ -38,6 +38,7 @@ describe("createUploadEngine", () => {
     };
     const engine = createUploadEngine({
       uploadId: "u",
+      keepOriginal: false,
       file: f,
       partSize: 100,
       parts: descriptors(3),
@@ -66,6 +67,7 @@ describe("createUploadEngine", () => {
     expect(lastProgress && (lastProgress as { percent: number }).percent).toBe(100);
     await expect(store.get("u")).resolves.toMatchObject({
       uploadId: "u",
+      keepOriginal: false,
       parts: [
         expect.objectContaining({ partNumber: 1, status: "completed", etag: "etag-1" }),
         expect.objectContaining({ partNumber: 2, status: "completed", etag: "etag-2" }),

@@ -317,6 +317,7 @@ message ControlMessage {
     ProcessingJobRequest processing_job_request = 63;
     ProcessingJobResult processing_job_result = 64;
     ProcessingJobProgress processing_job_progress = 65;
+    ProcessingMemoryReservation processing_memory_reservation = 66;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
     // Session invalidation (Foghorn -> Helmsman for re-running USER_NEW
@@ -485,7 +486,8 @@ message StreamTranscodeDegraded {
   // Mist process type that failed ("Livepeer", "AV", ...).
   string failed_process_type = 3;
   // Number of replacement process configs Helmsman returned; zero means the
-  // failed process stays disabled with no replacement.
+  // failed process stays disabled. Upload jobs admit and start their local
+  // replacement separately.
   int32 replacement_count = 4;
 }
 
@@ -2691,6 +2693,11 @@ message NodeLifecycleUpdate {
   uint64 egress_budget_bytes_per_sec = 60;
   BandwidthBudgetSource budget_source = 61;
   ObservedSource observed_source = 62;
+  // Effective Helmsman processing budget after host/container limits and headroom.
+  // Presence distinguishes a zero budget from a sidecar without this observation.
+  optional uint64 processing_memory_budget_bytes = 63;
+  // Older sidecars reported Mist KiB counters. Byte writers set this marker.
+  bool memory_metrics_are_bytes = 64;
 }
 
 // EdgeProvisionedConfig identifies the rendered edge config on a node:
@@ -3103,6 +3110,14 @@ message ProcessingClassCapacity {
   repeated string ready = 4;
 }
 
+// Node-wide queue protection, distinct from an active process reservation.
+// Version fences delayed updates and explicit clears within a control session.
+message ProcessingMemoryReservation {
+ string job_id = 1;
+ uint64 bytes = 2;
+ uint64 version = 3;
+}
+
 message NodeLimits {
   reserved 1;
   reserved "max_transcodes";
@@ -3298,6 +3313,7 @@ message ConfigSeed {
   // revocation withdraws Navigator DNS membership before credential cleanup.
   repeated TLSCertBundle tls_bundles = 26;
   NodeBandwidthCapacity capacity = 27;
+  ProcessingMemoryReservation processing_memory_reservation = 28;
 }
 
 message BalancerCapabilityUpdate {
