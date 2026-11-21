@@ -33,6 +33,8 @@ purser.mollie_balance_cursors 5
 foghorn.node_control_fence_counter 300
 foghorn.node_maintenance 300
 foghorn.node_lifecycle 300
+# One versioned reservation/clear fence per node, rather than one row per job.
+foghorn.processing_node_reservations 300
 foghorn.node_update_state 300
 foghorn.node_config_seeds 300
 foghorn.node_admissions 300

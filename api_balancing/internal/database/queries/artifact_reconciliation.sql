@@ -83,6 +83,27 @@ WHERE artifact_hash IN (
 );
 
 -- name: ListArtifactsForCatalogProjection :many
+WITH pending AS MATERIALIZED (
+    SELECT a.artifact_hash, a.artifact_type, a.tenant_id, a.storage_cluster_id,
+           a.has_thumbnails, a.size_bytes, a.duration_ms, a.duration_seconds,
+           a.tracks, a.sync_status, a.dtsh_synced, a.storage_location,
+           a.catalog_revision, a.catalog_synced_rev, a.status, a.retention_until,
+           a.error_message, a.thumbnail_serving_cluster_id, a.started_at, a.ended_at
+    FROM foghorn.artifacts a
+    WHERE a.tenant_id IS NOT NULL
+      AND a.origin_cluster_id = $2
+      AND (a.catalog_revision > a.catalog_synced_rev OR (a.artifact_type = 'dvr' AND a.catalog_revision > a.catalog_capture_times_synced_rev))
+      AND a.catalog_revision > a.catalog_quarantined_rev
+      AND (a.catalog_next_attempt_at IS NULL OR a.catalog_next_attempt_at <= NOW())
+    ORDER BY a.catalog_synced_rev ASC, a.catalog_revision ASC
+    LIMIT $1
+), waiting AS (
+    SELECT DISTINCT ON (j.tenant_id, j.artifact_hash) j.tenant_id, j.artifact_hash, j.wait_reason
+    FROM foghorn.processing_jobs j
+    JOIN pending selected ON selected.artifact_hash = j.artifact_hash AND selected.tenant_id = j.tenant_id
+    WHERE j.status = 'queued'
+    ORDER BY j.tenant_id, j.artifact_hash, j.created_at, j.job_id
+)
 SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text AS tenant_id,
        a.storage_cluster_id, a.has_thumbnails, a.size_bytes,
        COALESCE(a.duration_ms, a.duration_seconds * 1000) AS duration_ms,
@@ -91,18 +112,11 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text AS tenant_id,
        a.retention_until,
        a.error_message, a.thumbnail_serving_cluster_id,
        v.original_size_bytes, a.started_at, a.ended_at,
-       COALESCE((SELECT j.wait_reason FROM foghorn.processing_jobs j
-        WHERE j.artifact_hash=a.artifact_hash AND j.tenant_id=a.tenant_id AND j.status='queued'
-        ORDER BY j.created_at ASC LIMIT 1),'')::text AS processing_wait_reason
-FROM foghorn.artifacts a
+       COALESCE(waiting.wait_reason, '')::text AS processing_wait_reason
+FROM pending a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-WHERE a.tenant_id IS NOT NULL
-  AND a.origin_cluster_id = $2
-  AND (a.catalog_revision > a.catalog_synced_rev OR (a.artifact_type='dvr' AND a.catalog_revision > a.catalog_capture_times_synced_rev))
-  AND a.catalog_revision > a.catalog_quarantined_rev
-  AND (a.catalog_next_attempt_at IS NULL OR a.catalog_next_attempt_at <= NOW())
-ORDER BY catalog_synced_rev ASC, catalog_revision ASC
-LIMIT $1;
+LEFT JOIN waiting ON waiting.artifact_hash = a.artifact_hash AND waiting.tenant_id = a.tenant_id
+ORDER BY a.catalog_synced_rev ASC, a.catalog_revision ASC;
 
 -- name: AdvanceCatalogWatermark :exec
 UPDATE foghorn.artifacts
