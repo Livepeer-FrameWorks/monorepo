@@ -8,6 +8,11 @@ import (
 // Processing processes use code 1 for transient runtime failures. A signal
 // kill also says nothing about the source's validity, even with restart disabled.
 func retryableProcessingExit(evt ProcessExitEvent) bool {
+	// Livepeer exits have their own local fallback. Keeping them as resource
+	// failures would bypass that fallback before the queued exit is consumed.
+	if evt.ProcessType == "Livepeer" {
+		return false
+	}
 	var oom *processingOOMError
 	if errors.As(processingExitError(evt), &oom) {
 		return true
