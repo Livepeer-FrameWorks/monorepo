@@ -53,3 +53,22 @@ func TestUnknownControllerSnapshotKeepsMemoryReservation(t *testing.T) {
 		t.Fatal("unknown controller state released the running generation's reservation")
 	}
 }
+
+func TestIdleControllerReleasesExpiredProcessingMemory(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	const stream = "processing+idle-reservation"
+	if err := setProcessingProcessOverride(stream, processingSourceProbePolicy, "idle-reservation", time.Now().Add(-time.Minute), 256*memoryMiB); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorize":{"status":"OK"},"active_streams":null}`))
+	}))
+	t.Cleanup(server.Close)
+	reconcileProcessingOverridePersistence(server.URL, discardLog().Logger)
+	processingProcessOverridesMu.Lock()
+	defer processingProcessOverridesMu.Unlock()
+	if record, ok := processingOverrideRecords[stream]; ok {
+		t.Fatalf("idle controller retained expired processing memory: %d bytes", record.MemoryBytes)
+	}
+}
