@@ -49,6 +49,34 @@ describe("buildStreamInfoFromEndpoints", () => {
   });
 });
 
+it("keeps E-AC3 distinct from AC3 in playback capability labels", () => {
+  const endpoints: ContentEndpoints = {
+    primary: {
+      nodeId: "node",
+      protocol: "HLS",
+      url: "https://example.com/index.m3u8",
+      outputs: {
+        HLS: {
+          protocol: "HLS",
+          url: "https://example.com/index.m3u8",
+          capabilities: {
+            supportsSeek: true,
+            supportsQualitySwitch: false,
+            hasVideo: true,
+            hasAudio: true,
+            codecs: ["avc1.42E01E,ec-3"],
+          },
+        },
+      },
+    },
+    fallbacks: [],
+    metadata: { isLive: true },
+  };
+  expect(buildStreamInfoFromEndpoints(endpoints, "live")?.meta.tracks).toContainEqual(
+    expect.objectContaining({ type: "audio", codec: "EAC-3", codecstring: "ec-3" })
+  );
+});
+
 describe("client session URL stamping", () => {
   it("sets one idempotent query parameter without losing a fragment", () => {
     const once = withQueryParam("https://edge.test/view?tkn=1#frag", "fwsid", "attach-1");

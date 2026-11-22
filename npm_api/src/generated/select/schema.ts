@@ -2421,9 +2421,9 @@ export interface LiveNode {
     nodeId: Scalars['String']
     tenantId: Scalars['ID']
     cpuPercent: Scalars['Float']
-    /** Used memory in MiB (field name is historical). */
+    /** Used memory in bytes. */
     ramUsedBytes: Scalars['Float']
-    /** Total memory in MiB (field name is historical). */
+    /** Total memory in bytes. */
     ramTotalBytes: Scalars['Float']
     diskUsedBytes: Scalars['Float']
     diskTotalBytes: Scalars['Float']
@@ -10165,9 +10165,9 @@ export interface LiveNodeGenqlSelection{
     nodeId?: boolean | number
     tenantId?: boolean | number
     cpuPercent?: boolean | number
-    /** Used memory in MiB (field name is historical). */
+    /** Used memory in bytes. */
     ramUsedBytes?: boolean | number
-    /** Total memory in MiB (field name is historical). */
+    /** Total memory in bytes. */
     ramTotalBytes?: boolean | number
     diskUsedBytes?: boolean | number
     diskTotalBytes?: boolean | number

@@ -3765,11 +3765,11 @@ type LiveNode {
   tenantId: ID!
   cpuPercent: Float!
   """
-  Used memory in MiB (field name is historical).
+  Used memory in bytes.
   """
   ramUsedBytes: Float!
   """
-  Total memory in MiB (field name is historical).
+  Total memory in bytes.
   """
   ramTotalBytes: Float!
   diskUsedBytes: Float!

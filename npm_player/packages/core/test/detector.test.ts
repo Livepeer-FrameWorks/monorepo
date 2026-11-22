@@ -12,7 +12,6 @@ import {
   checkWebRTCCodecCompatibility,
   checkMSECodecCompatibility,
   WEBRTC_COMPATIBLE_CODECS,
-  WEBRTC_INCOMPATIBLE_CODECS,
 } from "../src/core/detector";
 
 // Save originals
@@ -542,6 +541,8 @@ describe("detector", () => {
 
 describe("Mist EAC-3 alias", () => {
   it("cannot negotiate E-AC3 as WebRTC audio", () => {
-    expect(WEBRTC_INCOMPATIBLE_CODECS.audio).toContain("EAC-3");
+    expect(checkWebRTCCodecCompatibility([{ type: "audio", codec: "EAC-3" }]).audioCompatible).toBe(
+      false
+    );
   });
 });

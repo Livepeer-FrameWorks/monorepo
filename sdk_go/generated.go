@@ -72088,9 +72088,9 @@ type InfrastructureNodeDefaultFieldsLiveStateLiveNode struct {
 	NodeId     string  `json:"nodeId"`
 	TenantId   string  `json:"tenantId"`
 	CpuPercent float64 `json:"cpuPercent"`
-	// Used memory in MiB (field name is historical).
+	// Used memory in bytes.
 	RamUsedBytes float64 `json:"ramUsedBytes"`
-	// Total memory in MiB (field name is historical).
+	// Total memory in bytes.
 	RamTotalBytes  float64          `json:"ramTotalBytes"`
 	DiskUsedBytes  float64          `json:"diskUsedBytes"`
 	DiskTotalBytes float64          `json:"diskTotalBytes"`
@@ -72394,9 +72394,9 @@ type InfrastructureNodeInNodeDefaultFieldsLiveStateLiveNode struct {
 	NodeId     string  `json:"nodeId"`
 	TenantId   string  `json:"tenantId"`
 	CpuPercent float64 `json:"cpuPercent"`
-	// Used memory in MiB (field name is historical).
+	// Used memory in bytes.
 	RamUsedBytes float64 `json:"ramUsedBytes"`
-	// Total memory in MiB (field name is historical).
+	// Total memory in bytes.
 	RamTotalBytes  float64          `json:"ramTotalBytes"`
 	DiskUsedBytes  float64          `json:"diskUsedBytes"`
 	DiskTotalBytes float64          `json:"diskTotalBytes"`

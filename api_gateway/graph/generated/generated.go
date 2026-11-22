@@ -33229,7 +33229,7 @@ type NodeMetric implements Node {
   # Resource usage
   cpuUsage: Float!
 
-  # Resource metrics (RAM in MiB; disk/shm in bytes)
+  # Resource metrics (RAM, disk and shared memory in bytes)
   "Total memory in bytes."
   memoryTotal: Float
   "Used memory in bytes."
@@ -33501,9 +33501,9 @@ type LiveNode {
 
   # Resources
   cpuPercent: Float!
-  "Used memory in MiB (field name is historical)."
+  "Used memory in bytes."
   ramUsedBytes: Float!
-  "Total memory in MiB (field name is historical)."
+  "Total memory in bytes."
   ramTotalBytes: Float!
   diskUsedBytes: Float!
   diskTotalBytes: Float!

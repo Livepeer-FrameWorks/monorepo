@@ -513,7 +513,8 @@ function mapCodecLabel(codecstr: string): string {
   if (c.startsWith("vp8")) return "VP8";
   if (c.startsWith("mp4a")) return "AAC";
   if (c.includes("opus")) return "Opus";
-  if (c.includes("ec-3") || c.includes("ac3")) return "AC3";
+  if (["ec-3", "eac-3", "e-ac3", "eac3", "ec3"].includes(c)) return "EAC-3";
+  if (c === "ac-3" || c === "ac3") return "AC3";
   return codecstr;
 }
 

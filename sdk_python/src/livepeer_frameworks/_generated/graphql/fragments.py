@@ -6413,15 +6413,13 @@ class InfrastructureNodeDefaultLiveState(BaseModel):
     tenant_id: str = Field(alias="tenantId")
     cpu_percent: float = Field(alias="cpuPercent")
     ram_used_bytes: float = Field(
-        alias="ramUsedBytes",
-        description="Used memory in MiB (field name is historical).",
+        alias="ramUsedBytes", description="Used memory in bytes."
     )
-    "Used memory in MiB (field name is historical)."
+    "Used memory in bytes."
     ram_total_bytes: float = Field(
-        alias="ramTotalBytes",
-        description="Total memory in MiB (field name is historical).",
+        alias="ramTotalBytes", description="Total memory in bytes."
     )
-    "Total memory in MiB (field name is historical)."
+    "Total memory in bytes."
     disk_used_bytes: float = Field(alias="diskUsedBytes")
     disk_total_bytes: float = Field(alias="diskTotalBytes")
     up_speed: float = Field(alias="upSpeed")
@@ -6566,15 +6564,13 @@ class InfrastructureNodeInNodeDefaultLiveState(BaseModel):
     tenant_id: str = Field(alias="tenantId")
     cpu_percent: float = Field(alias="cpuPercent")
     ram_used_bytes: float = Field(
-        alias="ramUsedBytes",
-        description="Used memory in MiB (field name is historical).",
+        alias="ramUsedBytes", description="Used memory in bytes."
     )
-    "Used memory in MiB (field name is historical)."
+    "Used memory in bytes."
     ram_total_bytes: float = Field(
-        alias="ramTotalBytes",
-        description="Total memory in MiB (field name is historical).",
+        alias="ramTotalBytes", description="Total memory in bytes."
     )
-    "Total memory in MiB (field name is historical)."
+    "Total memory in bytes."
     disk_used_bytes: float = Field(alias="diskUsedBytes")
     disk_total_bytes: float = Field(alias="diskTotalBytes")
     up_speed: float = Field(alias="upSpeed")
