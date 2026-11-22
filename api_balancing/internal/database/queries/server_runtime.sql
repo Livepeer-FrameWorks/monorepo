@@ -31,7 +31,7 @@ UPDATE foghorn.artifacts SET dtsh_status = 'failed', dtsh_failure_count = dtsh_f
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND dtsh_sync_request_id = sqlc.narg(dtsh_sync_request_id) AND dtsh_sync_node_id = sqlc.narg(dtsh_sync_node_id) AND status NOT IN ('deleted', 'expired', 'aborted') AND tenant_id::text = sqlc.arg(tenant_id) RETURNING COALESCE(sync_object_key, '');
 -- name: UpdateProcessingJobCache :execrows
 WITH admitted AS (
-UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,sqlc.arg(required_memory_bytes)::bigint), memory_reserved_bytes=sqlc.arg(memory_reserved_bytes)::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.memory_floor_bytes,sqlc.arg(required_memory_bytes)::bigint), memory_reserved_bytes=sqlc.arg(memory_reserved_bytes)::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, memory_wait_started_at=NULL, memory_wait_ms=0, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
 AND job.tenant_id::text = NULLIF(sqlc.arg(tenant_id)::text,'')
  RETURNING job.artifact_hash,job.tenant_id
 )

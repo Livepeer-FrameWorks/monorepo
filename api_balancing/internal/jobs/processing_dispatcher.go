@@ -107,7 +107,7 @@ type GatewayResolver interface {
 
 type processingJob struct {
 	RequiredMemoryBytes int64
-	MemoryRejectedNodes []string
+	MemoryFloorBytes    int64
 	WaitReason          sql.NullString
 	WaitStartedAt       sql.NullTime
 	SourceProbe         sql.NullString
@@ -302,7 +302,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	}
 	for _, row := range rows {
 		job := processingJob{
-			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash, RequiredMemoryBytes: row.RequiredMemoryBytes, MemoryRejectedNodes: row.MemoryRejectedNodes, WaitReason: row.WaitReason, WaitStartedAt: row.WaitStartedAt, SourceProbe: row.SourceProbe, CreatedAt: row.CreatedAt, UploadedAt: row.UploadCreatedAt,
+			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash, RequiredMemoryBytes: row.RequiredMemoryBytes, MemoryFloorBytes: row.MemoryFloorBytes, WaitReason: row.WaitReason, WaitStartedAt: row.WaitStartedAt, SourceProbe: row.SourceProbe, CreatedAt: row.CreatedAt, UploadedAt: row.UploadCreatedAt,
 			ArtifactType: sql.NullString{String: row.ArtifactType, Valid: row.ArtifactType != ""}, JobType: row.JobType,
 			InputCodec: row.InputCodec, OutputProfiles: row.OutputProfiles,
 			Status: row.Status, RetryCount: int(row.RetryCount.Int32), S3URL: row.S3Url,
@@ -479,8 +479,9 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 		internalName = job.InternalName.String
 	}
 
-	if job.RequiredMemoryBytes > 0 {
-		params[mist.ProcessingRequiredMemoryBytes] = fmt.Sprint(job.RequiredMemoryBytes)
+	delete(params, mist.ProcessingRequiredMemoryBytes)
+	if job.MemoryFloorBytes > 0 {
+		params[mist.ProcessingRequiredMemoryBytes] = fmt.Sprint(job.MemoryFloorBytes)
 	}
 	params[mist.ProcessingSourceKeyParam] = mist.ProcessingSourceIdentity(job.TenantID, job.JobID, artifactHash, job.SourceURL.String+"\x00"+job.S3URL.String+"\x00"+job.SourceParams.String)
 	if job.SourceProbe.Valid {

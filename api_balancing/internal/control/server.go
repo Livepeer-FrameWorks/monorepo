@@ -8975,6 +8975,14 @@ func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, re
 			return fmt.Errorf("invalid processing memory requirement %q", raw)
 		}
 	}
+	floor := int64(0)
+	if raw := outputs[mist.ProcessingOOMRequiredMemoryBytes]; raw != "" {
+		var parseErr error
+		floor, parseErr = strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || floor <= 0 || outputs[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryPressure {
+			return fmt.Errorf("invalid processing OOM floor %q", raw)
+		}
+	}
 	policy := outputs[mist.ProcessingMemoryPolicy]
 	if policy != "" {
 		if _, parseErr := mist.ProcessingMemoryDefaults(policy, 1); parseErr != nil {
@@ -8991,7 +8999,7 @@ func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, re
 		budget = &value
 	}
 
-	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{NodeUnavailable: outputs[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseNodeUnavailable, NodeTooSmall: tooSmall, RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: reportingNode})
+	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{NodeUnavailable: outputs[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseNodeUnavailable, NodeTooSmall: tooSmall, RequiredMemoryBytes: required, MemoryFloorBytes: floor, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: reportingNode})
 	if err != nil {
 		return fmt.Errorf("defer processing for memory capacity: %w", err)
 	}

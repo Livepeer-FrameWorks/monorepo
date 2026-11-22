@@ -162,6 +162,7 @@ type Querier interface {
 	DeferFederatedArtifactPointerPurgeClaim(ctx context.Context, arg DeferFederatedArtifactPointerPurgeClaimParams) (int64, error)
 	// Returns a claimed job no node can run to the queue and keeps it out of
 	// ClaimQueuedProcessingJobs until next_attempt_at.
+	// Fairness counts time actually blocked by memory, separately from routing waits.
 	DeferUnroutableProcessingJob(ctx context.Context, arg DeferUnroutableProcessingJobParams) error
 	DeleteArtifactNode(ctx context.Context, arg DeleteArtifactNodeParams) error
 	DeleteArtifactNodeIfNotNewer(ctx context.Context, arg DeleteArtifactNodeIfNotNewerParams) (string, error)

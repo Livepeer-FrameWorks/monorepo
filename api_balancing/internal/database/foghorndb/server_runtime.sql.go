@@ -841,7 +841,7 @@ func (q *Queries) UpdateCompletedVODMetadata(ctx context.Context, arg UpdateComp
 
 const updateProcessingJobCache = `-- name: UpdateProcessingJobCache :execrows
 WITH admitted AS (
-UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,$5::bigint), memory_reserved_bytes=$6::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.memory_floor_bytes,$5::bigint), memory_reserved_bytes=$6::bigint, memory_admitted_at=NOW() AT TIME ZONE 'UTC', wait_reason=NULL, wait_started_at=NULL, memory_wait_started_at=NULL, memory_wait_ms=0, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
 AND job.tenant_id::text = NULLIF($7::text,'')
  RETURNING job.artifact_hash,job.tenant_id
 )

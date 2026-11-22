@@ -300,7 +300,7 @@ func TestProcessingMemoryRequirementAndWaiting_RealPG(t *testing.T) {
 	var required int64
 	var excluded, waitRecorded bool
 	var stored, status string
-	if err := conn.QueryRow(`SELECT required_memory_bytes,processes_json,status,memory_rejected_nodes=ARRAY['edge-1']::TEXT[],wait_started_at IS NOT NULL FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&required, &stored, &status, &excluded, &waitRecorded); err != nil {
+	if err := conn.QueryRow(`SELECT required_memory_bytes,processes_json,status,wait_reason='fitting_node_unavailable',wait_started_at IS NOT NULL FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&required, &stored, &status, &excluded, &waitRecorded); err != nil {
 		t.Fatal(err)
 	}
 	if required != 2147483648 || stored != policy || status != "queued" || !excluded || !waitRecorded {

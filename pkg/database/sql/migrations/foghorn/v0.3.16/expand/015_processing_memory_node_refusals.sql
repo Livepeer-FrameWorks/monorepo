@@ -1,4 +1,6 @@
-ALTER TABLE foghorn.processing_jobs ADD COLUMN IF NOT EXISTS memory_rejected_nodes TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE foghorn.processing_jobs
+ ADD COLUMN IF NOT EXISTS memory_wait_started_at TIMESTAMP,
+ ADD COLUMN IF NOT EXISTS memory_wait_ms BIGINT NOT NULL DEFAULT 0;
 
 CREATE SEQUENCE IF NOT EXISTS foghorn.processing_reservation_revision;
 -- Node revision fences outlive jobs. History purge clears their owner and bytes

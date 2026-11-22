@@ -88,12 +88,13 @@ func TestAdmissionInfrastructureOutagePreservesRetries_RealPG(t *testing.T) {
 			t.Fatal(err)
 		}
 		var status, reason string
-		var retries, rejected int
-		if err = conn.QueryRow(`SELECT status,COALESCE(wait_reason,''),retry_count,cardinality(memory_rejected_nodes) FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &reason, &retries, &rejected); err != nil {
+		var retries int
+		var required int64
+		if err = conn.QueryRow(`SELECT status,COALESCE(wait_reason,''),retry_count,required_memory_bytes FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &reason, &retries, &required); err != nil {
 			t.Fatal(err)
 		}
-		if status != "queued" || reason != "fitting_node_unavailable" || retries != 0 || rejected != 0 {
-			t.Fatalf("outage spent tenant retries or rejected node: status=%s reason=%s retries=%d rejected=%d", status, reason, retries, rejected)
+		if status != "queued" || reason != "fitting_node_unavailable" || retries != 0 || required != 0 {
+			t.Fatalf("outage spent tenant retries or rejected node: status=%s reason=%s retries=%d required=%d", status, reason, retries, required)
 		}
 	}
 }

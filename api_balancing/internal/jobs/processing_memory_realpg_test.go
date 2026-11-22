@@ -91,7 +91,7 @@ func TestProcessingUploadDeadlineAndDeletedArtifactRecovery_RealPG(t *testing.T)
 
 func TestProcessingMemoryMigrationReruns_RealPG(t *testing.T) {
 	conn := startRealPGForCleanup(t)
-	if _, err := conn.Exec(`ALTER TABLE foghorn.processing_jobs DROP COLUMN required_memory_bytes CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_started_at;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_reason CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN source_probe;ALTER TABLE foghorn.processing_jobs DROP COLUMN memory_rejected_nodes`); err != nil {
+	if _, err := conn.Exec(`ALTER TABLE foghorn.processing_jobs DROP COLUMN required_memory_bytes CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN memory_floor_bytes;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_started_at;ALTER TABLE foghorn.processing_jobs DROP COLUMN wait_reason CASCADE;ALTER TABLE foghorn.processing_jobs DROP COLUMN source_probe;ALTER TABLE foghorn.processing_jobs DROP COLUMN memory_wait_started_at;ALTER TABLE foghorn.processing_jobs DROP COLUMN memory_wait_ms`); err != nil {
 		t.Fatal(err)
 	}
 	data, err := dbsql.Content.ReadFile("migrations/foghorn/v0.3.16/expand/014_processing_memory_placement.sql")

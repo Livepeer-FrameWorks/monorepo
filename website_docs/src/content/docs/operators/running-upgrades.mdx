@@ -568,6 +568,11 @@ stop pending on older edges rather than accepting an unsafe fallback. Upgrade th
 v0.3.16 services before moving applications to SDK line 0.6. SDK lines 0.3–0.5 remain frozen and
 supported; deprecated fields used by those lines remain in the schema.
 
+Upgrade the platform services, including Foghorn's node telemetry consumer, before upgrading
+edge bundles. Helmsman reports RAM in bytes in this release; an older platform consumer
+interprets those reports as KiB and overstates node memory by 1024. The combined codec and
+orientation Mist build ships inside the edge bundle.
+
 Apply this release's migrations from each database's `v0.3.16/` directory through the normal CLI
 expand/postdeploy flow. The release catalog blocks rollback of Commodore and Quartermaster
 past this version because the extra stream-key table and cluster/tenant bandwidth columns are

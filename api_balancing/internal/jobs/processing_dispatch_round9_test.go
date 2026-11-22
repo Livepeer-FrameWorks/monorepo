@@ -37,10 +37,10 @@ func TestR9DispatchLoadsInventoryOncePerCluster(t *testing.T) {
 	registeredProcessingNodes = func(_ context.Context, id string) ([]string, error) { calls[id]++; return nil, nil }
 	clusterAccessibleForTenant = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() { registeredProcessingNodes = oldNodes; clusterAccessibleForTenant = oldAccess })
-	rows := sqlmock.NewRows([]string{"job_id", "tenant_id", "artifact_hash", "artifact_type", "job_type", "input_codec", "output_profiles", "status", "retry_count", "s3_url", "source_url", "source_params", "preferred_node_id", "processes_json", "internal_name", "stream_id", "stream_internal_name", "durable_backend_local", "origin_cluster_id", "required_memory_bytes", "memory_rejected_nodes", "wait_reason", "wait_started_at", "source_probe", "created_at", "upload_created_at"})
+	rows := sqlmock.NewRows([]string{"job_id", "tenant_id", "artifact_hash", "artifact_type", "job_type", "input_codec", "output_profiles", "status", "retry_count", "s3_url", "source_url", "source_params", "preferred_node_id", "processes_json", "internal_name", "stream_id", "stream_internal_name", "durable_backend_local", "origin_cluster_id", "required_memory_bytes", "memory_floor_bytes", "wait_reason", "wait_started_at", "source_probe", "created_at", "upload_created_at"})
 	for i, cluster := range []string{"a", "a", "b"} {
 		id := []string{"job-a1", "job-a2", "job-b1"}[i]
-		rows.AddRow(id, "tenant", nil, "", "process", nil, nil, "dispatched", 0, nil, nil, nil, nil, nil, nil, "", nil, false, cluster, 0, "{}", nil, nil, nil, nil, nil)
+		rows.AddRow(id, "tenant", nil, "", "process", nil, nil, "dispatched", 0, nil, nil, nil, nil, nil, nil, "", nil, false, cluster, 0, 0, nil, nil, nil, nil, nil)
 	}
 	mock.ExpectQuery("WITH claimed AS").WillReturnRows(rows)
 	for _, id := range []string{"job-a1", "job-a2", "job-b1"} {
