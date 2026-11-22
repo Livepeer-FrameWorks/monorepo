@@ -198,6 +198,12 @@ channels at stereo and preserves mono.
 The pinned FFmpeg build includes the MPEG-4 Part 2, MPEG-1/2, AC3, E-AC3 and MP2 decoders,
 and local AV and thumbnails select the source decoder explicitly, including HEVC.
 
+Existing `.dtsh` indexes rebuild lazily when their source is next opened. MP4 cache version 4
+and Matroska version 4 retain the corrected sample timing, cue durations and display metadata;
+accepting an older index would retain the old interpretation. MP4 rebuilds read sample tables,
+while a Matroska rebuild reads the whole source object. Previously unopened library files are
+not scanned, and a successfully saved rebuilt index is reused on later requests.
+
 SubRip and WebVTT Matroska cues and MP4 tx3g cues carry their explicit duration through DTSC
 and recording. Matroska writes subtitle BlockGroups with BlockDuration; WebM excludes subtitle
 tracks. Native transport input detects 188-byte TS or 192-byte M2TS framing and indexes physical
