@@ -771,6 +771,7 @@ verify-stack-fixtures: test-stack-bootstrap-results
 	python3 scripts/stack/test_node_audience.py
 	python3 scripts/stack/test_edge_group_lifecycle.py
 	python3 scripts/stack/test_processing_scenario_guards.py
+	python3 scripts/stack/test_rotate_live_mkv.py
 	python3 scripts/stack/test_native_source.py
 	bash scripts/stack/test_storage_pressure_fixture.sh
 	bash scripts/stack/test_lib.sh

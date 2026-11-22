@@ -209,6 +209,11 @@ The codec and orientation changes ship together in Mist. Validate the combined s
 remotedev stack before publishing Mist. The v0.3.16 platform release workflow resolves the
 published Mist once and bundles it into the edge artifacts and release manifest. No manual Mist
 pin or separate platform release is needed. Stack scenarios 78 and 79 are required validation.
+Scenario 79 also pushes a live Matroska source with a clockwise 90-degree projection. It requires
+`source_rotated` routing for the active ingest runtime and upright HLS renditions and decoded
+pixels through every Foghorn replica. The live publisher uses the isolated Mist HTTP listener
+on the stack and the public edge HTTPS endpoint for a requested deployed smoke run;
+`STACK_LIVE_MKV_INGEST_URL` can override that endpoint.
 
 1. `CreateVodUpload` in `api_balancing/internal/grpc/server.go` creates the S3 multipart,
    mints/accepts the `vod` `artifact_hash`, and inserts the artifact row

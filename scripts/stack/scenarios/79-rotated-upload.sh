@@ -177,4 +177,48 @@ if [ -n "$id" ]; then
  check 'mirror-only cleanup accepted' json_has "$deleted" '.data.deleteVodAsset.__typename=="DeleteSuccess" and .data.deleteVodAsset.success'
 fi
 
+
+# A push remains live while the replacement ladder is selected and served.
+if [ "${STACK_TARGET:-stack}" = staging ]; then
+  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-https://$EDGE_A_HOST}
+else
+  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-http://$EDGE_A_HOST:8080}
+fi
+live_sid='' live_pub=''
+cleanup_live_rotation() {
+  if [ -n "$live_pub" ]; then
+    kill -TERM "$live_pub" 2>/dev/null || true
+    wait "$live_pub" 2>/dev/null || true
+  fi
+  [ -z "$live_sid" ] || delete_stream "$live_sid"
+}
+trap cleanup_live_rotation EXIT
+live=$(create_stream "stack-live-rotation-$(date +%s)" false INHERIT)
+live_sid=$(jq -r '.id // empty' <<<"$live")
+live_key=$(jq -r '.streamKey // empty' <<<"$live")
+live_uuid=$(jq -r '.streamId // empty' <<<"$live")
+live_playback=$(jq -r '.playbackId // empty' <<<"$live")
+if [ -z "$live_sid" ] || [ -z "$live_key" ] || [ -z "$live_uuid" ] || [ -z "$live_playback" ]; then
+  fail 'create rotated live MKV stream'
+else
+  live_internal=$(internal_name_of "$live_uuid")
+  live_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  python3 "$STACK_LIB_DIR/rotate_live_mkv.py" "$work/coded-landscape.mp4" \
+    "${live_ingest%/}/$live_key.mkv" > "$work/live-publisher.log" 2>&1 &
+  live_pub=$!
+  live_rotation_routed() {
+    local quoted rows runtime
+    kill -0 "$live_pub" 2>/dev/null || return 2
+    runtime=$(pg "$FOGHORN_A_DB" "SELECT runtime_name FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name='$live_internal' AND ended_at IS NULL AND projection_state='active' ORDER BY started_at DESC LIMIT 1") || return 1
+    [ -n "$runtime" ] || return 1
+    quoted=$(jq -cn --arg stream "$runtime" '$stream') || return 1
+    rows=$(log_json "$live_started" "select(.routing==\"source_rotated\" and (.stream_name // .stream // \"\")==$quoted)" edge edge-b) || return 1
+    [ -n "$rows" ]
+  }
+  if eventually 90 'live MKV routes rotation to local processing' live_rotation_routed; then
+    every_replica 'live rotated MKV advertises upright renditions' "$live_playback" portrait_hls
+    every_replica 'live rotated MKV serves upright pixels' "$live_playback" upright_playback
+  fi
+fi
+
 finish
