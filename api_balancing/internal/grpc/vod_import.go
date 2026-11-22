@@ -199,7 +199,7 @@ func importContentType(format string) string {
 		return "video/x-matroska"
 	case "webm":
 		return "video/webm"
-	case "ts":
+	case "ts", "m2ts", "mts":
 		return "video/mp2t"
 	default:
 		return "video/mp4"

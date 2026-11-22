@@ -52,7 +52,7 @@ func contentTypeForFile(file string) string {
 	switch ext {
 	case ".m3u8":
 		return "application/vnd.apple.mpegurl"
-	case ".ts":
+	case ".ts", ".m2ts", ".mts":
 		return "video/mp2t"
 	case ".mp4":
 		return "video/mp4"
