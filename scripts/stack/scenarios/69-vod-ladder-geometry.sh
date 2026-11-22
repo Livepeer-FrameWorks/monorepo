@@ -17,14 +17,11 @@ gateway_state() {
 gateway_absent() {
   [ "$(gateway_state)" != healthy ] && [ "$(date +%s)" -ge "$DISCOVERY_DRAIN_AT" ]
 }
-GATEWAY_HEALTHY_AT=0
 gateway_present() {
-  local now
-  now=$(date +%s)
-  if [ "$(gateway_state)" != healthy ]; then GATEWAY_HEALTHY_AT=0; return 1; fi
-  [ "$GATEWAY_HEALTHY_AT" != 0 ] || GATEWAY_HEALTHY_AT=$now
-  # Cover the Foghorn positive discovery cache and the consumer's next refresh.
-  [ "$now" -ge "$((GATEWAY_HEALTHY_AT + 65))" ]
+  [ "$(gateway_state)" = healthy ] || return 1
+  # The gateway's health endpoint reports the pool used by actual selection.
+  curl -fsS --connect-timeout 2 --max-time 5 "http://$GATEWAY:8935/healthz" |
+    jq -e '(.orchestrators | type)=="number" and .orchestrators>0' >/dev/null
 }
 orchestrator_present() {
   stack_running "$ORCHESTRATOR" &&
@@ -82,8 +79,7 @@ for path in livepeer local fallback; do
         docker inspect --format '{{json .State}}' "$(docker compose -p "$COMPOSE_PROJECT_NAME" ps --all -q "$ORCHESTRATOR")" >&2
         finish
       fi
-      GATEWAY_HEALTHY_AT=0
-      eventually 120 "Livepeer gateway available" gateway_present || finish
+            eventually 120 "Livepeer gateway available" gateway_present || finish
       ;;
     local)
       stack_ctl stop "$GATEWAY" || { fail "stop gateway"; finish; }
@@ -93,8 +89,7 @@ for path in livepeer local fallback; do
       ;;
     fallback)
       stack_ctl start "$GATEWAY" || { fail "start gateway"; finish; }
-      GATEWAY_HEALTHY_AT=0
-      eventually 120 "gateway registered for Livepeer-to-local uploads" gateway_present || finish
+            eventually 120 "gateway registered for Livepeer-to-local uploads" gateway_present || finish
       stack_ctl stop "$ORCHESTRATOR" || { fail "stop orchestrator"; finish; }
       ;;
   esac

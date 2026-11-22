@@ -7,11 +7,13 @@
 need ffmpeg ffprobe jq curl python3 || finish
 
 no_upload_degradation() {
-  local quoted rows evidence hash
+  local quoted rows evidence foghorn_evidence hash
   hash=$(jq -cn --arg hash "$1" '$hash') || return 1
   evidence=$(log_json "$2" "select(.artifact_hash==$hash)" edge edge-b) || return 1
   [ -n "$evidence" ] || return 1
   quoted=$(jq -cn --arg stream "processing+$1" '$stream') || return 1
+  foghorn_evidence=$(log_json "$2" "select(.artifact_hash==$hash or .stream==$quoted)" foghorn foghorn-2 foghorn-b foghorn-b-2) || return 1
+  [ -n "$foghorn_evidence" ] || return 1
   rows=$(log_json "$2" "select(.stream==$quoted and (.msg==\"Stream transcode degraded to local processing\" or .msg==\"Stream transcode failed; local replacement awaits job admission\" or .msg==\"Stream transcode failed; no local replacement was admitted\"))" foghorn foghorn-2 foghorn-b foghorn-b-2) || return 1
   [ -z "$rows" ]
 }
