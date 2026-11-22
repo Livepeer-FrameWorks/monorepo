@@ -42,7 +42,7 @@ func TestDVRAndThumbnailCutoffsPreserveElapsedTime_RealPG(t *testing.T) {
 			if err != nil || count != 1 {
 				t.Fatalf("zone %d changed thumbnail cutoff: count=%d err=%v", offset, count, err)
 			}
-			if _, err := conn.Exec(`UPDATE foghorn.thumbnail_task_assignment SET status='published' WHERE tenant_id=$1`, tenant); err != nil {
+			if _, err := conn.Exec(`UPDATE foghorn.thumbnail_task_assignment SET status='published',publish_lease_token='utc-test' WHERE tenant_id=$1`, tenant); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{"0", "1"} {
