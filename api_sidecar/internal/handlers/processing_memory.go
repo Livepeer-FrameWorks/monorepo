@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"frameworks/api_sidecar/internal/appconfig"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
@@ -387,6 +389,16 @@ func releaseStoppedProcessingMemory(stream, job string) error {
 }
 
 func notifyProcessingMemoryReleased(job string) {
+	log := logger
+	if log == nil {
+		log = logrus.New()
+	}
+	client := mist.NewClient(log, appconfig.MistClient())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.NotifyProcessingCapacityReleased(ctx); err != nil && logger != nil {
+		logger.WithError(err).Debug("Local live replacements will use their admission retry timer")
+	}
 	if err := control.SendProcessingMemoryReleased(job); err != nil && logger != nil {
 		logger.WithError(err).Warn("Could not announce released processing memory")
 	}

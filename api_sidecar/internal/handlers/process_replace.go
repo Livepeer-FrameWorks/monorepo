@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,6 +177,20 @@ func HandleProcessReplace(c *gin.Context) {
 
 	replacement, err = admitLiveProcessReplacement(evt, replacement)
 	if err != nil {
+		var capacity *processingCapacityError
+		if errors.As(err, &capacity) && !capacity.nodeTooSmall {
+			incMistWebhook("PROCESS_REPLACE", "admission_waiting")
+			logger.WithError(err).WithFields(logging.Fields{"stream": evt.StreamName, "wait_reason": "memory"}).Info("PROCESS_REPLACE: local ladder waits for memory; admission will be retried")
+			c.JSON(http.StatusOK, gin.H{"wait_reason": "memory", "retry_after_ms": 1000})
+			return
+		}
+		var admission *processingAdmissionError
+		if errors.As(err, &admission) {
+			incMistWebhook("PROCESS_REPLACE", "admission_waiting")
+			logger.WithError(err).WithFields(logging.Fields{"stream": evt.StreamName, "wait_reason": "node_unavailable"}).Warn("PROCESS_REPLACE: local ladder waits for node inventory; admission will be retried")
+			c.JSON(http.StatusOK, gin.H{"wait_reason": "node_unavailable", "retry_after_ms": 1000})
+			return
+		}
 		evt.ReplacementCount = 0
 		RouteProcessReplace(evt)
 		incMistWebhook("PROCESS_REPLACE", "admission_refused")

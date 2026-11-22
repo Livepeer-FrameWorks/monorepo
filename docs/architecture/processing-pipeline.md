@@ -702,3 +702,18 @@ samples the resident memory of AV/Thumbs processes belonging to that exact sourc
 the next admission retains the larger of the observed peak and the admitted
 reservation, plus 25% and 64 MiB. The required floor survives dispatch, replanning
 and further deferrals. An ordinary SIGKILL still follows the normal retry policy.
+
+Live fallback admission distinguishes a deferred replacement from an empty replacement. A
+`PROCESS_REPLACE` object with `wait_reason` (`memory` or `node_unavailable`) and a positive
+`retry_after_ms` keeps the failed process disabled while Mist retries local admission. An empty
+array is terminal for that process. Helmsman announces released reservations through Mist's
+`processing_capacity_released` API; waiting buffers recheck immediately. A one-second retry
+also covers missed notifications and inventory recovery. Neither the notification nor the
+waiting response authorizes an encoder: the durable ledger and current memory must admit the
+replacement before an array of process configurations is returned.
+
+A hardware-frame upload or device-to-device transfer failure ends the current AV process with
+a process-specific error before encoder submission. It does not silently skip that frame.
+The processing supervisor applies the existing bounded retry policy to the failed attempt.
+CUDA decoding remains disabled until the NVIDIA lifecycle gate passes; hardware encoding and
+forced VideoToolbox decoding retain their existing selection rules.

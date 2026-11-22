@@ -16,19 +16,19 @@ func admitLiveReplacement(evt ProcessReplaceEvent, policy string) (string, error
 	defer cancel()
 	response, err := client.GetActiveStreamsContext(ctx)
 	if err != nil {
-		return "", err
+		return "", &processingAdmissionError{err: err}
 	}
 	active, ok := response["active_streams"].(map[string]any)
 	if !ok {
-		return "", errors.New("live source inventory unavailable")
+		return "", &processingAdmissionError{err: errors.New("live source inventory unavailable")}
 	}
 	data, ok := active[evt.StreamName].(map[string]any)
 	if !ok {
-		return "", errors.New("live source is not active")
+		return "", &processingAdmissionError{err: errors.New("live source is not active")}
 	}
 	source, _ := sourceFromReadinessOutputs(extractActiveStreamMetadata(data))
 	if source.Width <= 0 || source.Height <= 0 {
-		return "", errors.New("live source dimensions unavailable")
+		return "", &processingAdmissionError{err: errors.New("live source dimensions unavailable")}
 	}
 	return reserveLiveReplacement(evt.StreamName, policy, source, processingMemorySnapshot)
 }

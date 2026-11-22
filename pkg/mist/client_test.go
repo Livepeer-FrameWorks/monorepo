@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -358,5 +359,29 @@ func TestStopSessionsMultipleNamesStreamsAsKeys(t *testing.T) {
 	streams, ok := command["stop_sessions"].(map[string]any)
 	if !ok || len(streams) != 2 || streams["live+alpha"] != "" || streams["pull+alpha"] != "" {
 		t.Fatalf("stop_sessions payload = %#v, want each stream as a key with every connector", command["stop_sessions"])
+	}
+}
+
+func TestProcessingCapacityWakeUpIsAcknowledged(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(fmt.Sprint(accepted), func(t *testing.T) {
+			var woke bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var command map[string]interface{}
+				if err := json.Unmarshal([]byte(r.URL.Query().Get("command")), &command); err != nil {
+					t.Error(err)
+				}
+				if command["processing_capacity_released"] == true {
+					woke = true
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"authorize": map[string]string{"status": "OK"}, "processing_capacity_released": accepted})
+			}))
+			defer srv.Close()
+			c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+			err := c.NotifyProcessingCapacityReleased(context.Background())
+			if !woke || (err == nil) != accepted {
+				t.Fatalf("wake=%v accepted=%v err=%v", woke, accepted, err)
+			}
+		})
 	}
 }
