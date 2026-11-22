@@ -27,6 +27,8 @@ type recordingGraceHarness struct {
 	outputPath  string
 	pushStarted atomic.Bool
 	nuked       atomic.Bool
+	nukeCount   atomic.Int32
+	pushCount   atomic.Int32
 	results     chan *ipcpb.ProcessingJobResult
 }
 
@@ -44,6 +46,7 @@ type recordingGeometry struct {
 	completedEnd  float64
 	sourceEnd     float64
 	processes     string
+	fallbackPhase string
 }
 
 func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ...recordingGeometry) *recordingGraceHarness {
@@ -58,6 +61,7 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 		shape = geometry[0]
 	}
 	var booted atomic.Bool
+	var fallbackSignalled atomic.Bool
 	var startupListed sync.Once
 	startupListedCh := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,9 +87,13 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 		request := string(body) + r.URL.RawQuery
 		if strings.Contains(request, "push_start") {
 			hx.pushStarted.Store(true)
+			if hx.pushCount.Add(1) == 1 && shape.fallbackPhase == "push" {
+				RouteProcessExit(ProcessExitEvent{StreamName: hx.streamName, ProcessType: "Livepeer", ExitCode: 2, BootCount: 1, Status: "unrecoverable", Reason: "fixture gateway refused source"})
+			}
 		}
 		if strings.Contains(request, "nuke_stream") {
 			hx.nuked.Store(true)
+			hx.nukeCount.Add(1)
 			booted.Store(false)
 		}
 		// The processing stream is active only between a boot and a nuke, as
@@ -99,6 +107,17 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "id": 0.0, "idx": 0.0, "width": float64(shape.width), "height": float64(shape.height), "rotation": float64(shape.rotation)},
 					"audio_AAC_1ch_48000hz_1":    map[string]any{"codec": "AAC", "id": 1.0, "idx": 1.0, "channels": 1.0, "rate": 48000.0},
 				},
+			}
+			if shape.fallbackPhase == "readiness" && hx.nukeCount.Load() == 0 {
+				processingProcessOverridesMu.Lock()
+				policy := processingOverrideRecords[hx.streamName].ProcessesJSON
+				processingProcessOverridesMu.Unlock()
+				if mist.HasLivepeerProcesses(policy) {
+					active[hx.streamName].(map[string]any)["health"] = map[string]any{}
+					if fallbackSignalled.CompareAndSwap(false, true) {
+						RouteProcessExit(ProcessExitEvent{StreamName: hx.streamName, ProcessType: "Livepeer", ExitCode: 2, BootCount: 1, Status: "unrecoverable", Reason: "fixture gateway refused source during readiness"})
+					}
+				}
 			}
 			if shape.noAudio {
 				delete(active[hx.streamName].(map[string]any)["health"].(map[string]any), "audio_AAC_1ch_48000hz_1")
@@ -197,7 +216,11 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
-	for !hx.pushStarted.Load() {
+	targetPushes := int32(1)
+	if shape.fallbackPhase == "push" {
+		targetPushes = 2
+	}
+	for hx.pushCount.Load() < targetPushes {
 		if time.Now().After(deadline) {
 			t.Fatalf("%s job never started its recording push", kind)
 		}
