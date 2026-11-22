@@ -139,20 +139,30 @@ livepeer_produced fixture now
                 result = subprocess.run(["bash", "-c", script, "guard", logs], capture_output=True, text=True)
                 self.assertEqual(result.returncode == 0, expected, "process policy falsely proves Livepeer produced a rendition: " + logs)
 
-    def test_gateway_wait_starts_after_health_is_observed(self):
+    def test_gateway_wait_requires_positive_selection_pool(self):
         predicates = "\n".join(function("69-vod-ladder-geometry.sh", name) for name in ("gateway_state", "gateway_present"))
-        script = predicates + '''
-GATEWAY_HEALTHY_AT=0
-DISCOVERY_HEALTHY_SINCE=''
-NOW=110
-pg() { printf 'healthy'; }
-date() { printf '%s' "$NOW"; }
-if gateway_present; then echo 'stale pool accepted immediately'; exit 1; fi
-NOW=176
-gateway_present || { echo 'settled pool still refused'; exit 1; }
+        script = predicates + r'''
+GATEWAY=fixture-gateway
+STATE=$1 HEALTH=$2 HTTP_EXIT=$3
+pg() { printf '%s' "$STATE"; }
+curl() {
+  [ "${!#}" = http://fixture-gateway:8935/healthz ] || return 22
+  printf '%s' "$HEALTH"
+  return "$HTTP_EXIT"
+}
+gateway_present
 '''
-        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cases = [("healthy", '{"orchestrators":1}', 0, True),
+                 ("unhealthy", '{"orchestrators":1}', 0, False),
+                 ("healthy", '{"orchestrators":0}', 0, False),
+                 ("healthy", '{"orchestrators":true}', 0, False),
+                 ("healthy", '{}', 0, False),
+                 ("healthy", 'unreadable', 0, False),
+                 ("healthy", '', 22, False)]
+        for state, health, code, expected in cases:
+            with self.subTest(state=state, health=health, code=code):
+                result = subprocess.run(["bash", "-c", script, "fixture", state, health, str(code)], capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
 
 if __name__ == "__main__":
     unittest.main()
