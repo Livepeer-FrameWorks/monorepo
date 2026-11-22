@@ -101,6 +101,8 @@ func (h *ProcessingJobHandler) handleThumbnail(req *ipcpb.ProcessingJobRequest, 
 
 	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 	defer unregisterProcessingRecordingEndListener(streamName)
+	stopMemoryObservation := observeProcessingMemory(streamName)
+	defer stopMemoryObservation()
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
 
@@ -122,7 +124,7 @@ func (h *ProcessingJobHandler) handleThumbnail(req *ipcpb.ProcessingJobRequest, 
 	_, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, processesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("thumbnail readiness failed: %v", readinessErr), nil, "", 0)
+		h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(readinessErr), fmt.Sprintf("thumbnail readiness failed: %v", readinessErr), processingReadinessFailureOutputs(readinessErr), "", 0)
 		return
 	}
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
@@ -166,6 +168,12 @@ loop:
 			if shouldIgnoreProcessExit(evt, ignoredProcessExitBootCounts) {
 				continue
 			}
+			if failure := processingExitError(evt); processingOOMOutputs(failure) != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), processingResultRetryable, failure.Error(), processingOOMOutputs(failure), "", 0)
+				return
+			}
+
 			if evt.Status == "unrecoverable" && evt.ProcessType == "Thumbs" {
 				log.WithFields(processExitFields(evt)).Error("Thumbnail: Thumbs process failed")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)

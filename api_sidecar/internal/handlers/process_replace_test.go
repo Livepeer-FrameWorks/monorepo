@@ -236,8 +236,8 @@ func TestLivepeerExitFallbackDecision(t *testing.T) {
 		evt  ProcessExitEvent
 		want livepeerFallbackDecision
 	}{
-		{"gateway 403", ProcessExitEvent{ProcessType: "Livepeer", Status: "unrecoverable", ExitCode: 2, Reason: "Livepeer upload fatal HTTP status 403"}, livepeerFallbackInPlace},
-		{"too many upload failures", ProcessExitEvent{ProcessType: "Livepeer", Status: "unrecoverable", ExitCode: 2, Reason: "too many upload failures"}, livepeerFallbackInPlace},
+		{"gateway 403", ProcessExitEvent{ProcessType: "Livepeer", Status: "unrecoverable", ExitCode: 2, Reason: "Livepeer upload fatal HTTP status 403"}, livepeerFallbackRestart},
+		{"too many upload failures", ProcessExitEvent{ProcessType: "Livepeer", Status: "unrecoverable", ExitCode: 2, Reason: "too many upload failures"}, livepeerFallbackRestart},
 		{"retrying non-zero exit", ProcessExitEvent{ProcessType: "Livepeer", Status: "retrying", ExitCode: 1}, livepeerFallbackRestart},
 		{"clean exit", ProcessExitEvent{ProcessType: "Livepeer", Status: "clean"}, livepeerFallbackNone},
 		{"supervisor stop", ProcessExitEvent{ProcessType: "Livepeer", Status: "stopped", ExitCode: 2}, livepeerFallbackNone},

@@ -16,9 +16,15 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
+type processingOOMProcess struct {
+	eventsPath   string
+	initialKills uint64
+	killsKnown   bool
+}
+
 type processingMemoryObservation struct {
-	peak, initialKills uint64
-	killsKnown         bool
+	peak      uint64
+	processes map[int]processingOOMProcess
 }
 
 var processingMemoryObservations = struct {
@@ -26,10 +32,33 @@ var processingMemoryObservations = struct {
 	streams map[string]*processingMemoryObservation
 }{streams: make(map[string]*processingMemoryObservation)}
 
-var processingOOMCounter = func() (uint64, bool) { return readProcessingOOMKills(os.ReadFile) }
+var processingOOMCounter = func(path string) (uint64, bool) { return readProcessingOOMKills(os.ReadFile, path) }
 
-func readProcessingOOMKills(readFile func(string) ([]byte, error)) (uint64, bool) {
-	data, err := readFile("/sys/fs/cgroup/memory.events")
+func processingOOMEventsPath(pid string, readFile func(string) ([]byte, error)) string {
+	data, err := readFile(filepath.Join("/proc", pid, "cgroup"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.SplitN(line, ":", 3)
+		if len(fields) == 3 && fields[0] == "0" && fields[1] == "" && strings.HasPrefix(fields[2], "/") {
+			return filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(filepath.Clean(fields[2]), "/"), "memory.events")
+		}
+	}
+	return ""
+}
+
+func readProcessingOOMKills(readFile func(string) ([]byte, error), paths ...string) (uint64, bool) {
+	path := ""
+	if len(paths) > 0 {
+		path = paths[0]
+	} else {
+		path = processingOOMEventsPath("self", readFile)
+	}
+	if path == "" {
+		return 0, false
+	}
+	data, err := readFile(path)
 	if err != nil {
 		return 0, false
 	}
@@ -46,16 +75,23 @@ func readProcessingOOMKills(readFile func(string) ([]byte, error)) (uint64, bool
 // Only the source identity in a processor's JSON command assigns its resident
 // memory to a job; a stream name occurring elsewhere in argv is not authority.
 func processingResidentBytes(procRoot, stream string) uint64 {
+	total, _ := processingResidentSnapshot(procRoot, stream)
+	return total
+}
+
+func processingResidentSnapshot(procRoot, stream string) (uint64, []int) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	var total uint64
+	var pids []int
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := strconv.ParseUint(entry.Name(), 10, 32); err != nil {
+		pid, parseErr := strconv.Atoi(entry.Name())
+		if parseErr != nil || pid <= 0 {
 			continue
 		}
 		dir := filepath.Join(procRoot, entry.Name())
@@ -84,28 +120,28 @@ func processingResidentBytes(procRoot, stream string) uint64 {
 		if !own {
 			continue
 		}
+		pids = append(pids, pid)
 		status, err := os.ReadFile(filepath.Join(dir, "status"))
 		if err != nil {
 			continue
 		}
 		for _, line := range strings.Split(string(status), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) == 3 && fields[0] == "VmRSS:" && fields[2] == "kB" {
+			if len(fields) == 3 && (fields[0] == "RssAnon:" || fields[0] == "RssShmem:") && fields[2] == "kB" {
 				if kb, err := strconv.ParseUint(fields[1], 10, 54); err == nil {
 					total += kb * 1024
 				}
 			}
 		}
 	}
-	return total
+	return total, pids
 }
 
 func observeProcessingMemory(stream string) func() {
 	if runtime.GOOS != "linux" {
 		return func() {}
 	}
-	kills, known := processingOOMCounter()
-	observation := &processingMemoryObservation{initialKills: kills, killsKnown: known}
+	observation := &processingMemoryObservation{processes: make(map[int]processingOOMProcess)}
 	processingMemoryObservations.Lock()
 	processingMemoryObservations.streams[stream] = observation
 	processingMemoryObservations.Unlock()
@@ -115,8 +151,19 @@ func observeProcessingMemory(stream string) func() {
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			peak := processingResidentBytes("/proc", stream)
+			peak, pids := processingResidentSnapshot("/proc", stream)
+			discovered := make(map[int]processingOOMProcess, len(pids))
+			for _, pid := range pids {
+				path := processingOOMEventsPath(strconv.Itoa(pid), os.ReadFile)
+				kills, known := processingOOMCounter(path)
+				discovered[pid] = processingOOMProcess{eventsPath: path, initialKills: kills, killsKnown: known}
+			}
 			processingMemoryObservations.Lock()
+			for pid, process := range discovered {
+				if previous, exists := observation.processes[pid]; !exists || !previous.killsKnown {
+					observation.processes[pid] = process
+				}
+			}
 			observation.peak = max(observation.peak, peak)
 			processingMemoryObservations.Unlock()
 			select {
@@ -159,16 +206,20 @@ func processingExitError(evt ProcessExitEvent) error {
 		processingMemoryObservations.Unlock()
 		return resource
 	}
-	snapshot := *observation
+	peakObserved := observation.peak
+	process, owned := observation.processes[evt.PID]
 	processingMemoryObservations.Unlock()
-	kills, known := processingOOMCounter()
-	if !known || !snapshot.killsKnown || kills <= snapshot.initialKills {
+	if !owned {
+		return resource
+	}
+	kills, known := processingOOMCounter(process.eventsPath)
+	if !known || !process.killsKnown || kills <= process.initialKills {
 		return resource
 	}
 	processingProcessOverridesMu.Lock()
 	record := processingOverrideRecords[evt.StreamName]
 	processingProcessOverridesMu.Unlock()
-	peak := max(snapshot.peak, record.MemoryBytes)
+	peak := max(peakObserved, record.MemoryBytes)
 	if peak == 0 {
 		return resource
 	}

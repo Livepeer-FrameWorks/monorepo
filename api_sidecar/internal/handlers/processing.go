@@ -1047,6 +1047,11 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		"artifact_hash": req.GetArtifactHash(),
 	})
 
+	if req.GetDeadlineUnixMs() > 0 && req.GetDeadlineUnixMs() <= time.Now().UnixMilli() {
+		h.sendResult(send, req.GetJobId(), "failed", "processing timed out after 24 hours", nil, "", 0)
+		return
+	}
+
 	if req.GetJobType() == "dvr_chapter_finalize" {
 		log.Info("Processing job received (chapter finalize)")
 		h.handleChapterFinalize(req, send)
@@ -1066,10 +1071,6 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 
-	if req.GetDeadlineUnixMs() > 0 && req.GetDeadlineUnixMs() <= time.Now().UnixMilli() {
-		h.sendResult(send, req.GetJobId(), "failed", "upload processing timed out after 24 hours", nil, "", 0)
-		return
-	}
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 
@@ -1492,7 +1493,7 @@ loop:
 			}
 
 			if evt.ProcessType == "Livepeer" {
-				decision := processingLivepeerExitFallbackDecision(evt)
+				decision := livepeerExitFallbackDecision(evt)
 				if fallbackAttempted {
 					decision = livepeerFallbackNone
 				}
@@ -1796,7 +1797,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
 			evtFields := processExitFields(evt)
 			if evt.ProcessType == "Livepeer" {
-				decision := processingLivepeerExitFallbackDecision(evt)
+				decision := livepeerExitFallbackDecision(evt)
 				logLivepeerProcessingExit(log, evt, decision, "readiness")
 				if decision != livepeerFallbackNone {
 					return nil, 0, &livepeerReadinessFallbackError{evt: evt}
@@ -2848,7 +2849,6 @@ type livepeerFallbackDecision string
 
 const (
 	livepeerFallbackNone    livepeerFallbackDecision = "none"
-	livepeerFallbackInPlace livepeerFallbackDecision = "in_place"
 	livepeerFallbackRestart livepeerFallbackDecision = "restart"
 )
 
@@ -2869,9 +2869,8 @@ var (
 
 // livepeerExitFallbackDecision falls back to local MistProcAV on every
 // non-success Livepeer exit (gateway 4xx/5xx, upload failures, no broadcasters).
-// An unrecoverable exit is followed by Mist's PROCESS_REPLACE, which Helmsman
-// answers with the local ladder, so the running buffer is kept. A retrying exit
-// gets no PROCESS_REPLACE, so the job restarts the stream on the local config.
+// The processing job admits its local ladder and restarts the source for every
+// failed Livepeer attempt. PROCESS_REPLACE returns [] for processing+ buffers.
 // Clean exits and deliberate supervisor stops are not transcode failures.
 func livepeerExitFallbackDecision(evt ProcessExitEvent) livepeerFallbackDecision {
 	if evt.ProcessType != "Livepeer" {
@@ -2881,7 +2880,7 @@ func livepeerExitFallbackDecision(evt ProcessExitEvent) livepeerFallbackDecision
 	case "clean", "stopped":
 		return livepeerFallbackNone
 	case "unrecoverable":
-		return livepeerFallbackInPlace
+		return livepeerFallbackRestart
 	}
 	if evt.ExitCode == 0 {
 		return livepeerFallbackNone
@@ -3722,12 +3721,4 @@ func (h *ProcessingJobHandler) sendCompletedResult(send func(*ipcpb.ControlMessa
 		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: res},
 		SentAt:  timestamppb.Now(),
 	})
-}
-
-func processingLivepeerExitFallbackDecision(evt ProcessExitEvent) livepeerFallbackDecision {
-	decision := livepeerExitFallbackDecision(evt)
-	if decision == livepeerFallbackInPlace {
-		return livepeerFallbackRestart
-	}
-	return decision
 }
