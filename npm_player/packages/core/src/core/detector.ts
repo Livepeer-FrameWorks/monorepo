@@ -330,6 +330,14 @@ function isBrowserWebRTCCodecSupported(type: "video" | "audio", codec: string): 
   }
 
   // Fallback to static list for older browsers/SSR
+  const incompatibleCodecs = WEBRTC_INCOMPATIBLE_CODECS[type] as readonly string[];
+  if (
+    incompatibleCodecs.some((codec) =>
+      getCodecMimeVariants(type, codec).some((mime) => mimeVariants.includes(mime))
+    )
+  ) {
+    return false;
+  }
   const compatibleCodecs = WEBRTC_COMPATIBLE_CODECS[type] as readonly string[];
   return compatibleCodecs.some((c) => mimeVariants.includes(`${type}/${c.toLowerCase()}`));
 }

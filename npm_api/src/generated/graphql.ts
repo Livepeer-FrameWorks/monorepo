@@ -2668,8 +2668,8 @@ metadata: unknown, /** When the node was registered. */
 createdAt: string | null, /** When the node was last updated. */
 updatedAt: string | null, /** Current operational mode (normal / draining / maintenance). Read from Foghorn's per-node heartbeat. Changes via setNodeMode. */
 effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data plane. */
-liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
-ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in bytes. */
+ramUsedBytes: number, /** Total memory in bytes. */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
 routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
 capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
@@ -2701,8 +2701,8 @@ updatedAt: string | null, /** Current operational mode (normal / draining / main
 effectiveMode: NodeOperationalMode, /** Cluster this node belongs to. */
 infrastructureNodeClusterId: string, /** When the node was registered. */
 infrastructureNodeCreatedAt: string | null, /** Real-time state from the analytics data plane. */
-liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
-ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in bytes. */
+ramUsedBytes: number, /** Total memory in bytes. */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
 routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
 infrastructureNodeCapacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
@@ -5640,8 +5640,8 @@ metadata: unknown, /** When the node was registered. */
 createdAt: string | null, /** When the node was last updated. */
 updatedAt: string | null, /** Current operational mode (normal / draining / maintenance). Read from Foghorn's per-node heartbeat. Changes via setNodeMode. */
 effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data plane. */
-liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
-ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in bytes. */
+ramUsedBytes: number, /** Total memory in bytes. */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
 routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
 capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
@@ -5684,8 +5684,8 @@ metadata: unknown, /** When the node was registered. */
 createdAt: string | null, /** When the node was last updated. */
 updatedAt: string | null, /** Current operational mode (normal / draining / maintenance). Read from Foghorn's per-node heartbeat. Changes via setNodeMode. */
 effectiveMode: NodeOperationalMode, /** Real-time state from the analytics data plane. */
-liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
-ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in bytes. */
+ramUsedBytes: number, /** Total memory in bytes. */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
 routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
 capacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
@@ -7229,8 +7229,8 @@ updatedAt: string | null, /** Current operational mode (normal / draining / main
 effectiveMode: NodeOperationalMode, /** Cluster this node belongs to. */
 infrastructureNodeClusterId: string, /** When the node was registered. */
 infrastructureNodeCreatedAt: string | null, /** Real-time state from the analytics data plane. */
-liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in MiB (field name is historical). */
-ramUsedBytes: number, /** Total memory in MiB (field name is historical). */
+liveState: { nodeId: string, tenantId: string, cpuPercent: number, /** Used memory in bytes. */
+ramUsedBytes: number, /** Total memory in bytes. */
 ramTotalBytes: number, diskUsedBytes: number, diskTotalBytes: number, upSpeed: number, downSpeed: number, activeStreams: number, isHealthy: boolean, latitude: number, longitude: number, location: string, metadata: unknown, updatedAt: string } | null, /** Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn's GetNodeHealth. */
 routingImpactPreview: { activeStreams: number, activeViewers: number }, /** Operator-owned directional budgets; null when the control plane is unavailable. */
 infrastructureNodeCapacity: { /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */

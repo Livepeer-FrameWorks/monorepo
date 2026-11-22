@@ -22,6 +22,7 @@ import type {
   TransferFrameMessage,
   TransferYUVMessage,
 } from "./types";
+import { translateCodec } from "../../../core/CodecUtils";
 import type { PipelineStats, FrameTrackerStats } from "../types";
 import { WasmVideoDecoder, needsWasmFallback } from "../../../wasm/WasmVideoDecoder";
 import type { WasmDecodedOutput } from "../../../wasm/WasmVideoDecoder";
@@ -630,6 +631,12 @@ function mapAudioCodec(track: PipelineState["track"]): string {
     case "ac3":
     case "ac-3":
       return "ac-3";
+    case "eac3":
+    case "eac-3":
+    case "e-ac3":
+    case "ec3":
+    case "ec-3":
+      return translateCodec({ ...track, type: "audio" });
     case "pcm": {
       if (track.size === 8) return "pcm-u8";
       if (track.size === 16 || track.size === 24 || track.size === 32) {
