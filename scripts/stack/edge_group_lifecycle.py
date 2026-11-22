@@ -108,6 +108,16 @@ def http_connection_when_ready(container):
         return None
 
 
+def stream_connection_when_ready(container, runtime):
+    connection = Connection(container)
+    try:
+        connection.request('/%s.ts' % runtime, streaming=True)
+        return connection
+    except (OSError, AssertionError, subprocess.SubprocessError):
+        connection.close()
+        return None
+
+
 def wait_group_shutdown(container, group, action):
     try:
         eventually(lambda: not any(row[1] == group for row in table(container).values()),
@@ -125,12 +135,13 @@ def exercise(container, stream, action):
     pid, group = eventually(lambda: angel(container), 30, 'supervised Mist angel is missing')
     before = table(container)
     http = eventually(lambda: http_connection_when_ready(container), 30, "Mist HTTP listener is not ready")
-    viewer = Connection(container)
+    viewer = None
     try:
         handlers = {p for p, row in table(container).items()
                     if p not in before and row[1] == group and row[3] == 'MistOutHTTP'}
         assert handlers, 'persistent HTTP request has no connection handler in the supervised group'
-        viewer.request('/live+%s.ts' % stream, streaming=True)
+        viewer = eventually(lambda: stream_connection_when_ready(container, stream), 30,
+                            'publisher runtime is not serving TS media: %s' % stream)
         if action == 'reload':
             execute(container, 'kill', '-USR1', str(pid))
             time.sleep(1)
@@ -151,7 +162,8 @@ def exercise(container, stream, action):
         print('PASS edge Mist group lifecycle:', action, flush=True)
     finally:
         http.close()
-        viewer.close()
+        if viewer is not None:
+            viewer.close()
 
 
 if __name__ == '__main__':
