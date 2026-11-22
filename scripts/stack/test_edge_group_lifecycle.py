@@ -62,19 +62,35 @@ class EdgeLifecycleTunnelTest(unittest.TestCase):
 
 
 class EdgeLifecycleRestartTest(unittest.TestCase):
-    def exercise(self, action, listener_not_ready=False):
+    def exercise(self, action, listener_not_ready=False, runtime='live+source', viewer_not_ready=False):
         from edge_group_lifecycle import exercise
         http, viewer, first, second = (MagicMock() for _ in range(4))
         if listener_not_ready:
             first.request.side_effect = AssertionError('listener not ready')
         connections = [http, viewer, first, second]
+        self.viewer = viewer
+        self.refused_viewer = MagicMock()
+        if viewer_not_ready:
+            self.refused_viewer.request.side_effect = AssertionError('stream not ready')
+            connections.insert(1, self.refused_viewer)
         rows = [{}, {20: (10, 10, 'S', 'MistOutHTTP')}, {}]
         with patch('edge_group_lifecycle.Connection', side_effect=connections), \
              patch('edge_group_lifecycle.table', side_effect=rows), \
              patch('edge_group_lifecycle.angel', side_effect=[(10, 10), (30, 30)]), \
              patch('edge_group_lifecycle.execute') as command:
-            exercise('edge', 'source', action)
+            exercise('edge', runtime, action)
         return command, second
+
+    def test_bound_publisher_runtime_is_used_without_a_second_prefix(self):
+        runtime = 'live+source_fw1p_0123456789abcdef0123456789abcdef'
+        self.exercise('crash', runtime=runtime)
+        self.viewer.request.assert_called_once_with('/' + runtime + '.ts', streaming=True)
+
+    def test_stream_not_ready_retries_before_the_lifecycle_action(self):
+        command, _ = self.exercise('crash', viewer_not_ready=True)
+        self.refused_viewer.close.assert_called_once_with()
+        self.viewer.request.assert_called_once_with('/live+source.ts', streaming=True)
+        command.assert_called_once_with('edge', 'kill', '-KILL', '10')
 
     def test_restart_uses_the_shipped_s6_command_path(self):
         command, _ = self.exercise('restart')

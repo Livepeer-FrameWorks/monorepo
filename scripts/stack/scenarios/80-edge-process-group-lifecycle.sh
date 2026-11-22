@@ -19,7 +19,9 @@ UUID=$(jq -r '.streamId // empty' <<<"$S")
 IN=$(internal_name_of "$UUID")
 for action in reload restart crash; do
   PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$KEY" 640x360 24 1800) || { fail "admit $action lifecycle publisher"; finish; }
-  if python3 "$STACK_LIB_DIR/edge_group_lifecycle.py" "$(container_of "$STACK_EDGE_A_SERVICE")" "$IN" "$action"; then
+  RUNTIME=$(pg foghorn "SELECT runtime_name FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name='$IN' AND ended_at IS NULL AND projection_state='active' ORDER BY started_at DESC LIMIT 1")
+  [ -n "$RUNTIME" ] || { fail "resolve $action lifecycle publisher runtime"; finish; }
+  if python3 "$STACK_LIB_DIR/edge_group_lifecycle.py" "$(container_of "$STACK_EDGE_A_SERVICE")" "$RUNTIME" "$action"; then
     pass "Mist $action preserves or cleans its process group and sockets"
   else
     fail "edge process-group lifecycle: $action"
