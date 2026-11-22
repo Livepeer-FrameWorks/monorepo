@@ -942,6 +942,19 @@ func (c *Client) NukeStream(name string) error {
 	return err
 }
 
+// NotifyProcessingCapacityReleased wakes queued live replacements on this node.
+// Admission still checks the durable ledger and current memory before starting work.
+func (c *Client) NotifyProcessingCapacityReleased(ctx context.Context) error {
+	response, err := c.makeAPIRequestContext(ctx, map[string]interface{}{"processing_capacity_released": true})
+	if err != nil {
+		return err
+	}
+	if accepted, ok := response["processing_capacity_released"].(bool); !ok || !accepted {
+		return fmt.Errorf("mist did not acknowledge the processing capacity wake-up")
+	}
+	return nil
+}
+
 // DeleteStreams deletes multiple streams by name
 func (c *Client) DeleteStreams(names []string) error {
 	if len(names) == 0 {

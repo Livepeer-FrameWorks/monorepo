@@ -264,3 +264,52 @@ func TestProcessReplaceEncoderAccelerationFollowsNodeRuntime(t *testing.T) {
 		}
 	}
 }
+
+func TestLiveReplacementBusyWaitsAndRetries(t *testing.T) {
+	oldLogger, oldAdmit := logger, admitLiveProcessReplacement
+	logger = logging.NewLogger()
+	available := false
+	admitLiveProcessReplacement = func(_ ProcessReplaceEvent, policy string) (string, error) {
+		if !available {
+			return "", &processingCapacityError{reason: "waiting for processing memory"}
+		}
+		return policy, nil
+	}
+	t.Cleanup(func() { logger, admitLiveProcessReplacement = oldLogger, oldAdmit })
+	code, body := callProcessReplace(t, processReplaceBody("live+capacity-release", "Livepeer", failedLivepeerConfig))
+	var waiting struct {
+		Reason string `json:"wait_reason"`
+		Retry  int    `json:"retry_after_ms"`
+	}
+	if code != http.StatusOK || json.Unmarshal([]byte(body), &waiting) != nil || waiting.Reason != "memory" || waiting.Retry <= 0 {
+		t.Fatalf("busy live replacement must remain queued with a reason: %d %s", code, body)
+	}
+	available = true
+	code, body = callProcessReplace(t, processReplaceBody("live+capacity-release", "Livepeer", failedLivepeerConfig))
+	var configs []map[string]any
+	if code != http.StatusOK || json.Unmarshal([]byte(body), &configs) != nil || len(configs) == 0 {
+		t.Fatalf("released memory did not admit the waiting ladder: %d %s", code, body)
+	}
+}
+
+func TestReleasedMemoryWakesLocalLiveAdmission(t *testing.T) {
+	woke := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var command map[string]any
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("command")), &command); err != nil {
+			t.Error(err)
+		}
+		if command["processing_capacity_released"] == true {
+			woke <- struct{}{}
+		}
+		_, _ = w.Write([]byte(`{"authorize":{"status":"OK"},"processing_capacity_released":true}`))
+	}))
+	defer srv.Close()
+	appconfigtest.Setenv(t, "MISTSERVER_URL", srv.URL)
+	notifyProcessingMemoryReleased("released-live-capacity")
+	select {
+	case <-woke:
+	default:
+		t.Fatal("released reservation did not notify waiting local live replacements")
+	}
+}
