@@ -145,6 +145,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		unregisterProcessingRecordingEndListener(streamName)
 	}()
 
+	stopMemoryObservation := observeProcessingMemory(streamName)
+	defer stopMemoryObservation()
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
 
@@ -203,8 +205,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(ctx, log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed",
-			fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
+		h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(readinessErr),
+			fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), processingReadinessFailureOutputs(readinessErr), "", 0)
 		return
 	}
 
@@ -292,6 +294,12 @@ loop:
 				log.WithFields(evtFields).Debug("Chapter finalize: ignoring stale process exit from retired generation")
 				continue
 			}
+			if failure := processingExitError(evt); processingOOMOutputs(failure) != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), processingResultRetryable, failure.Error(), processingOOMOutputs(failure), "", 0)
+				return
+			}
+
 			switch {
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Chapter finalize: critical process unrecoverable")

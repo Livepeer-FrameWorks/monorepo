@@ -19,9 +19,9 @@ func TestOOMRequeueUsesObservedPeakWithoutTenantRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := processingOOMCounter
-	processingOOMCounter = func() (uint64, bool) { return 9, true }
+	processingOOMCounter = func(string) (uint64, bool) { return 9, true }
 	t.Cleanup(func() { processingOOMCounter = old })
-	observation := &processingMemoryObservation{peak: 400 * memoryMiB, initialKills: 8, killsKnown: true}
+	observation := &processingMemoryObservation{peak: 400 * memoryMiB, processes: map[int]processingOOMProcess{123: {eventsPath: "fixture/memory.events", initialKills: 8, killsKnown: true}}}
 	processingMemoryObservations.Lock()
 	processingMemoryObservations.streams[stream] = observation
 	processingMemoryObservations.Unlock()
@@ -31,15 +31,15 @@ func TestOOMRequeueUsesObservedPeakWithoutTenantRetry(t *testing.T) {
 		processingMemoryObservations.Unlock()
 	})
 	for _, process := range []string{"AV", "Thumbs"} {
-		evt := ProcessExitEvent{StreamName: stream, ProcessType: process, Config: policy, ExitCode: -9}
+		evt := ProcessExitEvent{StreamName: stream, ProcessType: process, Config: policy, ExitCode: -9, PID: 123}
 		err := processingExitError(evt)
 		out := processingReadinessFailureOutputs(err)
 		if !retryableProcessingExit(evt) || out[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryPressure || out[mist.ProcessingRequiredMemoryBytes] != strconv.FormatUint(564*memoryMiB, 10) || out[mist.ProcessingMemoryPolicy] != policy {
 			t.Fatalf("%s OOM spends tenant retries or loses measured peak: error=%v outputs=%v", process, err, out)
 		}
 	}
-	processingOOMCounter = func() (uint64, bool) { return 8, true }
-	if out := processingReadinessFailureOutputs(processingExitError(ProcessExitEvent{StreamName: stream, ProcessType: "AV", ExitCode: -9})); out != nil {
+	processingOOMCounter = func(string) (uint64, bool) { return 8, true }
+	if out := processingReadinessFailureOutputs(processingExitError(ProcessExitEvent{StreamName: stream, ProcessType: "AV", ExitCode: -9, PID: 123})); out != nil {
 		t.Fatalf("ordinary SIGKILL was misclassified as OOM: %v", out)
 	}
 }
@@ -51,13 +51,13 @@ func TestProcessingRSSMeasurementUsesExactSourceIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		config, _ := json.Marshal(map[string]string{"source": source, "other": "processing+owned"})
-		for name, data := range map[string]string{"comm": "MistProcAV\n", "cmdline": "MistProcAV\x00" + string(config) + "\x00", "status": "VmRSS:\t2048 kB\n"} {
+		for name, data := range map[string]string{"comm": "MistProcAV\n", "cmdline": "MistProcAV\x00" + string(config) + "\x00", "status": "VmRSS:\t2048 kB\nRssAnon:\t512 kB\nRssFile:\t1024 kB\nRssShmem:\t512 kB\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if bytes := processingResidentBytes(root, "processing+owned"); bytes != 2*memoryMiB {
+	if bytes := processingResidentBytes(root, "processing+owned"); bytes != memoryMiB {
 		t.Fatalf("measured another job's process: %d", bytes)
 	}
 }

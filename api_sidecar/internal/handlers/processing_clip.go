@@ -99,6 +99,8 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	defer func() {
 		unregisterProcessingRecordingEndListener(streamName)
 	}()
+	stopMemoryObservation := observeProcessingMemory(streamName)
+	defer stopMemoryObservation()
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
 
@@ -124,7 +126,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	streamOutputs, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip readiness failed: %v", readinessErr), nil, "", 0)
+		h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(readinessErr), fmt.Sprintf("clip readiness failed: %v", readinessErr), processingReadinessFailureOutputs(readinessErr), "", 0)
 		return
 	}
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
@@ -213,6 +215,12 @@ loop:
 				log.WithFields(evtFields).Debug("Clip: ignoring stale process exit from retired generation")
 				continue
 			}
+			if failure := processingExitError(evt); processingOOMOutputs(failure) != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), processingResultRetryable, failure.Error(), processingOOMOutputs(failure), "", 0)
+				return
+			}
+
 			switch {
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Clip: critical process unrecoverable")
