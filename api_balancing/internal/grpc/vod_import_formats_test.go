@@ -29,3 +29,13 @@ func TestFoghornImportRejectsUnsupportedContainers(t *testing.T) {
 		})
 	}
 }
+
+func TestImportedTransportStreamsKeepTheirContentType(t *testing.T) {
+	for _, format := range []string{"ts", "mts", "m2ts"} {
+		t.Run(format, func(t *testing.T) {
+			if got := importContentType(format); got != "video/mp2t" {
+				t.Fatalf("imported %s is recorded as %q, want video/mp2t", format, got)
+			}
+		})
+	}
+}
