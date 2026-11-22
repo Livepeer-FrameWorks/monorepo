@@ -33,7 +33,7 @@ func TestProcessProcessingJobResult_NilDB(t *testing.T) {
 	db = nil
 	logger := logging.NewLogger()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-1",
 		Status: "completed",
 	}, "node-1", logger)
@@ -101,20 +101,20 @@ func TestProcessProcessingJobResult_Completed_NoOutputFailsJob(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectRollback()
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
-			AddRow("processing", "node-1", "", "", "", "", ""))
+			AddRow("processing", "node-1", "", "", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'failed'`).
-		WithArgs("job-1", "completed processing result carried no output path", "").
+		WithArgs("job-1", "completed processing result carried no output path", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-1",
 		Status: "completed",
 	}, "node-1", logger)
@@ -132,13 +132,13 @@ func TestProcessProcessingJobResult_CacheUpdate_BindsToAssignedNode(t *testing.T
 	logger := logging.NewLogger()
 
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs AS job\s+SET processes_json`).
-		WithArgs("job-x", "art-1", "[]", "attacker-node", int64(0), int64(0), "").
+		WithArgs("job-x", "art-1", "[]", "attacker-node", int64(0), int64(0), "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows: not this node's job
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:   "job-x",
 		Status:  "cache_update",
-		Outputs: map[string]string{"artifact_hash": "art-1", "processes_json": "[]"},
+		Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "artifact_hash": "art-1", "processes_json": "[]"},
 	}, "attacker-node", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -154,12 +154,12 @@ func TestProcessProcessingJobResult_Completed_RejectsForeignNode(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "assigned-node", "process"))
 	mock.ExpectRollback()
 
 	// Reporting node "attacker-node" != assigned "assigned-node": no readiness/complete write, just rollback.
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "attacker-node", logger)
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"}, JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "attacker-node", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -173,12 +173,12 @@ func TestFailProcessingJob_RejectsForeignNode(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("processing", "assigned-node", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectRollback()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "failed", Error: "boom"}, "attacker-node", logger)
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"}, JobId: "job-1", Status: "failed", Error: "boom"}, "attacker-node", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -193,11 +193,11 @@ func TestProcessProcessingJobResult_Completed_NonActiveJobIsNoop(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("failed", "", "process"))
 	mock.ExpectRollback()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "node-1", logger)
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"}, JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "node-1", logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -212,10 +212,10 @@ func TestProcessProcessingJobResult_Completed_ReadinessFailureRollsBack(t *testi
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
-		WithArgs("job-1").
+		WithArgs("job-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
 			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
 	mock.ExpectQuery("GetVodOriginalToStamp").WithArgs("art-1", "tenant-1").WillReturnError(sql.ErrNoRows)
@@ -223,7 +223,7 @@ func TestProcessProcessingJobResult_Completed_ReadinessFailureRollsBack(t *testi
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "tenant-1"},
 		JobId:           "job-1",
 		Status:          "completed",
 		OutputPath:      "/data/out.mp4",
@@ -243,10 +243,10 @@ func TestProcessProcessingJobResult_Completed_DeletedMidProcessingStillCompletes
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
-		WithArgs("job-1").
+		WithArgs("job-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
 			AddRow("art-1", "vod", "tenant-1", "", "", "", "mp4", int64(0), int64(0)))
 	mock.ExpectQuery("GetVodOriginalToStamp").WithArgs("art-1", "tenant-1").WillReturnError(sql.ErrNoRows)
@@ -257,7 +257,7 @@ func TestProcessProcessingJobResult_Completed_DeletedMidProcessingStillCompletes
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "tenant-1"},
 		JobId:           "job-1",
 		Status:          "completed",
 		OutputPath:      "/data/out.mp4",
@@ -278,14 +278,14 @@ func TestProcessProcessingJobResult_Completed_MissingArtifactRollsBack(t *testin
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
-		WithArgs("job-1").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:           "job-1",
 		Status:          "completed",
 		OutputPath:      "/data/out.mp4",
@@ -309,10 +309,10 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1.*FOR UPDATE`).
-		WithArgs("job-clip-ok", "").
+		WithArgs("job-clip-ok", tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
-		WithArgs("job-clip-ok").
+		WithArgs("job-clip-ok", tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
 			AddRow("art-clip", "clip", tenant, streamID, "live+demo", "", "", int64(0), int64(0)))
 	// Readiness claim.
@@ -344,7 +344,7 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": tenant},
 		JobId:           "job-clip-ok",
 		Status:          "completed",
 		OutputPath:      "/data/clip.mp4",
@@ -364,15 +364,15 @@ func TestProcessProcessingJobResult_Failed(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-fail", "").
+		WithArgs("job-fail", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
-			AddRow("processing", "node-1", "", "", "", "", ""))
+			AddRow("processing", "node-1", "", "", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'.*error_message").
-		WithArgs("job-fail", "ffmpeg crashed", "").
+		WithArgs("job-fail", "ffmpeg crashed", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-fail",
 		Status: "failed",
 		Error:  "ffmpeg crashed",
@@ -392,7 +392,7 @@ func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-clip-fail", "").
+		WithArgs("job-clip-fail", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("processing", "node-1", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "5eed517e-ba5e-da7a-517e-ba5eda7a0002", "stream-int"))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
@@ -405,7 +405,7 @@ func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T)
 		"5eed517e-ba5e-da7a-517e-ba5eda7a0001", "5eed517e-ba5e-da7a-517e-ba5eda7a0002", "art-clip")
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-clip-fail",
 		Status: "failed",
 		Error:  "output duration short",
@@ -424,7 +424,7 @@ func TestProcessProcessingJobResult_Failed_NoFalseLifecycleWhenArtifactTerminal(
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-clip-fail", "").
+		WithArgs("job-clip-fail", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("processing", "node-1", "art-clip", "clip", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
@@ -436,7 +436,7 @@ func TestProcessProcessingJobResult_Failed_NoFalseLifecycleWhenArtifactTerminal(
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-clip-fail",
 		Status: "failed",
 		Error:  "output duration short",
@@ -455,7 +455,7 @@ func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) 
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-vod-fail", "").
+		WithArgs("job-vod-fail", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("processing", "node-1", "art-vod", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
@@ -468,7 +468,7 @@ func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) 
 	mock.ExpectCommit()
 	dirty := countCatalogDirty(t)
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-vod-fail",
 		Status: "failed",
 		Error:  "transcode exploded",
@@ -502,13 +502,13 @@ func TestProcessProcessingJobResult_Failed_NonActiveJobIsNoop(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-done", "").
+		WithArgs("job-done", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("completed", "", "art-x", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectRollback()
 	dirty := countCatalogDirty(t)
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-done",
 		Status: "failed",
 		Error:  "late failure after completion",
@@ -530,7 +530,7 @@ func TestProcessProcessingJobResult_Failed_ArtifactWriteRollsBack(t *testing.T) 
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-vod-fail", "").
+		WithArgs("job-vod-fail", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("processing", "node-1", "art-vod", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec("UPDATE foghorn.processing_jobs.*SET status = 'failed'").
@@ -541,7 +541,7 @@ func TestProcessProcessingJobResult_Failed_ArtifactWriteRollsBack(t *testing.T) 
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-vod-fail",
 		Status: "failed",
 		Error:  "boom",
@@ -601,7 +601,7 @@ func TestProcessProcessingJobResult_UnknownStatus(t *testing.T) {
 	_, _, _ = setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-1",
 		Status: "unknown_status",
 	}, "node-1", logger)
@@ -621,7 +621,7 @@ func TestProcessProcessingJobResult_RetryableRequeuesWithinBudget(t *testing.T) 
 			sql.NullString{String: "node-1", Valid: true}, sql.NullInt32{Int32: ProcessingMaxRetries, Valid: true}).
 		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(1))
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-1",
 		Status: "retryable",
 		Error:  "recording validation failed: PROCESS_TRACKS_CHANGED",
@@ -654,15 +654,15 @@ func TestProcessProcessingJobResult_RetryableFailsWhenBudgetSpent(t *testing.T) 
 		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(0))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
-		WithArgs("job-1", "").
+		WithArgs("job-1", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
-			AddRow("processing", "node-1", "", "", "", "", ""))
+			AddRow("processing", "node-1", "", "", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'failed'`).
-		WithArgs("job-1", "rendition coverage: short", "").
+		WithArgs("job-1", "rendition coverage: short", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{Outputs: map[string]string{"tenant_id": "5eed517e-ba5e-da7a-517e-ba5eda7a0001"},
 		JobId:  "job-1",
 		Status: "retryable",
 		Error:  "rendition coverage: short",

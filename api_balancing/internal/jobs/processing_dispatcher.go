@@ -289,8 +289,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	tick := newProcessingTickInventory(d.startedAt.IsZero() || time.Since(d.startedAt) >= processingInventoryGrace)
 	if d.fairnessEnabled {
 		if err := d.refreshProcessingReservations(ctx, tick); err != nil {
-			d.logger.WithError(err).Warn("Processing fairness unavailable; leaving jobs queued")
-			return
+			d.logger.WithError(err).Warn("Processing fairness refresh failed; continuing dispatch with existing reservations")
 		}
 	}
 	// Atomically claim queued jobs via CTE — prevents double-dispatch when
@@ -316,7 +315,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	}
 }
 
-// revertToQueued puts a claimed job back for the next dispatch cycle.
+// revertToQueued defers a claimed job so transient dispatch failures cannot monopolize the FIFO head.
 func (d *ProcessingDispatcher) revertToQueued(ctx context.Context, jobID string) {
 	if err := foghorndb.New(d.db).RevertProcessingJobToQueued(ctx, jobID); err != nil {
 		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to revert job to queued")
@@ -360,12 +359,39 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	d.dispatchJobWithInventory(ctx, job, newProcessingTickInventory(d.startedAt.IsZero() || time.Since(d.startedAt) >= processingInventoryGrace))
 }
 
+func processingJobDeadline(job *processingJob) time.Time {
+	start := job.CreatedAt
+	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid {
+		start = job.UploadedAt
+	}
+	if !start.Valid {
+		return time.Time{}
+	}
+	return start.Time.UTC().Add(24 * time.Hour)
+}
+
 func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job *processingJob, tick *processingTickInventory) {
-	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid && !job.UploadedAt.Time.Add(24*time.Hour).After(time.Now()) {
-		if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "upload processing timed out after 24 hours", d.logger); err != nil {
+	deadline := processingJobDeadline(job)
+	if !deadline.IsZero() && !deadline.After(time.Now()) {
+		if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "processing timed out after 24 hours", d.logger); err != nil {
 			d.logger.WithError(err).Warn("Failed to settle expired upload")
 		}
 		return
+	}
+	if tick.warm && job.PreferredNode.Valid && job.PreferredNode.String != "" && job.SourceParams.Valid {
+		var source map[string]string
+		if json.Unmarshal([]byte(job.SourceParams.String), &source) == nil && (source["source_kind"] == "live" || source["source_kind"] == "dvr_rolling") {
+			alive := false
+			for _, id := range state.DefaultManager().AliveNodeIDs(time.Minute) {
+				alive = alive || id == job.PreferredNode.String
+			}
+			if !alive {
+				if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "source unavailable: pinned source node is gone", d.logger); err != nil {
+					d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to settle missing processing source")
+				}
+				return
+			}
+		}
 	}
 	nodeID, reason, waitReason := routeProcessingJobWithInventory(ctx, job, tick)
 	if nodeID == "" {
@@ -473,8 +499,8 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 		InternalName:    internalName,
 		ProcessingClass: mist.ProcessingClassVideoTranscode,
 	}
-	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid {
-		req.DeadlineUnixMs = job.UploadedAt.Time.UTC().Add(24 * time.Hour).UnixMilli()
+	if !deadline.IsZero() {
+		req.DeadlineUnixMs = deadline.UnixMilli()
 	}
 	// Foghorn-authoritative runtime name for the processed OUTPUT
 	// artifact's DTSH boot post-transcode. Outputs are always vod+.
@@ -497,7 +523,7 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 	// or a competing dispatcher) already moved the job out of 'dispatched', RowsAffected==0 and we must NOT send
 	// — sending a job that is no longer ours risks duplicate execution.
 	queries := foghorndb.New(d.db)
-	n, assignErr := queries.AssignProcessingJobNode(ctx, foghorndb.AssignProcessingJobNodeParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}})
+	n, assignErr := queries.AssignProcessingJobNode(ctx, foghorndb.AssignProcessingJobNodeParams{JobID: job.JobID, TenantID: job.TenantID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}})
 	if assignErr != nil {
 		d.logger.WithError(assignErr).WithFields(logging.Fields{
 			"job_id":  job.JobID,
@@ -655,7 +681,7 @@ func (d *ProcessingDispatcher) commitDispatched(ctx context.Context, job *proces
 		// rewritten back to 'processing'. RowsAffected==0 => the terminal report won the race: treat it as an
 		// idempotent no-op (skip the artifact transition and the STARTED event); the transaction wrote nothing.
 		queries := foghorndb.New(tx)
-		n, execErr := queries.CommitDispatchedProcessingJob(ctx, foghorndb.CommitDispatchedProcessingJobParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}, RoutingReason: sql.NullString{String: reason, Valid: reason != ""}})
+		n, execErr := queries.CommitDispatchedProcessingJob(ctx, foghorndb.CommitDispatchedProcessingJobParams{JobID: job.JobID, TenantID: job.TenantID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}, RoutingReason: sql.NullString{String: reason, Valid: reason != ""}})
 		if execErr != nil {
 			return fmt.Errorf("update job routing metadata: %w", execErr)
 		}
@@ -843,20 +869,27 @@ func (d *ProcessingDispatcher) recoverStale() {
 		d.logger.WithField("artifacts", n).Info("Recovered stale processing jobs (requeued)")
 	}
 
-	// Fail jobs that exceeded max retries, AND the specific class of 'queued'
-	// jobs that can never make progress: a node-pinned clip whose source bytes
-	// live only on a now-unavailable node. dispatchJob keeps reverting such a
-	// job to 'queued' (refreshing updated_at, never incrementing retry_count,
-	// never entering dispatched/processing), so the retry-based sweep above can
-	// never catch it — without a terminal event it spins forever.
-	//
-	// The queued-terminal predicate is therefore gated on explicit source-bound
-	// intent, NOT on status='queued' alone: it requires a preferred node
-	// (preferred_node_id) AND a node-local source (source_kind live / dvr_rolling).
-	// A generic load-routed job (no preferred node, e.g. an upload transcode)
-	// stays queued and dispatches when capacity returns, so a cluster-wide
-	// processing outage no longer permanently fails recoverable jobs. Keyed on
-	// created_at, since revert refreshes updated_at every cycle.
+	// A node-local live source cannot migrate. Its disappearance is terminal;
+	// other queued work remains eligible until the whole-job deadline.
+	if d.startedAt.IsZero() || time.Since(d.startedAt) >= processingInventoryGrace {
+		pinned, listErr := queries.ListQueuedPinnedProcessingJobs(ctx)
+		if listErr != nil {
+			d.logger.WithError(listErr).Warn("Failed to inspect pinned processing sources")
+		} else {
+			alive := make(map[string]bool)
+			for _, id := range state.DefaultManager().AliveNodeIDs(time.Minute) {
+				alive[id] = true
+			}
+			for _, job := range pinned {
+				if alive[job.PreferredNodeID.String] {
+					continue
+				}
+				if failErr := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "source unavailable: pinned source node is gone", d.logger); failErr != nil {
+					d.logger.WithError(failErr).WithField("job_id", job.JobID).Warn("Failed to settle missing processing source")
+				}
+			}
+		}
+	}
 	queuedCutoff := time.Now().UTC().Add(-24 * time.Hour)
 	// Enumerate exhausted/stuck candidates WITHOUT terminalizing them — each is then failed in its
 	// own transaction so the job-failed, artifact-failed, and lifecycle-outbox writes commit

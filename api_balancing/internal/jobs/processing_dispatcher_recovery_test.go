@@ -30,6 +30,8 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// 2. candidate enumeration (read-only) returns the exhausted job ids.
+	mock.ExpectQuery(`SELECT job_id,tenant_id,preferred_node_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"job_id", "tenant_id", "preferred_node_id"}))
 	mock.ExpectQuery(`SELECT job_id\s+FROM foghorn.processing_jobs`).
 		WillReturnRows(sqlmock.NewRows([]string{"job_id"}).AddRow("job-clip").AddRow("job-vod"))
 

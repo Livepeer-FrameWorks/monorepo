@@ -17,16 +17,17 @@ const assignProcessingJobNode = `-- name: AssignProcessingJobNode :execrows
 UPDATE foghorn.processing_jobs
 SET processing_node_id = $2, updated_at = NOW(),
     progress_last_ms = 0, progress_advanced_at = NOW()
-WHERE job_id = $1 AND status = 'dispatched'
+WHERE job_id = $1 AND status = 'dispatched' AND tenant_id::text=NULLIF($3::text,'')
 `
 
 type AssignProcessingJobNodeParams struct {
 	JobID            string         `db:"job_id" json:"job_id"`
 	ProcessingNodeID sql.NullString `db:"processing_node_id" json:"processing_node_id"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) AssignProcessingJobNode(ctx context.Context, arg AssignProcessingJobNodeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, assignProcessingJobNode, arg.JobID, arg.ProcessingNodeID)
+	result, err := q.db.ExecContext(ctx, assignProcessingJobNode, arg.JobID, arg.ProcessingNodeID, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -181,17 +182,23 @@ UPDATE foghorn.processing_jobs
 SET status = 'processing', wait_reason = NULL, wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
     started_at = NOW(), updated_at = NOW(),
     progress_advanced_at = COALESCE(progress_advanced_at, NOW())
-WHERE job_id = $1 AND status = 'dispatched'
+WHERE job_id = $1 AND status = 'dispatched' AND tenant_id::text=NULLIF($4::text,'')
 `
 
 type CommitDispatchedProcessingJobParams struct {
 	JobID            string         `db:"job_id" json:"job_id"`
 	ProcessingNodeID sql.NullString `db:"processing_node_id" json:"processing_node_id"`
 	RoutingReason    sql.NullString `db:"routing_reason" json:"routing_reason"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) CommitDispatchedProcessingJob(ctx context.Context, arg CommitDispatchedProcessingJobParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, commitDispatchedProcessingJob, arg.JobID, arg.ProcessingNodeID, arg.RoutingReason)
+	result, err := q.db.ExecContext(ctx, commitDispatchedProcessingJob,
+		arg.JobID,
+		arg.ProcessingNodeID,
+		arg.RoutingReason,
+		arg.TenantID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -238,8 +245,9 @@ WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'failed', wait_reason = NULL, wait_started_at = NULL,
         error_message = CASE
-            WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < $1::timestamp)
-              THEN 'upload processing timed out after 24 hours'
+            WHEN COALESCE((SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+                  FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<$1::timestamp
+              THEN CASE WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod') THEN 'upload processing timed out after 24 hours' ELSE 'processing timed out after 24 hours' END
             WHEN EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')) THEN 'source artifact is no longer available'
             WHEN job.updated_at < $2::timestamp AND job.retry_count >= $3::integer THEN 'max retries exceeded'
             ELSE 'no processing progress within the watchdog window' END,
@@ -248,8 +256,9 @@ WITH failed AS (
       AND ((job.status IN ('dispatched', 'processing') AND job.updated_at < $2::timestamp AND job.retry_count >= $3::integer)
            OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < $5::timestamp)
            OR (job.status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
-           OR (job.status IN ('queued', 'dispatched', 'processing') AND EXISTS (
-             SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < $1::timestamp)))
+           OR (job.status IN ('queued', 'dispatched', 'processing') AND COALESCE(
+             (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+              FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<$1::timestamp))
     RETURNING artifact_hash, tenant_id, error_message
 )
 SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -363,10 +372,10 @@ FROM foghorn.processing_jobs AS job
 WHERE (status IN ('dispatched', 'processing') AND updated_at < $1::timestamp AND retry_count >= $2::integer)
    OR (status IN ('dispatched', 'processing') AND progress_advanced_at < $3::timestamp)
    OR (status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
-   OR (status IN ('queued', 'dispatched', 'processing') AND EXISTS (
-       SELECT 1 FROM foghorn.artifacts AS upload
-       WHERE upload.artifact_hash = job.artifact_hash AND upload.tenant_id = job.tenant_id
-         AND upload.artifact_type = 'vod' AND COALESCE(upload.created_at,job.created_at) < $4::timestamp))
+   OR (status IN ('queued', 'dispatched', 'processing') AND COALESCE(
+       (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+        FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),
+       job.created_at) < $4::timestamp)
 `
 
 type ListExhaustedProcessingJobIDsParams struct {
@@ -394,6 +403,43 @@ func (q *Queries) ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExh
 			return nil, err
 		}
 		items = append(items, job_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQueuedPinnedProcessingJobs = `-- name: ListQueuedPinnedProcessingJobs :many
+SELECT job_id,tenant_id,preferred_node_id FROM foghorn.processing_jobs
+WHERE status='queued' AND preferred_node_id IS NOT NULL AND preferred_node_id<>''
+  AND source_params->>'source_kind' IN ('live','dvr_rolling')
+`
+
+type ListQueuedPinnedProcessingJobsRow struct {
+	JobID           string         `db:"job_id" json:"job_id"`
+	TenantID        string         `db:"tenant_id" json:"tenant_id"`
+	PreferredNodeID sql.NullString `db:"preferred_node_id" json:"preferred_node_id"`
+}
+
+// The dispatcher is a cluster-wide scheduler. These identities are subsequently
+// checked against node liveness and terminalized in tenant-bound transactions.
+func (q *Queries) ListQueuedPinnedProcessingJobs(ctx context.Context) ([]ListQueuedPinnedProcessingJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listQueuedPinnedProcessingJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListQueuedPinnedProcessingJobsRow{}
+	for rows.Next() {
+		var i ListQueuedPinnedProcessingJobsRow
+		if err := rows.Scan(&i.JobID, &i.TenantID, &i.PreferredNodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -781,7 +827,10 @@ func (q *Queries) RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg R
 
 const revertProcessingJobToQueued = `-- name: RevertProcessingJobToQueued :exec
 UPDATE foghorn.processing_jobs
-SET status = 'queued', processing_node_id = NULL, updated_at = NOW()
+SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+    next_attempt_at=NOW()+INTERVAL '15 seconds',
+    wait_reason='cluster_unavailable',
+    wait_started_at=CASE WHEN wait_reason='cluster_unavailable' THEN wait_started_at ELSE NOW() AT TIME ZONE 'UTC' END
 WHERE job_id = $1
 `
 

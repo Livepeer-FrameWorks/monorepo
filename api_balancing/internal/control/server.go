@@ -8576,6 +8576,14 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		return
 	}
 
+	tenantEcho := strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID]))
+	if jobStatus == "cache_update" || jobStatus == "completed" || jobStatus == "failed" || jobStatus == "retryable" {
+		if tenantEcho == "" {
+			return fmt.Errorf("processing result requires tenant_id")
+		}
+		fields["tenant_id"] = tenantEcho
+	}
+
 	if raw := result.GetOutputs()[mist.ProcessingSourceProbeParam]; raw != "" {
 		var probe mist.ProcessingSourceProbe
 		if err := json.Unmarshal([]byte(raw), &probe); err != nil {
@@ -8728,7 +8736,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				var requestedStartUnix, requestedStopUnix int64
 				// Lock the artifact row too. A lookup failure must NOT acknowledge the job — return
 				// (rollback) so it retries.
-				artifact, lookupErr := q.LockProcessingArtifactForCompletion(ctx, result.GetJobId())
+				artifact, lookupErr := q.LockProcessingArtifactForCompletion(ctx, foghorndb.LockProcessingArtifactForCompletionParams{JobID: result.GetJobId(), TenantID: tenantEcho})
 				if lookupErr != nil {
 					// A GENUINELY missing artifact row (ErrNoRows: the row was hard-deleted, or the
 					// job points at a hash with no artifact) must NOT be acknowledged as completed —
@@ -9115,7 +9123,11 @@ func logProcessingFailureIgnored(logger logging.Logger, fields logging.Fields, r
 }
 
 func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) error {
-	return failProcessingJobOnDB(ctx, db, jobID, errMsg, reportingNode, "", logger, fields)
+	tenantID, ok := fields["tenant_id"].(string)
+	if !ok || strings.TrimSpace(tenantID) == "" {
+		return fmt.Errorf("processing failure requires tenant_id")
+	}
+	return failProcessingJobOnDB(ctx, db, jobID, errMsg, reportingNode, tenantID, logger, fields)
 }
 
 // FailUnplaceableProcessingJob settles an unassigned dispatch and its artifact in
@@ -9128,6 +9140,9 @@ func FailUnplaceableProcessingJob(ctx context.Context, conn *sql.DB, jobID, tena
 }
 
 func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, reportingNode, expectedTenant string, logger logging.Logger, fields logging.Fields) error {
+	if strings.TrimSpace(expectedTenant) == "" {
+		return fmt.Errorf("processing failure requires tenant_id")
+	}
 	// The stream-id lookup is a network call; resolve it at most once across transaction replays.
 	var resolvedStreamID string
 	streamIDResolved := false
@@ -9150,7 +9165,7 @@ func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, rep
 		// id — the same id whichever Foghorn replica holds that node's control stream — and dispatch persists it
 		// as processing_node_id, so the node holding the job is always accepted.
 		reason := processingFailureIgnoreReason(jobStatusNow, assignedNode, reportingNode)
-		if reportingNode == "" && expectedTenant != "" && tenantID == expectedTenant && assignedNode == "" && jobStatusNow == "dispatched" {
+		if reportingNode == "" && expectedTenant != "" && tenantID == expectedTenant && assignedNode == "" && (jobStatusNow == "dispatched" || jobStatusNow == "queued") {
 			reason = ""
 		}
 		if reason != "" {

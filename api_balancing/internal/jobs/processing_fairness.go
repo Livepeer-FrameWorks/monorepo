@@ -86,9 +86,10 @@ func (d *ProcessingDispatcher) refreshProcessingReservations(ctx context.Context
 			return a < b
 		})
 		if held := byJob[waiter.JobID]; held != "" {
-			// Keep a valid hold stable. If its node left the registered inventory or
-			// shrank, clear it before selecting another fitting node.
-			if _, ok := budgets[held]; ok && byNode[held].RequiredMemoryBytes == waiter.RequiredMemoryBytes {
+			// Keep a valid hold stable unless a healthy fitting node can replace
+			// an unavailable one. An offline hold must not block runnable work.
+			healthyAlternative := len(candidates) > 0 && healthy(candidates[0])
+			if _, ok := budgets[held]; ok && byNode[held].RequiredMemoryBytes == waiter.RequiredMemoryBytes && (healthy(held) || !healthyAlternative) {
 				continue
 			}
 			if _, err = queries.CancelProcessingNodeReservation(ctx, foghorndb.CancelProcessingNodeReservationParams{JobID: sql.NullString{String: waiter.JobID, Valid: true}, TenantID: sql.NullString{String: waiter.JobTenantID, Valid: true}}); err != nil {

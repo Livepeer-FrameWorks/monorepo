@@ -109,6 +109,8 @@ type Querier interface {
 	ClearCurrentChaptersForInactiveDVRs(ctx context.Context) (int64, error)
 	ClearDVRStopObligation(ctx context.Context, arg ClearDVRStopObligationParams) error
 	ClearDtshAttempt(ctx context.Context, arg ClearDtshAttemptParams) (string, error)
+	// Fairness arbitrates shared node capacity across tenants. This scheduler-only
+	// inventory is global; reservation mutations bind the owning job and tenant.
 	// Cleared rows retain their revision so a delayed protection cannot undo a clear.
 	ClearFinishedProcessingReservations(ctx context.Context) error
 	ClearThumbnailReassert(ctx context.Context, attemptID string) error
@@ -562,6 +564,8 @@ type Querier interface {
 	ListPendingDVRSegments(ctx context.Context, arg ListPendingDVRSegmentsParams) ([]FoghornDvrSegment, error)
 	ListProcessingMemoryReservations(ctx context.Context) ([]ListProcessingMemoryReservationsRow, error)
 	ListProcessingMemoryWaiters(ctx context.Context, arg ListProcessingMemoryWaitersParams) ([]ListProcessingMemoryWaitersRow, error)
+	// These service-internal scheduler and telemetry queries span tenants. Cluster
+	// entitlement is checked before placement; queue counts are operator metrics.
 	// Infrastructure telemetry is scoped to registered node IDs from Quartermaster.
 	ListProcessingNodeBudgets(ctx context.Context, nodeIds []string) ([]ListProcessingNodeBudgetsRow, error)
 	// Execution markers precede tenant discovery and are scoped to a node.
@@ -574,6 +578,9 @@ type Querier interface {
 	ListPurgeableAdmissionEffectFences(ctx context.Context, fences json.RawMessage) ([]ListPurgeableAdmissionEffectFencesRow, error)
 	ListPurgeableArtifacts(ctx context.Context, retentionInterval string) ([]ListPurgeableArtifactsRow, error)
 	ListPurgeableLocalArtifacts(ctx context.Context, arg ListPurgeableLocalArtifactsParams) ([]ListPurgeableLocalArtifactsRow, error)
+	// The dispatcher is a cluster-wide scheduler. These identities are subsequently
+	// checked against node liveness and terminalized in tenant-bound transactions.
+	ListQueuedPinnedProcessingJobs(ctx context.Context) ([]ListQueuedPinnedProcessingJobsRow, error)
 	ListRecentNodeLifecycles(ctx context.Context) ([]ListRecentNodeLifecyclesRow, error)
 	ListRecentProcessingJobs(ctx context.Context, limit int32) ([]ListRecentProcessingJobsRow, error)
 	// Clips and VODs (DVR chapters are VODs) deleted within the window, newest
@@ -638,7 +645,7 @@ type Querier interface {
 	LockIngestSessionByTrigger(ctx context.Context, arg LockIngestSessionByTriggerParams) (LockIngestSessionByTriggerRow, error)
 	LockIngestStream(ctx context.Context, hashtext string) error
 	LockMediaAuthority(ctx context.Context, arg LockMediaAuthorityParams) error
-	LockProcessingArtifactForCompletion(ctx context.Context, jobID string) (LockProcessingArtifactForCompletionRow, error)
+	LockProcessingArtifactForCompletion(ctx context.Context, arg LockProcessingArtifactForCompletionParams) (LockProcessingArtifactForCompletionRow, error)
 	LockProcessingJobForCompletion(ctx context.Context, arg LockProcessingJobForCompletionParams) (LockProcessingJobForCompletionRow, error)
 	LockProcessingJobForFailure(ctx context.Context, arg LockProcessingJobForFailureParams) (LockProcessingJobForFailureRow, error)
 	LockProcessingJobIdentity(ctx context.Context, arg LockProcessingJobIdentityParams) error
@@ -907,7 +914,6 @@ type Querier interface {
 	UpdateArtifactReportMetadata(ctx context.Context, arg UpdateArtifactReportMetadataParams) error
 	UpdateChapterFinalizeProgress(ctx context.Context, arg UpdateChapterFinalizeProgressParams) (UpdateChapterFinalizeProgressRow, error)
 	UpdateCompletedVODMetadata(ctx context.Context, arg UpdateCompletedVODMetadataParams) error
-	// Older edges omit the tenant echo; only the assigned node can recover it from the job.
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
 	// updated_at is the lease; progress_advanced_at moves only when the reported percentage or
 	// media position increases, which is what the stale-recovery watchdog reads. The same

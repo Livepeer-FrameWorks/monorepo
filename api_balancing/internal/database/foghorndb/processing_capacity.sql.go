@@ -49,7 +49,9 @@ func (q *Queries) CountWaitingProcessingJobs(ctx context.Context) ([]CountWaitin
 }
 
 const listProcessingNodeBudgets = `-- name: ListProcessingNodeBudgets :many
-SELECT node_id, COALESCE(lifecycle->>'processing_memory_budget_bytes','')::text AS budget_bytes
+SELECT node_id, CASE WHEN lifecycle ? 'processing_memory_budget_bytes'
+              AND COALESCE((lifecycle->>'cap_processing')::boolean,false)=false THEN '0'
+            ELSE COALESCE(lifecycle->>'processing_memory_budget_bytes','') END::text AS budget_bytes
 FROM foghorn.node_lifecycle
 WHERE node_id = ANY($1::text[])
 `
@@ -59,6 +61,8 @@ type ListProcessingNodeBudgetsRow struct {
 	BudgetBytes string `db:"budget_bytes" json:"budget_bytes"`
 }
 
+// These service-internal scheduler and telemetry queries span tenants. Cluster
+// entitlement is checked before placement; queue counts are operator metrics.
 // Infrastructure telemetry is scoped to registered node IDs from Quartermaster.
 func (q *Queries) ListProcessingNodeBudgets(ctx context.Context, nodeIds []string) ([]ListProcessingNodeBudgetsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProcessingNodeBudgets, pq.Array(nodeIds))

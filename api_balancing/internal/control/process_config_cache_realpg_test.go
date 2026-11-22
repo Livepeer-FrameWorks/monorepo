@@ -43,7 +43,7 @@ func TestProcessConfigCacheUpdatePersistsForOwningJobOnly_RealPG(t *testing.T) {
 		processProcessingJobResult(&ipcpb.ProcessingJobResult{
 			JobId:   id,
 			Status:  "cache_update",
-			Outputs: map[string]string{"artifact_hash": artifact, "processes_json": local},
+			Outputs: map[string]string{"tenant_id": tenant, "artifact_hash": artifact, "processes_json": local},
 		}, node, logging.NewLogger())
 	}
 	stored := func() string {

@@ -1,3 +1,5 @@
+-- Fairness arbitrates shared node capacity across tenants. This scheduler-only
+-- inventory is global; reservation mutations bind the owning job and tenant.
 -- Cleared rows retain their revision so a delayed protection cannot undo a clear.
 -- name: ClearFinishedProcessingReservations :exec
 UPDATE foghorn.processing_node_reservations AS reservation
@@ -31,7 +33,7 @@ WHERE job.job_id=sqlc.arg(job_id) AND job.tenant_id::text=sqlc.arg(tenant_id)
     WHERE other.origin_cluster_id=asset.origin_cluster_id AND other.status NOT IN ('ready','failed','deleted','expired','aborted') AND older.wait_reason='memory'
       AND older.status IN ('queued','dispatched','processing') AND older.memory_admitted_at IS NULL
       AND older.wait_started_at<sqlc.arg(wait_threshold)::timestamp
-      AND (other.artifact_type<>'vod' OR COALESCE(other.created_at,older.created_at)>(NOW() AT TIME ZONE 'UTC')-INTERVAL '24 hours')
+      AND COALESCE(CASE WHEN other.artifact_type='vod' THEN other.created_at ELSE older.created_at END,older.created_at)>(NOW() AT TIME ZONE 'UTC')-INTERVAL '24 hours'
       AND older.required_memory_bytes<=sqlc.arg(node_budget)::bigint
       AND NOT EXISTS (SELECT 1 FROM foghorn.processing_node_reservations AS held WHERE held.job_id=older.job_id AND held.node_id<>sqlc.arg(node_id)::text AND held.required_memory_bytes>0)
       AND (older.preferred_node_id IS NULL OR older.preferred_node_id=sqlc.arg(node_id)::text)
@@ -60,5 +62,5 @@ WHERE job.status IN ('queued','dispatched','processing') AND job.wait_reason='me
  AND job.memory_admitted_at IS NULL AND job.required_memory_bytes>0
  AND job.wait_started_at < sqlc.arg(wait_threshold)::timestamp
  AND asset.status NOT IN ('ready','failed','deleted','expired','aborted')
- AND (asset.artifact_type<>'vod' OR COALESCE(asset.created_at,job.created_at)>sqlc.arg(upload_deadline)::timestamp)
+ AND COALESCE(CASE WHEN asset.artifact_type='vod' THEN asset.created_at ELSE job.created_at END,job.created_at)>sqlc.arg(upload_deadline)::timestamp
 ORDER BY job.created_at,job.job_id;

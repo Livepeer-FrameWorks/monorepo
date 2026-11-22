@@ -37,7 +37,7 @@ func (s *processingInventoryServer) ListNodes(ctx context.Context, request *quar
 		response.Pagination = &commonpb.CursorPaginationResponse{HasNextPage: true, EndCursor: &cursor}
 	} else {
 		// No heartbeat: registration, not current liveness, is authoritative here.
-		response.Nodes = []*quartermasterpb.InfrastructureNode{{NodeId: "absent-large", ClusterId: "origin"}, {NodeId: "foreign", ClusterId: "other"}}
+		response.Nodes = []*quartermasterpb.InfrastructureNode{{NodeId: "absent-large", ClusterId: "origin"}, {NodeId: "foreign", ClusterId: "other"}, {NodeId: "retired", ClusterId: "origin", Status: "retired"}, {NodeId: "evicted", ClusterId: "origin", Status: "evicted"}}
 	}
 	return response, nil
 }

@@ -18,6 +18,9 @@ type processingClusterInventory struct {
 
 func (i processingClusterInventory) budget(id string, sm *state.StreamStateManager) (uint64, bool) {
 	if n := sm.GetNodeState(id); n != nil && n.ProcessingMemoryBudgetBytes != nil {
+		if !n.CapProcessing {
+			return 0, true
+		}
 		return *n.ProcessingMemoryBudgetBytes, true
 	}
 	b, ok := i.budgets[id]
