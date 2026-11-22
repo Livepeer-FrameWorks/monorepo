@@ -24,7 +24,7 @@ func RegisteredProcessingNodes(ctx context.Context, clusterID string) ([]string,
 			return nil, listErr
 		}
 		for _, node := range response.GetNodes() {
-			if node.GetClusterId() == clusterID && node.GetNodeId() != "" && node.GetStatus() != "decommissioned" && node.GetStatus() != "deleted" {
+			if node.GetClusterId() == clusterID && node.GetNodeId() != "" && node.GetStatus() != "retired" && node.GetStatus() != "evicted" {
 				ids = append(ids, node.GetNodeId())
 			}
 		}

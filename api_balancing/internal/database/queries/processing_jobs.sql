@@ -34,7 +34,10 @@ ORDER BY c.created_at,c.job_id;
 
 -- name: RevertProcessingJobToQueued :exec
 UPDATE foghorn.processing_jobs
-SET status = 'queued', processing_node_id = NULL, updated_at = NOW()
+SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+    next_attempt_at=NOW()+INTERVAL '15 seconds',
+    wait_reason='cluster_unavailable',
+    wait_started_at=CASE WHEN wait_reason='cluster_unavailable' THEN wait_started_at ELSE NOW() AT TIME ZONE 'UTC' END
 WHERE job_id = $1;
 
 -- Returns a claimed job no node can run to the queue and keeps it out of
@@ -58,7 +61,7 @@ WHERE a.artifact_hash=d.artifact_hash AND a.tenant_id=d.tenant_id;
 UPDATE foghorn.processing_jobs
 SET processing_node_id = $2, updated_at = NOW(),
     progress_last_ms = 0, progress_advanced_at = NOW()
-WHERE job_id = $1 AND status = 'dispatched';
+WHERE job_id = $1 AND status = 'dispatched' AND tenant_id::text=NULLIF(sqlc.arg(tenant_id)::text,'');
 
 -- name: ProjectProcessingArtifactStatus :exec
 UPDATE foghorn.artifacts
@@ -75,7 +78,7 @@ UPDATE foghorn.processing_jobs
 SET status = 'processing', wait_reason = NULL, wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
     started_at = NOW(), updated_at = NOW(),
     progress_advanced_at = COALESCE(progress_advanced_at, NOW())
-WHERE job_id = $1 AND status = 'dispatched';
+WHERE job_id = $1 AND status = 'dispatched' AND tenant_id::text=NULLIF(sqlc.arg(tenant_id)::text,'');
 
 -- name: MarkProcessingArtifactStarted :execrows
 UPDATE foghorn.artifacts
@@ -110,18 +113,19 @@ FROM foghorn.processing_jobs AS job
 WHERE (status IN ('dispatched', 'processing') AND updated_at < sqlc.narg(updated_at)::timestamp AND retry_count >= sqlc.narg(retry_count)::integer)
    OR (status IN ('dispatched', 'processing') AND progress_advanced_at < sqlc.narg(progress_advanced_at)::timestamp)
    OR (status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
-   OR (status IN ('queued', 'dispatched', 'processing') AND EXISTS (
-       SELECT 1 FROM foghorn.artifacts AS upload
-       WHERE upload.artifact_hash = job.artifact_hash AND upload.tenant_id = job.tenant_id
-         AND upload.artifact_type = 'vod' AND COALESCE(upload.created_at,job.created_at) < sqlc.arg(upload_deadline)::timestamp));
+   OR (status IN ('queued', 'dispatched', 'processing') AND COALESCE(
+       (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+        FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),
+       job.created_at) < sqlc.arg(upload_deadline)::timestamp);
 
 -- name: FailExhaustedProcessingJob :one
 WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'failed', wait_reason = NULL, wait_started_at = NULL,
         error_message = CASE
-            WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < sqlc.arg(upload_deadline)::timestamp)
-              THEN 'upload processing timed out after 24 hours'
+            WHEN COALESCE((SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+                  FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<sqlc.arg(upload_deadline)::timestamp
+              THEN CASE WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod') THEN 'upload processing timed out after 24 hours' ELSE 'processing timed out after 24 hours' END
             WHEN EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')) THEN 'source artifact is no longer available'
             WHEN job.updated_at < sqlc.narg(updated_at)::timestamp AND job.retry_count >= sqlc.narg(retry_count)::integer THEN 'max retries exceeded'
             ELSE 'no processing progress within the watchdog window' END,
@@ -130,8 +134,9 @@ WITH failed AS (
       AND ((job.status IN ('dispatched', 'processing') AND job.updated_at < sqlc.narg(updated_at)::timestamp AND job.retry_count >= sqlc.narg(retry_count)::integer)
            OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < sqlc.narg(progress_advanced_at)::timestamp)
            OR (job.status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
-           OR (job.status IN ('queued', 'dispatched', 'processing') AND EXISTS (
-             SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND COALESCE(upload.created_at,job.created_at) < sqlc.arg(upload_deadline)::timestamp)))
+           OR (job.status IN ('queued', 'dispatched', 'processing') AND COALESCE(
+             (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+              FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<sqlc.arg(upload_deadline)::timestamp))
     RETURNING artifact_hash, tenant_id, error_message
 )
 SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -324,3 +329,10 @@ UPDATE foghorn.processing_jobs
 SET processes_json=sqlc.arg(processes_json),updated_at=NOW()
 WHERE job_id=sqlc.arg(job_id) AND tenant_id::text=sqlc.arg(tenant_id)
  AND processing_node_id=sqlc.arg(node_id) AND status='dispatched';
+
+-- The dispatcher is a cluster-wide scheduler. These identities are subsequently
+-- checked against node liveness and terminalized in tenant-bound transactions.
+-- name: ListQueuedPinnedProcessingJobs :many
+SELECT job_id,tenant_id,preferred_node_id FROM foghorn.processing_jobs
+WHERE status='queued' AND preferred_node_id IS NOT NULL AND preferred_node_id<>''
+  AND source_params->>'source_kind' IN ('live','dvr_rolling');

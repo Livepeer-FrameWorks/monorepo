@@ -54,9 +54,9 @@ func TestDispatchJobRoutesThenDispatchFails(t *testing.T) {
 	// an empty registry -> dispatch fails -> revert + markArtifactQueued. No
 	// 'processing' UPDATE must run.
 	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET processing_node_id = ").
-		WithArgs("job-route-1", sqlmock.AnyArg()).
+		WithArgs("job-route-1", sqlmock.AnyArg(), "tenant-route").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET status = 'queued', processing_node_id = NULL, updated_at = NOW\\(\\)\\s+WHERE").
+	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET status = 'queued', processing_node_id = NULL, updated_at = NOW\\(\\),\\s+next_attempt_at=NOW\\(\\)\\+INTERVAL '15 seconds'").
 		WithArgs("job-route-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -187,6 +187,8 @@ func TestRecoverStaleRequeueOnlyPath(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	// Candidate enumeration returns no exhausted jobs → no per-job fail tx runs (a stray
 	// UPDATE foghorn.artifacts would have no expectation and fail the test).
+	mock.ExpectQuery(`SELECT job_id,tenant_id,preferred_node_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"job_id", "tenant_id", "preferred_node_id"}))
 	mock.ExpectQuery(`SELECT job_id\s+FROM foghorn.processing_jobs`).
 		WillReturnRows(sqlmock.NewRows([]string{"job_id"}))
 

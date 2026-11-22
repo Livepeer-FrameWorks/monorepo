@@ -44,7 +44,7 @@ func TestThumbnailJobLeavesPublishedAssetUntouched_RealPG(t *testing.T) {
 	}
 
 	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{
-		JobId: thumbnailJobID, Status: "completed", Outputs: map[string]string{"thumbnails": "uploaded"},
+		JobId: thumbnailJobID, Status: "completed", Outputs: map[string]string{mist.ProcessingResultTenantID: thumbnailJobTenant, "thumbnails": "uploaded"},
 	}, "edge-1", logger); err != nil {
 		t.Fatalf("completion: %v", err)
 	}
