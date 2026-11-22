@@ -6,7 +6,7 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: mistserver-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-mistserver-instance}"
     image: geerlingguy/docker-ubuntu2404-ansible:latest
     pre_build_image: true
     privileged: true
