@@ -46,23 +46,27 @@ func TestProcessingFailureReachesFailed_RealPG(t *testing.T) {
 	seedActiveImportJob(t, conn)
 	logger := logging.NewLogger()
 
-	foreign := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "failed", Error: "source unavailable: 404 Not Found"}
-	processProcessingJobResult(foreign, "edge-2", logger)
+	foreign := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "failed", Error: "source unavailable: 404 Not Found", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant}}
+	if err := processProcessingJobResult(foreign, "edge-2", logger); err != nil {
+		t.Fatal(err)
+	}
 	var status string
-	if err := conn.QueryRow(`SELECT status FROM foghorn.processing_jobs WHERE job_id = $1::uuid`, processingFailureJob).Scan(&status); err != nil {
+	if err := conn.QueryRow(`SELECT status FROM foghorn.processing_jobs WHERE job_id = $1::uuid AND tenant_id = $2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "processing" {
 		t.Fatalf("foreign node failure changed job status to %q", status)
 	}
 
-	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "failed", Error: "source unavailable: 404 Not Found"}, "edge-1", logger)
-
-	var jobErr, artifactStatus string
-	if err := conn.QueryRow(`SELECT status, COALESCE(error_message, '') FROM foghorn.processing_jobs WHERE job_id = $1::uuid`, processingFailureJob).Scan(&status, &jobErr); err != nil {
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "failed", Error: "source unavailable: 404 Not Found", Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant}}, "edge-1", logger); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, processingFailureHash).Scan(&artifactStatus); err != nil {
+
+	var jobErr, artifactStatus string
+	if err := conn.QueryRow(`SELECT status, COALESCE(error_message, '') FROM foghorn.processing_jobs WHERE job_id = $1::uuid AND tenant_id = $2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &jobErr); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id = $2::uuid`, processingFailureHash, processingFailureTenant).Scan(&artifactStatus); err != nil {
 		t.Fatal(err)
 	}
 	if status != "failed" || jobErr != "source unavailable: 404 Not Found" || artifactStatus != "failed" {
@@ -137,7 +141,7 @@ func TestMemoryDeferralSurvivesTenMinutesAndCompletes_RealPG(t *testing.T) {
 		}
 	}
 	duration := int64(60000)
-	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "completed", OutputPath: "/storage/vod/queued.mkv", OutputSizeBytes: 1024, MediaDurationMs: &duration, Outputs: map[string]string{"video_codec": "H264", "width": "3840", "height": "2160", "duration_ms": "60000"}}, "edge-1", logger); err != nil {
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "completed", OutputPath: "/storage/vod/queued.mkv", OutputSizeBytes: 1024, MediaDurationMs: &duration, Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, "video_codec": "H264", "width": "3840", "height": "2160", "duration_ms": "60000"}}, "edge-1", logger); err != nil {
 		t.Fatal(err)
 	}
 	var job, artifact string
