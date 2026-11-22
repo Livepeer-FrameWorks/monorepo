@@ -364,7 +364,6 @@ func TestMistMemoryLifecyclePlacesUsingEffectiveBudget(t *testing.T) {
 	if id, reason := routeProcessingJob(job); id != "larger" {
 		t.Fatalf("larger effective budget not selected: %s %s", id, reason)
 	}
-	job.MemoryRejectedNodes = []string{"larger"}
 	report("larger", 16, mist.ProcessingMemoryBudget(3*1024*1024*1024))
 	if id, reason := routeProcessingJob(job); id != "" || reason != mist.ProcessingMemoryNoNodeReason {
 		t.Fatalf("undersized refused node was reused: %s %s", id, reason)

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -32,14 +33,16 @@ func TestBusyMemoryMustPreserveLookahead(t *testing.T) {
 	}
 	total := uint64(8) * 1024 * memoryMiB
 	free := minimum - 64*memoryMiB
-	if err := setProcessingProcessOverride("processing+other-quality", "[]", "other", time.Now().Add(time.Hour), processingMemoryBudget(total)-free); err != nil {
+	if err = setProcessingProcessOverride("processing+other-quality", "[]", "other", time.Now().Add(time.Hour), processingMemoryBudget(total)-free); err != nil {
 		t.Fatal(err)
 	}
-	if err := setProcessingProcessOverride(stream, processingSourceProbePolicy, job, time.Now().Add(time.Hour)); err != nil {
+	if err = setProcessingProcessOverride(stream, processingSourceProbePolicy, job, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
-	if admitted, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, string(retained), source, func(*ipcpb.ControlMessage) {}); err == nil {
-		t.Fatalf("busy memory changed quality instead of waiting: %s", admitted)
+	admitted, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, string(retained), source, func(*ipcpb.ControlMessage) {})
+	var capacity *processingCapacityError
+	if !errors.As(err, &capacity) || capacity.nodeTooSmall || admitted != "" {
+		t.Fatalf("busy memory must return temporary capacity wait: policy=%s err=%v", admitted, err)
 	}
 }

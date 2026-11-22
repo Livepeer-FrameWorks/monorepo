@@ -42,6 +42,19 @@ func TestDVRAndThumbnailCutoffsPreserveElapsedTime_RealPG(t *testing.T) {
 			if err != nil || count != 1 {
 				t.Fatalf("zone %d changed thumbnail cutoff: count=%d err=%v", offset, count, err)
 			}
+			if _, err := conn.Exec(`UPDATE foghorn.thumbnail_task_assignment SET status='published' WHERE tenant_id=$1`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"0", "1"} {
+				if _, err := conn.Exec(`INSERT INTO foghorn.thumbnail_active_pointer(asset_key,tenant_id,active_version,active_token) VALUES($1,$2,$3,'utc-test')`, "asset-"+name, tenant, "attempt-"+name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count, err = UnprojectedThumbnailRecoveryBacklog(t.Context(), conn, time.Now().Add(-time.Hour))
+			if err != nil || count != 1 {
+				t.Fatalf("zone %d changed unprojected thumbnail cutoff: count=%d err=%v", offset, count, err)
+			}
+
 		})
 	}
 }

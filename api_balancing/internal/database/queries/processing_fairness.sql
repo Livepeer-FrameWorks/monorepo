@@ -25,14 +25,14 @@ SELECT sqlc.arg(node_id)::text,job.job_id,job.tenant_id,sqlc.arg(required_bytes)
 FROM foghorn.processing_jobs AS job
 JOIN foghorn.artifacts AS asset ON asset.artifact_hash=job.artifact_hash AND asset.tenant_id=job.tenant_id
 WHERE job.job_id=sqlc.arg(job_id) AND job.tenant_id::text=sqlc.arg(tenant_id)
-  AND job.status IN ('queued','dispatched','processing') AND job.wait_reason='memory'
+  AND job.status IN ('queued','dispatched','processing') AND (job.wait_reason='memory' OR job.memory_wait_ms>0)
   AND job.memory_admitted_at IS NULL
   AND NOT EXISTS (
     SELECT 1 FROM foghorn.processing_jobs AS older
     JOIN foghorn.artifacts AS other ON other.artifact_hash=older.artifact_hash AND other.tenant_id=older.tenant_id
-    WHERE other.origin_cluster_id=asset.origin_cluster_id AND other.status NOT IN ('ready','failed','deleted','expired','aborted') AND older.wait_reason='memory'
+    WHERE other.origin_cluster_id=asset.origin_cluster_id AND other.status NOT IN ('ready','failed','deleted','expired','aborted') AND (older.wait_reason='memory' OR older.memory_wait_ms>0)
       AND older.status IN ('queued','dispatched','processing') AND older.memory_admitted_at IS NULL
-      AND older.wait_started_at<sqlc.arg(wait_threshold)::timestamp
+      AND (make_interval(secs => older.memory_wait_ms/1000.0) + CASE WHEN older.wait_reason='memory' THEN GREATEST(INTERVAL '0 seconds',(NOW() AT TIME ZONE 'UTC')-COALESCE(older.memory_wait_started_at,older.wait_started_at,NOW() AT TIME ZONE 'UTC')) ELSE INTERVAL '0 seconds' END) > ((NOW() AT TIME ZONE 'UTC')-sqlc.arg(wait_threshold)::timestamp)
       AND COALESCE(CASE WHEN other.artifact_type='vod' THEN other.created_at ELSE older.created_at END,older.created_at)>(NOW() AT TIME ZONE 'UTC')-INTERVAL '24 hours'
       AND older.required_memory_bytes<=sqlc.arg(node_budget)::bigint
       AND NOT EXISTS (SELECT 1 FROM foghorn.processing_node_reservations AS held WHERE held.job_id=older.job_id AND held.node_id<>sqlc.arg(node_id)::text AND held.required_memory_bytes>0)
@@ -58,9 +58,9 @@ SELECT job.job_id,job.tenant_id::text,job.required_memory_bytes,job.preferred_no
        asset.origin_cluster_id,job.created_at,job.wait_started_at
 FROM foghorn.processing_jobs AS job
 JOIN foghorn.artifacts AS asset ON asset.artifact_hash=job.artifact_hash AND asset.tenant_id=job.tenant_id
-WHERE job.status IN ('queued','dispatched','processing') AND job.wait_reason='memory'
+WHERE job.status IN ('queued','dispatched','processing') AND (job.wait_reason='memory' OR job.memory_wait_ms>0)
  AND job.memory_admitted_at IS NULL AND job.required_memory_bytes>0
- AND job.wait_started_at < sqlc.arg(wait_threshold)::timestamp
+ AND (make_interval(secs => job.memory_wait_ms/1000.0) + CASE WHEN job.wait_reason='memory' THEN GREATEST(INTERVAL '0 seconds',(NOW() AT TIME ZONE 'UTC')-COALESCE(job.memory_wait_started_at,job.wait_started_at,NOW() AT TIME ZONE 'UTC')) ELSE INTERVAL '0 seconds' END) > ((NOW() AT TIME ZONE 'UTC')-sqlc.arg(wait_threshold)::timestamp)
  AND asset.status NOT IN ('ready','failed','deleted','expired','aborted')
  AND COALESCE(CASE WHEN asset.artifact_type='vod' THEN asset.created_at ELSE job.created_at END,job.created_at)>sqlc.arg(upload_deadline)::timestamp
 ORDER BY job.created_at,job.job_id;

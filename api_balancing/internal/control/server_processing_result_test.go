@@ -636,7 +636,7 @@ func TestProcessingCapacityDeferralDoesNotConsumeRetry(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 	mock.ExpectQuery(`WITH requeued AS \(\s+UPDATE foghorn.processing_jobs AS job\s+SET status = 'queued'.*next_attempt_at = NOW\(\) \+ INTERVAL '30 seconds'`).
-		WithArgs(sql.NullString{String: "waiting for processing memory", Valid: true}, int64(0), "", false, false, "node-1", "job-1", "tenant-1").
+		WithArgs(sql.NullString{String: "waiting for processing memory", Valid: true}, int64(0), int64(0), "", false, false, "job-1", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(1))
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{"retry_cause": "memory_pressure", mist.ProcessingResultTenantID: "tenant-1"}}, "node-1", logger)
 	if err := mock.ExpectationsWereMet(); err != nil {

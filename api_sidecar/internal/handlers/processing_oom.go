@@ -237,5 +237,5 @@ func processingOOMOutputs(err error) map[string]string {
 	if !errors.As(err, &oom) {
 		return nil
 	}
-	return map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure, mist.ProcessingRequiredMemoryBytes: strconv.FormatUint(oom.required, 10), mist.ProcessingMemoryPolicy: oom.policy}
+	return map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure, mist.ProcessingRequiredMemoryBytes: strconv.FormatUint(oom.required, 10), mist.ProcessingOOMRequiredMemoryBytes: strconv.FormatUint(oom.required, 10), mist.ProcessingMemoryPolicy: oom.policy}
 }

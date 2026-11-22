@@ -82,7 +82,7 @@ WITH claimed AS (
     RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
               output_profiles,
               retry_count, processes_json, source_url,
-              source_params, preferred_node_id, required_memory_bytes, memory_rejected_nodes, wait_reason, wait_started_at, source_probe, created_at
+              source_params, preferred_node_id, required_memory_bytes, memory_floor_bytes, wait_reason, wait_started_at, source_probe, created_at
 )
 SELECT c.job_id, c.tenant_id, c.artifact_hash,
        COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -92,7 +92,7 @@ SELECT c.job_id, c.tenant_id, c.artifact_hash,
        c.processes_json, a.internal_name, COALESCE(a.stream_id::text, '')::text AS stream_id,
        a.stream_internal_name,
        COALESCE(a.durable_backend_local, false) AS durable_backend_local,
-       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id, c.required_memory_bytes, c.memory_rejected_nodes, c.wait_reason, c.wait_started_at, c.source_probe, c.created_at, COALESCE(a.created_at,c.created_at) AS upload_created_at
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id, c.required_memory_bytes, c.memory_floor_bytes, c.wait_reason, c.wait_started_at, c.source_probe, c.created_at, COALESCE(a.created_at,c.created_at) AS upload_created_at
 FROM claimed AS c
 LEFT JOIN foghorn.artifacts AS a ON c.artifact_hash = a.artifact_hash AND c.tenant_id = a.tenant_id
 ORDER BY c.created_at,c.job_id
@@ -119,7 +119,7 @@ type ClaimQueuedProcessingJobsRow struct {
 	DurableBackendLocal bool           `db:"durable_backend_local" json:"durable_backend_local"`
 	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
-	MemoryRejectedNodes []string       `db:"memory_rejected_nodes" json:"memory_rejected_nodes"`
+	MemoryFloorBytes    int64          `db:"memory_floor_bytes" json:"memory_floor_bytes"`
 	WaitReason          sql.NullString `db:"wait_reason" json:"wait_reason"`
 	WaitStartedAt       sql.NullTime   `db:"wait_started_at" json:"wait_started_at"`
 	SourceProbe         sql.NullString `db:"source_probe" json:"source_probe"`
@@ -157,7 +157,7 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 			&i.DurableBackendLocal,
 			&i.OriginClusterID,
 			&i.RequiredMemoryBytes,
-			pq.Array(&i.MemoryRejectedNodes),
+			&i.MemoryFloorBytes,
 			&i.WaitReason,
 			&i.WaitStartedAt,
 			&i.SourceProbe,
@@ -179,7 +179,9 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 
 const commitDispatchedProcessingJob = `-- name: CommitDispatchedProcessingJob :execrows
 UPDATE foghorn.processing_jobs
-SET status = 'processing', wait_reason = NULL, wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
+SET status = 'processing', wait_reason = NULL, memory_wait_ms = memory_wait_ms + CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END,
+        memory_wait_started_at = NULL,
+        wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
     started_at = NOW(), updated_at = NOW(),
     progress_advanced_at = COALESCE(progress_advanced_at, NOW())
 WHERE job_id = $1 AND status = 'dispatched' AND tenant_id::text=NULLIF($4::text,'')
@@ -211,7 +213,9 @@ WITH deferred AS (
  SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
      next_attempt_at = NOW() + make_interval(secs => $1::double precision),
      wait_reason = $2::text,
-     wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC')
+     memory_wait_ms = memory_wait_ms + CASE WHEN ($2::text) IS DISTINCT FROM 'memory' THEN CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END ELSE 0 END,
+        memory_wait_started_at = CASE WHEN ($2::text)='memory' THEN CASE WHEN wait_reason='memory' THEN COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END ELSE NULL END,
+        wait_started_at = CASE WHEN ($2::text) IS NULL THEN NULL WHEN wait_reason=($2::text) THEN COALESCE(wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END
  WHERE job.job_id = $3 AND job.tenant_id::text = $4
  RETURNING job.artifact_hash,job.tenant_id
 )
@@ -230,6 +234,7 @@ type DeferUnroutableProcessingJobParams struct {
 
 // Returns a claimed job no node can run to the queue and keeps it out of
 // ClaimQueuedProcessingJobs until next_attempt_at.
+// Fairness counts time actually blocked by memory, separately from routing waits.
 func (q *Queries) DeferUnroutableProcessingJob(ctx context.Context, arg DeferUnroutableProcessingJobParams) error {
 	_, err := q.db.ExecContext(ctx, deferUnroutableProcessingJob,
 		arg.DeferSeconds,
@@ -556,14 +561,16 @@ WITH requeued AS (
         error_message = $1,
         progress_last_ms = 0, progress_advanced_at = NULL,
         next_attempt_at = NOW() + INTERVAL '30 seconds',
-        required_memory_bytes = GREATEST(required_memory_bytes, $2::bigint),
-        processes_json = COALESCE(NULLIF($3::text, ''), processes_json),
-        wait_reason = CASE WHEN $4::boolean OR $5::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
-        wait_started_at = COALESCE(wait_started_at, NOW() AT TIME ZONE 'UTC'),
-        memory_rejected_nodes = CASE WHEN $4::boolean AND NOT ($6::text=ANY(memory_rejected_nodes)) THEN array_append(memory_rejected_nodes,$6::text) ELSE memory_rejected_nodes END
+        memory_floor_bytes = GREATEST(memory_floor_bytes,$2::bigint),
+        required_memory_bytes = GREATEST(memory_floor_bytes,$2::bigint,$3::bigint),
+        processes_json = COALESCE(NULLIF($4::text, ''), processes_json),
+        wait_reason = CASE WHEN $5::boolean OR $6::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END,
+        memory_wait_ms = memory_wait_ms + CASE WHEN (CASE WHEN $5::boolean OR $6::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END) IS DISTINCT FROM 'memory' THEN CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END ELSE 0 END,
+        memory_wait_started_at = CASE WHEN (CASE WHEN $5::boolean OR $6::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END)='memory' THEN CASE WHEN wait_reason='memory' THEN COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END ELSE NULL END,
+        wait_started_at = CASE WHEN (CASE WHEN $5::boolean OR $6::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END) IS NULL THEN NULL WHEN wait_reason=(CASE WHEN $5::boolean OR $6::boolean THEN 'fitting_node_unavailable' ELSE 'memory' END) THEN COALESCE(wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END
     WHERE job.job_id = $7
-      AND job.processing_node_id = $6
-      AND job.tenant_id::text = $8
+      AND job.processing_node_id = $8::text
+      AND job.tenant_id::text = $9
       AND job.status IN ('dispatched', 'processing')
       AND EXISTS (SELECT 1 FROM foghorn.artifacts AS owned WHERE owned.artifact_hash=job.artifact_hash AND owned.tenant_id=job.tenant_id AND owned.status NOT IN ('deleted','expired','aborted','failed'))
     RETURNING artifact_hash, tenant_id
@@ -582,12 +589,13 @@ SELECT COUNT(*)::int AS requeued FROM requeued
 
 type RequeueCapacityDeferredProcessingJobParams struct {
 	ErrorMessage        sql.NullString `db:"error_message" json:"error_message"`
+	MemoryFloorBytes    int64          `db:"memory_floor_bytes" json:"memory_floor_bytes"`
 	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
 	ProcessesJson       string         `db:"processes_json" json:"processes_json"`
 	NodeTooSmall        bool           `db:"node_too_small" json:"node_too_small"`
 	NodeUnavailable     bool           `db:"node_unavailable" json:"node_unavailable"`
-	NodeID              string         `db:"node_id" json:"node_id"`
 	JobID               string         `db:"job_id" json:"job_id"`
+	NodeID              string         `db:"node_id" json:"node_id"`
 	TenantID            string         `db:"tenant_id" json:"tenant_id"`
 }
 
@@ -596,12 +604,13 @@ type RequeueCapacityDeferredProcessingJobParams struct {
 func (q *Queries) RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error) {
 	row := q.db.QueryRowContext(ctx, requeueCapacityDeferredProcessingJob,
 		arg.ErrorMessage,
+		arg.MemoryFloorBytes,
 		arg.RequiredMemoryBytes,
 		arg.ProcessesJson,
 		arg.NodeTooSmall,
 		arg.NodeUnavailable,
-		arg.NodeID,
 		arg.JobID,
+		arg.NodeID,
 		arg.TenantID,
 	)
 	var requeued int32
@@ -830,7 +839,9 @@ UPDATE foghorn.processing_jobs
 SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
     next_attempt_at=NOW()+INTERVAL '15 seconds',
     wait_reason='cluster_unavailable',
-    wait_started_at=CASE WHEN wait_reason='cluster_unavailable' THEN wait_started_at ELSE NOW() AT TIME ZONE 'UTC' END
+    memory_wait_ms = memory_wait_ms + CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END,
+        memory_wait_started_at = NULL,
+        wait_started_at = CASE WHEN wait_reason='cluster_unavailable' THEN COALESCE(wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END
 WHERE job_id = $1
 `
 
