@@ -104,3 +104,17 @@ func TestReplaceLivepeerWithLocalCarriesRetention(t *testing.T) {
 		}
 	}
 }
+
+func TestLadderProfilesCarryRetainSelectors(t *testing.T) {
+	rungs := []contract.RenditionSpec{
+		{Name: "720p", Codec: "H264", Resolution: "x720", Bitrate: 4500000, Profile: "high", TrackInhibit: "video=<1280x720"},
+		{Name: "box", Codec: "H264", Resolution: "1280x720", Bitrate: 4500000, Profile: "high", TrackInhibit: "video=<1280x720"},
+	}
+	profiles := LadderProfiles(rungs)
+	if got, want := profiles[0]["track_retain"], RetainSelector(RetainRung{720, 4500000}); got != want {
+		t.Errorf("720p track_retain = %#v, want %q", got, want)
+	}
+	if _, set := profiles[1]["track_retain"]; set {
+		t.Errorf("explicit box rung carries track_retain: %v", profiles[1])
+	}
+}

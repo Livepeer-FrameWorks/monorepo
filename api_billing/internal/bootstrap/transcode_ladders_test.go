@@ -8,7 +8,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
-const standardLadderProfiles = `[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x480"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x720"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x1080"}]`
+const standardLadderProfiles = `[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x360","track_retain":"video=h264,hevc,|source,|>0x327,|<0x393,|>439kbps,|<1758kbps"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x480","track_retain":"video=h264,hevc,|source,|>0x447,|<0x513,|>781kbps,|<3126kbps"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x720","track_retain":"video=h264,hevc,|source,|>0x683,|<0x757,|>2197kbps,|<8790kbps"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<0x1080","track_retain":"video=h264,hevc,|source,|>0x1025,|<0x1135,|>3808kbps,|<15235kbps"}]`
 
 func TestEmbeddedCatalogTranscodeLadders(t *testing.T) {
 	tiers, err := EmbeddedTiers()
