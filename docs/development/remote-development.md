@@ -47,15 +47,23 @@ lock so simultaneous starts cannot reuse one allocation; jobs with enough
 headroom still run concurrently. Insufficient headroom returns 75. Check
 `/srv/frameworks-dev`, not `/`: the build disk can be full while the OS disk
 has space. This admission budget is not a filesystem quota for running jobs.
+Use `storage <slot> --usage` to identify the actual devices and filesystem sizes;
+expanding the system disk does not expand a separate build disk.
 
 ## Storage maintenance
 
 ```bash
 scripts/remote-dev.sh storage issue-123
+scripts/remote-dev.sh storage issue-123 --usage
 scripts/remote-dev.sh storage issue-123 --apply --wait-seconds 900 --keep-workspace release-candidate
 ```
 
-The first command audits without deleting. Apply reserves all three heavy-job
+The first command audits cleanup candidates without deleting. `--usage` reports
+filesystem capacity, workspace/cache directory sizes and Docker disk usage. It
+runs a read-only audit without taking heavy-job locks, including against slots
+with older scripts. Partial results and permission errors remain in the report;
+directory totals and Docker's shared image layers must not be added together.
+Apply reserves all three heavy-job
 locks; running jobs finish normally, and new jobs return 75 until maintenance ends.
 Without a wait allowance, an occupied slot returns 75. Do not invoke maintenance
 inside `remote-dev.sh run`, which already owns one of those locks.

@@ -17,6 +17,20 @@ spec.loader.exec_module(storage)
 
 
 class StorageTests(unittest.TestCase):
+    def test_usage_audit_retains_command_failures_without_running_cleanup(self):
+        path = Path(__file__).with_name('remote-dev-usage.py')
+        self.assertTrue(path.exists(), 'storage audit lacks a read-only disk-usage breakdown')
+        audit_spec = importlib.util.spec_from_file_location('usage', path)
+        usage = importlib.util.module_from_spec(audit_spec)
+        audit_spec.loader.exec_module(usage)
+        with patch.object(usage.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                ['du'], 1, stdout='123\t/workspace\n', stderr='permission denied\n')) as run:
+            result = usage.capture(['du', '-x', '/workspace'])
+        self.assertEqual(result['exit'], 1)
+        self.assertEqual(result['stdout'], '123\t/workspace\n')
+        self.assertEqual(result['stderr'], 'permission denied\n')
+        self.assertEqual(run.call_args.args[0], ['du', '-x', '/workspace'])
+
     def test_maintenance_requires_every_job_slot_and_releases_partial_reservation(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
