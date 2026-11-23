@@ -912,7 +912,9 @@ publish_refused() {
   kill "$probe" 2>/dev/null || true
   # createStream succeeded before ffmpeg sends publish: an unreachable edge
   # cannot satisfy this positive control for the refused attempt.
-  grep -q 'Sending publish command' "$STACK_STATE_DIR/publish-$key.log"
+  # Native RTMP and librtmp use different outbound-command debug lines.
+  # FCPublish and server status responses alone do not prove publish was sent.
+  grep -Eq 'Sending publish command|^Invoking publish[[:space:]]*$' "$STACK_STATE_DIR/publish-$key.log"
 }
 
 if [ -n "${STACK_ADAPTER_FILE:-}" ]; then

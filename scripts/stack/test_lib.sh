@@ -340,6 +340,22 @@ refusal_rejects_unreachable_edge() (
 )
 expect 'refusal probe rejects an attempt that never negotiated with the edge' refusal_rejects_unreachable_edge
 
+refusal_backend_probe() (
+  local evidence=$1
+  publish() {
+    printf '%s\n' "$evidence" >"$STACK_STATE_DIR/publish-key.log"
+    command sleep 300 >/dev/null 2>&1 &
+    echo $! >>"$work/pids"
+    echo $!
+  }
+  refusal_history_probe no
+)
+expect 'refusal probe recognizes the librtmp outbound publish command' refusal_backend_probe 'Invoking publish'
+refusal_rejects_fc_publish_only() { ! refusal_backend_probe 'Invoking FCPublish'; }
+expect 'FCPublish negotiation alone does not prove the publish command was sent' refusal_rejects_fc_publish_only
+refusal_rejects_publish_response_only() { ! refusal_backend_probe 'NetStream.Publish.Start'; }
+expect 'a publish status response alone does not prove the publish command was sent' refusal_rejects_publish_response_only
+
 operator_calls_refresh_auth() (
   # Read by the scenario function loaded through eval below.
   # shellcheck disable=SC2034

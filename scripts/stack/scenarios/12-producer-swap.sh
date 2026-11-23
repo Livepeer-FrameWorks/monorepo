@@ -18,8 +18,9 @@ trap 'stack_ctl start "$GATEWAY" >/dev/null 2>&1' EXIT
 render_mp4 "$STACK_STATE_DIR/vod480-swap.mp4" 854x480 15 "$LEN" || { fail "render VOD source"; finish; }
 eventually 90 "cell A Livepeer gateway discoverable" gateway_discoverable stack-livepeer-gateway-a
 
-job_row() { # job_row <hash>: status|retry_count|processes_json|error of the newest job
-  pg "$FOGHORN_A_DB" "SELECT status, retry_count, COALESCE(processes_json,'[]'), COALESCE(error_message,'')
+job_row() { # job_row <hash>: one JSON snapshot of the newest job
+  pg "$FOGHORN_A_DB" "SELECT jsonb_build_object('status', status, 'retry_count', retry_count,
+    'processes', COALESCE(processes_json,'[]')::jsonb, 'error', COALESCE(error_message,''))
     FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$1' ORDER BY created_at DESC LIMIT 1"
 }
 
@@ -37,23 +38,23 @@ output_started() {
   [ "${ms:-0}" -gt 0 ]
 }
 eventually 180 "processing output reports its first segment" output_started
-P=$(job_row "$VHASH" | cut -d'|' -f3)
+P=$(job_row "$VHASH" | jq -c '.processes')
 check "the job started on Livepeer" json_has "$P" 'map(.process) | index("Livepeer") != null'
 stack_ctl stop "$GATEWAY" || { fail "stop $GATEWAY"; finish; }
 
 ready_or_failed() {
   local s
   s=$(vod_status "$VID")
-  echo "    status: $s | job: $(job_row "$VHASH" | cut -d'|' -f1,2,4 | cut -c1-160)"
+  echo "    status: $s | job: $(job_row "$VHASH" | jq -c '{status,retry_count,error}' | cut -c1-160)"
   [ "$s" = READY ] && return 0
   [ "$s" = FAILED ] && return 2
   return 1
 }
 eventually 600 "VOD reaches READY after the producer swap" ready_or_failed
 ROW=$(job_row "$VHASH")
-P=$(echo "$ROW" | cut -d'|' -f3)
-ERR=$(echo "$ROW" | cut -d'|' -f4-)
-echo "    final job: $(echo "$ROW" | cut -d'|' -f1,2) error: ${ERR:0:200}"
+P=$(echo "$ROW" | jq -c '.processes')
+ERR=$(echo "$ROW" | jq -r '.error')
+echo "    final job: $(echo "$ROW" | jq -c '{status,retry_count}') error: ${ERR:0:200}"
 check "the job finished on the persisted local ladder (AV, no Livepeer)" json_has "$P" \
   'map(.process) | (index("AV") != null and index("Livepeer") == null)'
 not_ebml_abort() { case "$ERR" in *"was not declared"*) [[ "$ERR" == *PROCESS_TRACKS_CHANGED* ]] ;; *) true ;; esac; }
