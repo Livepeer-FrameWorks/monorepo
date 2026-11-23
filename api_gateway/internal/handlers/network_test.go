@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestNetworkHistoryOutageRetainsInventory(t *testing.T) {
 func TestPublicNetworkPublishesObserverLocationsWithoutPrivateIdentity(t *testing.T) {
 	h, _, router := networkFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"provider":"livepeer","network":"42161","environment":"production","resources":[],"endpoints":[],"observers":[{"id":"private-gateway","kind":"gateway","region":"eu","location":{"known":false}},{"id":"private-prober","kind":"prober","region":"eu","location":{"known":true,"latitude":52,"longitude":5,"source":"mmdb"}}]}`))
+		_, _ = w.Write([]byte(`{"provider":"livepeer","network":"42161","environment":"production","resources":[],"endpoints":[],"observers":[{"id":"private-gateway","kind":"gateway","region":"eu","location":{"known":false}},{"id":"private-prober","kind":"prober","region":"eu","source_ip":"203.0.113.111","delivery":{"sequence":987,"pending_records":9999},"collection_status":"delayed","location":{"known":true,"latitude":52,"longitude":5,"source":"mmdb"}}]}`))
 	}))
 	t.Cleanup(server.Close)
 	client, err := networkobserver.New(server.URL, "ingest-secret", true)
@@ -115,6 +116,9 @@ func TestPublicNetworkPublishesObserverLocationsWithoutPrivateIdentity(t *testin
 			t.Fatalf("observer locations missing: %d %s", response.Code, response.Body)
 		}
 		gateway, prober := body.Inventory.Observers[0], body.Inventory.Observers[1]
+		if prober.SourceIP != "" || prober.Delivery != nil || prober.CollectionStatus != "delayed" {
+			t.Fatalf("public delivery state leaked private diagnostics or lost coverage: %+v", prober)
+		}
 		if gateway.Kind != "gateway" || gateway.Location.Known || prober.Kind != "prober" || !prober.Location.Valid() || prober.Region != "eu" {
 			t.Fatalf("observer role/geography changed: %+v", body.Inventory.Observers)
 		}
@@ -224,6 +228,7 @@ func TestProberRelayForwardsToObserverOverTheMesh(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "7")
 		_, _ = w.Write([]byte(`{"assignments":[]}`))
 	}))
 	t.Cleanup(observer.Close)
@@ -234,6 +239,8 @@ func TestProberRelayForwardsToObserverOverTheMesh(t *testing.T) {
 	h := &NetworkHandlers{Observer: client, ClientIP: func(*http.Request) string { return "203.0.113.9" }}
 	router := gin.New()
 	router.GET("/network-observer/v1/work", h.ProberRelay("/v1/work"))
+	router.POST("/network-observer/v1/work", h.ProberRelay("/v1/work"))
+	router.POST("/network-observer/v1/observation-batches", h.ProberRelay("/v1/observation-batches"))
 	router.POST("/network-observer/v1/observations", h.ProberRelay("/v1/observations"))
 	serve := func(method, target, auth, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(context.Background(), method, target, strings.NewReader(body))
@@ -247,18 +254,26 @@ func TestProberRelayForwardsToObserverOverTheMesh(t *testing.T) {
 	}
 
 	work := serve(http.MethodGet, "/network-observer/v1/work?observer_id=p1&region=eu", "Bearer prober-secret", "")
-	if work.Code != 200 || work.Body.String() != `{"assignments":[]}` || work.Header().Get("Content-Type") != "application/json" {
+	if work.Code != 200 || work.Body.String() != `{"assignments":[]}` || work.Header().Get("Content-Type") != "application/json" || work.Header().Get("Retry-After") != "7" {
 		t.Fatalf("work relay = %d %q", work.Code, work.Body)
 	}
 	ingest := serve(http.MethodPost, "/network-observer/v1/observations", "Bearer prober-secret", `{"id":"b1"}`)
 	if ingest.Code != 200 {
 		t.Fatalf("observation relay = %d %q", ingest.Code, ingest.Body)
 	}
+	for _, path := range []string{"/v1/work", "/v1/observation-batches"} {
+		response := serve(http.MethodPost, "/network-observer"+path, "Bearer prober-secret", `{"records":[]}`)
+		if response.Code != 200 {
+			t.Fatalf("new prober relay %s failed: %d", path, response.Code)
+		}
+	}
 	want := []seen{
 		{http.MethodGet, "/v1/work", "observer_id=p1&region=eu", "Bearer prober-secret", "203.0.113.9", ""},
 		{http.MethodPost, "/v1/observations", "", "Bearer prober-secret", "203.0.113.9", `{"id":"b1"}`},
+		{http.MethodPost, "/v1/work", "", "Bearer prober-secret", "203.0.113.9", `{"records":[]}`},
+		{http.MethodPost, "/v1/observation-batches", "", "Bearer prober-secret", "203.0.113.9", `{"records":[]}`},
 	}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+	if !slices.Equal(calls, want) {
 		t.Fatalf("observer received %+v, want %+v", calls, want)
 	}
 

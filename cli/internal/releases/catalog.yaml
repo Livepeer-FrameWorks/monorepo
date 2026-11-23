@@ -191,8 +191,9 @@ releases:
         required_before_phase: postdeploy
   - version: v0.3.16
     min_cli_version: v0.3.16-rc1
-    # Prior binaries require removed stream keys and cluster bandwidth columns, or cannot interpret isolated runtimes and in-flight writer transitions.
+    # Prior binaries require removed stream keys and cluster bandwidth columns, or cannot interpret isolated runtimes, in-flight writer transitions and durable observation receipts.
     rollback_disabled:
+      - network-observer
       - commodore
       - quartermaster
       - foghorn

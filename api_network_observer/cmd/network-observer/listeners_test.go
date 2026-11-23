@@ -12,7 +12,7 @@ import (
 )
 
 // With the internal TLS listener carrying the API, the plain listener answers
-// only the probes, so no bearer secret is accepted over plaintext.
+// only probes and metrics, so no bearer secret is accepted over plaintext.
 func TestPlainListenerServesOnlyProbesBesideInternalTLS(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	plain := probesOnly(api)
@@ -22,6 +22,8 @@ func TestPlainListenerServesOnlyProbesBesideInternalTLS(t *testing.T) {
 	}{
 		{http.MethodGet, "/health", http.StatusTeapot},
 		{http.MethodGet, "/ready", http.StatusTeapot},
+		{http.MethodGet, "/metrics", http.StatusTeapot},
+		{http.MethodPost, "/metrics", http.StatusNotFound},
 		{http.MethodGet, "/v1/inventory", http.StatusNotFound},
 		{http.MethodGet, "/v1/work", http.StatusNotFound},
 		{http.MethodPost, "/v1/observations", http.StatusNotFound},

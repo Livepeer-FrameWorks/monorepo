@@ -247,7 +247,7 @@ func assertEveryQuerySiteReached(t *testing.T, traced map[string]int) {
 	}
 }
 
-func startQueryPackClickHouse(t *testing.T) *sql.DB {
+func startQueryPackClickHouse(t *testing.T, tables ...string) *sql.DB {
 	t.Helper()
 	if output, err := queryPackDocker(t, "", "version", "--format", "{{.Server.Version}}"); err != nil {
 		t.Fatalf("Docker unavailable: %v: %s", err, output)
@@ -272,10 +272,36 @@ func startQueryPackClickHouse(t *testing.T) *sql.DB {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	for _, path := range []string{"clickhouse/periscope.sql", "seeds/demo/clickhouse_demo_data.sql"} {
+	paths := []string{"clickhouse/periscope.sql", "seeds/demo/clickhouse_demo_data.sql"}
+	if len(tables) > 0 {
+		paths = paths[:1]
+	}
+	for _, path := range paths {
 		content, readErr := dbsql.Content.ReadFile(path)
 		if readErr != nil {
 			t.Fatalf("read %s: %v", path, readErr)
+		}
+		if len(tables) > 0 {
+			var ddlLines []string
+			for _, line := range strings.Split(string(content), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+					ddlLines = append(ddlLines, line)
+				}
+			}
+			baseline := strings.Join(ddlLines, "\n")
+			definitions := []string{"CREATE DATABASE IF NOT EXISTS periscope ENGINE = Replicated('/clickhouse/databases/periscope/{shard}', '{shard}', '{replica}'); USE periscope;"}
+			for _, table := range tables {
+				start := strings.Index(baseline, "CREATE TABLE IF NOT EXISTS "+table+" (")
+				if start < 0 {
+					t.Fatalf("missing baseline table %s", table)
+				}
+				end := strings.Index(baseline[start:], ";")
+				if end < 0 {
+					t.Fatalf("unterminated baseline table %s", table)
+				}
+				definitions = append(definitions, baseline[start:start+end+1])
+			}
+			content = []byte(strings.Join(definitions, "\n"))
 		}
 		if output, applyErr := queryPackDocker(t, string(content), "exec", "-i", name, "clickhouse-client", "--multiquery"); applyErr != nil {
 			t.Fatalf("apply %s: %v\n%s", path, applyErr, output)

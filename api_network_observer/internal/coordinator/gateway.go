@@ -1,8 +1,6 @@
 package coordinator
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"frameworks/api_network_observer/internal/store"
@@ -14,26 +12,16 @@ import (
 	"time"
 )
 
-func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
-	var event kafka.AnalyticsEvent
-	if err := json.Unmarshal(message.Value, &event); err != nil {
-		return err
+func (a *API) applyGateway(s *store.State, event kafka.AnalyticsEvent) error {
+	now := time.Now().UTC()
+	if event.Timestamp.IsZero() || event.Timestamp.After(now.Add(time.Minute)) {
+		return reject("CLOCK_INVALID", "invalid gateway observation time")
 	}
-	// Customer payloads remain in the analytics pipeline, outside coordinator state.
-	if event.EventType != "orchestrator_discovery_observed" && event.EventType != "orchestrator_state_update" && event.EventType != "orchestrator_observer_report" {
-		return nil
+	if now.Sub(event.Timestamp) > 30*24*time.Hour {
+		return reject("OUTSIDE_RETENTION", "gateway observation outside retention")
 	}
 	data := event.Data
-	// Prober observations already update inventory through the signed ingest path.
-	if data["producer_kind"] != "gateway" {
-		return nil
-	}
-	if fmt.Sprint(data["cluster_owner_tenant_id"]) != a.Store.TenantID || fmt.Sprint(data["network_id"]) != a.Engine.Network || fmt.Sprint(data["environment"]) != a.Engine.Environment {
-		return nil
-	}
-	if time.Since(event.Timestamp) > 30*time.Minute || event.Timestamp.After(time.Now().Add(time.Minute)) {
-		return nil
-	}
+	var err error
 	fields := map[string]any{}
 	for k, v := range data {
 		switch k {
@@ -60,7 +48,7 @@ func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
 		if !report.Healthy || fmt.Sprint(data["producer_kind"]) != "gateway" {
 			return nil
 		}
-		return a.Store.Update(ctx, func(s *store.State, _ *sql.Tx) error {
+		{
 			id := "gateway:" + fmt.Sprint(data["gateway_id"])
 			o := s.Observers[id]
 			o.ID = id
@@ -71,7 +59,7 @@ func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
 			}
 			s.Observers[id] = o
 			return nil
-		})
+		}
 	}
 	if event.EventType == "orchestrator_discovery_observed" {
 		if err = options.Unmarshal(raw, &discovery); err != nil {
@@ -96,7 +84,7 @@ func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
 		success = true
 		check = obs.Check{ObservedAt: event.Timestamp, Success: true, Qualifying: true, ActualIP: ip}
 	}
-	return a.Store.Update(ctx, func(s *store.State, _ *sql.Tx) error {
+	{
 		var resource obs.Resource
 		found := false
 		for _, r := range s.Resources {
@@ -166,5 +154,5 @@ func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
 			s.Endpoints[p.ID] = p
 		}
 		return nil
-	})
+	}
 }

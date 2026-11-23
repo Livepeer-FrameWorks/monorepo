@@ -431,6 +431,26 @@
     filter: drop-shadow(0 0 4px rgba(125, 207, 255, 0.6));
   }
 
+  .network-viz__unlocated {
+    position: relative;
+    z-index: 2;
+    border-top: 1px solid var(--fx-seam-soft);
+    padding: 0.6rem 1rem;
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    overflow-wrap: anywhere;
+  }
+
+  .network-viz__unlocated summary {
+    cursor: pointer;
+  }
+
+  .network-viz__unlocated ul {
+    max-height: 12rem;
+    overflow-y: auto;
+    padding-top: 0.5rem;
+  }
+
   /* --- Summary strip --- */
   .network-viz__summary {
     display: flex;

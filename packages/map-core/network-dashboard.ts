@@ -497,7 +497,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       node("h4", "Measurement coverage"),
       node(
         "p",
-        `${new Set(data.inventory.resources.map((r) => r.id)).size} catalog identities · ${regions.size} reporting regions`,
+        `${new Set(data.inventory.resources.map((r) => r.id)).size} catalog identities · ${regions.size} registered regions`,
         "muted"
       )
     );
@@ -511,7 +511,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         quantity(group.sites.filter((s) => s.kind === "gateway").length, "gateway") +
           " · " +
           quantity(group.sites.filter((s) => s.kind === "prober").length, "prober"),
-        quantity(group.endpoints.length, "worker") + " observed",
+        quantity(group.endpoints.length, "worker") +
+          " observed · " +
+          [...new Set(group.sites.map((s) => s.collection_status || "unverified"))].join(", "),
         () => explore("region", group.id)
       );
       row.dataset.region = group.id;

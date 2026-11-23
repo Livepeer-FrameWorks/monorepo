@@ -13,6 +13,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GO_BUILD_TAGS ?= nomsgpack
 GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
+GO_LINT_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),--build-tags=$(GO_BUILD_TAGS),)
 SQLC_VERSION ?= v1.31.1
 GOLANGCI_LINT_VERSION ?= v2.14.0
 
@@ -424,6 +425,7 @@ verify-ansible-lint:
 
 # The CI "Go lint" job, step for step.
 verify-go-lint:
+	$(MAKE) --no-print-directory test-lint-build-tags
 	$(MAKE) --no-print-directory verify-db-transactions
 	$(MAKE) --no-print-directory fmt-check
 	$(MAKE) --no-print-directory lint-go
@@ -1199,13 +1201,17 @@ fmt-check:
 	@bash scripts/check-go-format.sh
 
 # Matches CI lint jobs (Go formatting, lint-go and lint-frontend).
-lint:
+lint: test-lint-build-tags
 	@failed=0; \
 	$(MAKE) fmt-check || failed=1; \
 	$(MAKE) lint-go || failed=1; \
 	$(MAKE) verify-db-transactions || failed=1; \
 	$(MAKE) lint-frontend || failed=1; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
+
+.PHONY: test-lint-build-tags
+test-lint-build-tags:
+	@bash scripts/test-lint-build-tags.sh
 
 # Every explicit transaction replays through database.WithRetryablePostgresTx or documents why it cannot.
 .PHONY: verify-db-transactions
@@ -1227,7 +1233,7 @@ lint-go:
 	for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> Linting $$service_name"; \
-		(cd $$service_dir && GIT_WORK_TREE="$(CURDIR)" golangci-lint run --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
+		(cd $$service_dir && GIT_WORK_TREE="$(CURDIR)" golangci-lint run $(GO_LINT_TAG_FLAGS) --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
 
@@ -1256,7 +1262,7 @@ lint-all:
 	@for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> $$service_name"; \
-		(cd $$service_dir && golangci-lint run --timeout=5m ./...); \
+		(cd $$service_dir && golangci-lint run $(GO_LINT_TAG_FLAGS) --timeout=5m ./...); \
 	done
 
 lint-fix:
@@ -1264,7 +1270,7 @@ lint-fix:
 	@for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> $$service_name"; \
-		(cd $$service_dir && golangci-lint run --fix --timeout=5m ./...); \
+		(cd $$service_dir && golangci-lint run $(GO_LINT_TAG_FLAGS) --fix --timeout=5m ./...); \
 	done
 
 .PHONY: format-frontend-files
@@ -1277,7 +1283,7 @@ format:
 	pnpm format
 
 lint-report:
-	@./scripts/lint-report.sh
+	@GO_SERVICES='$(GO_SERVICES)' GO_BUILD_TAGS='$(GO_BUILD_TAGS)' REPORT_DIR='$(REPORTS_DIR)' ./scripts/lint-report.sh
 
 lint-analyze:
 	@./scripts/lint-analyze.sh
@@ -2502,14 +2508,42 @@ provision-hello: ansible-galaxy-install
 
 # Regional probes are manually deployable; the coordinator owns the shared inventory.
 .PHONY: test-network-observer test-network-prober-install build-bin-network-observer build-bin-network-prober verify-network-observer-db verify-yugabyte-network-observer-contracts
-verify-network-observer-db:
-	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer -tags schema_verify -run '^TestObserverReplayRollbackAndRestart_RealPG$$' -count=1 -timeout 300s ./internal/coordinator/
+verify-network-observer-db: verify-network-observer-inbox-expansion
+	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer -tags schema_verify -run 'TestObserverReplayRollbackAndRestart_RealPG|TestObserverReceiptDoesNotWaitForScheduler_RealPG|TestObserverInboxPoisonIsolation_RealPG|TestObserverInboxBulkPreservesBytesAndPartialConflicts_RealPG|TestObserverWorkRefreshesRegionAndGeography_RealPG|TestRegisteredProberRefreshesGeoIP_RealPG|TestObserverMetricsContract_RealPG' -count=1 -timeout 300s ./internal/coordinator/
 
 verify-yugabyte-network-observer-contracts: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_network_observer yugabyte/network-observer -tags schema_verify -run '^TestObserverReplayRollbackAndRestart_RealYugabyte$$' -count=1 -timeout 300s ./internal/coordinator/
+	@$(CONTRACT_GO_TEST) api_network_observer yugabyte/network-observer -tags schema_verify -run 'TestObserverReplayRollbackAndRestart_RealYugabyte|TestObserverInboxPoisonIsolation_RealYugabyte|TestObserverInboxBulkPreservesBytesAndPartialConflicts_RealYugabyte' -count=1 -timeout 300s ./internal/coordinator/
 
 test-network-observer:
 	$(call run-go-tests,network-observer,api_network_observer)
+
+.PHONY: verify-network-map-geo
+verify-network-map-geo:
+	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/network-map-geo -tags schema_verify -run '^TestOrchestratorGeo(Fallback|HistoryIsolation)_RealClickHouse$$' -count=1 -timeout 300s ./internal/grpc/
+
+.PHONY: test-network-map
+test-network-map:
+	pnpm --dir website_marketing exec node --test src/lib/orchestratorLocation.test.js
+
+.PHONY: verify-network-observer-metrics
+verify-network-observer-metrics:
+	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer-metrics -tags schema_verify -run '^TestObserverMetricsContract_RealPG$$' -count=1 -timeout 180s ./internal/coordinator/
+
+.PHONY: verify-network-observer-yugabyte
+verify-network-observer-yugabyte:
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-network-observer-contracts
+
+.PHONY: verify-network-observer-inbox-expansion
+verify-network-observer-inbox-expansion:
+	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer-inbox-expansion -tags schema_verify -run '^TestObserverInboxOutputExpansionMakesProgress_RealPG$$' -count=1 -timeout 300s ./internal/coordinator/
+
+.PHONY: verify-network-observer-inbox
+verify-network-observer-inbox:
+	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer-inbox -tags schema_verify -run 'TestObserverReceipt.*_RealPG|TestObserverInbox(Poison|Bulk|Output).*_RealPG|TestObserverWork.*_RealPG|TestRegisteredProberRefreshesGeoIP_RealPG|TestObserverMetricsContract_RealPG' -count=1 -timeout 300s ./internal/coordinator/
+
+.PHONY: verify-network-observer-load
+verify-network-observer-load:
+	@FRAMEWORKS_NETWORK_LOAD_RECORDS=$${FRAMEWORKS_NETWORK_LOAD_RECORDS:-70000} $(CONTRACT_GO_TEST) api_network_observer postgres/network-observer-load -tags schema_verify -run '^TestObserverInboxBacklogLoad_RealPG$$' -v -count=1 -timeout 2100s ./internal/coordinator/
 test-network-prober-install: build-bin-network-prober
 	./scripts/test-network-prober-install.sh
 build-bin-network-observer:

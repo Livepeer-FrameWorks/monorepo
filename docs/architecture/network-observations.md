@@ -202,9 +202,59 @@ Gateways and probers assign stable IDs before enqueueing observations. Spools pe
 across restart, default to 64 MiB and 10,000 records, and retain undelivered records for
 at most 30 days. Use one process per spool directory on persistent storage. Overflow and
 expiry increment loss counters exposed in logs/health reports; this bounds reliability
-rather than promising indefinite delivery. Coordinator ingestion atomically stores
-state, receipt digest and telemetry outbox. Exact retries acknowledge the same batch;
-conflicting reuse of an ID is rejected. Outbox removal follows committed Kafka delivery.
+rather than promising indefinite delivery. Coordinator intake atomically commits the original batch digest, a deduplication
+receipt and an owned durable inbox item before returning HTTP 200. It acknowledges
+receipt, not synchronous inventory application. Exact retries acknowledge the same
+ID; changed bytes under that ID return an explicit conflict. Intake does not take
+the inventory scheduling lock. A fair, fenced worker applies bounded groups across
+observers, bounded by expanded output, and commits inventory changes, terminal dispositions and the telemetry
+outbox together. Per-observer last-processing times rotate service across large
+backlogs when output expansion limits a transaction to fewer input records. Invalid clock/signature/catalog facts become terminal rejection
+codes instead of retryable 503 responses. Terminal payloads release their byte quota;
+IDs, digests, reason codes and timestamps remain for thirty days. Pending intake is
+bounded at 100,000 records/128 MiB per platform and 20,000/32 MiB per observer;
+capacity returns retryable backpressure without acknowledging the sender copy. Pending items keep
+their receipts until processing completes. Outbox removal follows committed Kafka
+delivery. Gateway Kafka input is durably received before its consumer acknowledgement
+and shares the inventory worker without creating a prober/Kafka feedback loop.
+
+Negotiated uploads carry at most 64 records and 380 KiB of original payload in
+one request. The 512-KiB envelope uses base64 so encoding never rewrites receipt
+bytes. Each record gets its own committed result; exact replay and ID conflict can
+coexist in one response. Receipt rows and byte/record quotas are updated in one
+bounded transaction. An older coordinator or Bridge falls back to single-record
+uploads. Receiver-wide outages pause uploads rather than hammering later records.
+
+Work polling updates one observer and reads persisted assignments instead of running
+the full scheduler. Upgraded probers negotiate POST work polling and include current
+queue, clock and loss health outside their observation spool; GET remains available
+for earlier binaries. Monotonic durable control sequences reject delayed health
+updates. Configured site locations override GeoIP for both scheduling and publication;
+region and source-address changes refresh derived facts. Public observer collection
+status distinguishes reporting, idle, delayed, unverified and offline sites. Registered
+regions are not a promise that every endpoint was tested from every region.
+
+Probers reserve durable queue capacity before executing measurements. A full queue
+pauses collection rather than repeating an already completed check whose result could
+not enqueue. Per-record persisted retry schedules let later records progress past
+failed ones. Each pending record keeps a small durable retry sidecar, so a failure
+does not rewrite the whole queue index. Acknowledgement, expiry and quarantine
+remove that sidecar; startup removes orphan retry metadata. Loss counters survive
+process restart. Spool corruption or an explicit
+ID conflict uses bounded quarantine; generic authentication, transport and server
+failures retain the pending record. Current clock discrepancy is checked before new
+measurements run. Clock offset is bounded using the control request send/receive
+interval: response transit delay is uncertainty, not skew. Confirmed offset beyond
+one second stops new measurements; signed assignments and original observation
+times are not rewritten. Removing a configured location override allows the next
+GeoIP lookup to supply location without resetting delivery evidence.
+Earlier daemon loss counters were process-local and cannot establish lifetime totals.
+
+The coordinator `/metrics` endpoint separates intake availability from collection
+backlog, rejection and prober control health. Backlog does not remove the intake
+endpoint needed to drain it. The CLI renders its vmagent target; dedicated alerts
+cover stuck delivery, new loss, retained rejection metadata, clock discrepancy,
+stale work polling and failed health reads.
 
 The canonical ClickHouse observation table deduplicates by stable event ID before
 analytics. Rollups replace whole bucket snapshots using a distributed namespace lease;
@@ -348,6 +398,15 @@ explicit validated publication scopes. When historical analytics is unavailable,
 can still return live inventory with `history_status=unavailable`.
 
 ## Candidate hints and rollout
+
+For v0.3.16, apply the observer database expand migration before updating the
+coordinator. Deploy Bridge's compatible relay routes before upgrading the manually
+installed external probers. Their existing private environment and persistent
+StateDirectory remain in place. Older probers keep the single-record protocol;
+updated probers negotiate bulk and control-health support. Retained invalid clock
+records become terminal dispositions at the receiver, allowing later valid data
+to drain without editing timestamps or clearing the spool. Collection recovery
+requires current health and falling queues, not just a successful work poll.
 
 The coordinator feed is optional. Gateways default to shadow mode and continue their
 local contract discovery, pool health, suspension, ticket, pricing and compatibility

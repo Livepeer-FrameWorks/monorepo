@@ -748,10 +748,10 @@ func TestBuildOrchestratorVantagesQueryKeepsLastValidGeo(t *testing.T) {
 	for _, want := range []string{
 		"FROM periscope.orchestrator_vantage_current FINAL",
 		"FROM periscope.orchestrator_discovery_samples",
-		"geo_source != 'unknown'",
-		"argMax(geo_source, timestamp) AS latest_geo_source",
-		"coalesce(geo.geo_latitude, latest.latitude)",
-		"coalesce(geo.geo_longitude, latest.longitude)",
+		"geo_source NOT IN ('unknown','')",
+		"argMax(tuple(latitude,longitude,country_code,geo_source), timestamp) AS geo_position",
+		"ifNull(geo.geo_found,0)=1",
+		"tupleElement(geo.geo_position,2)",
 		"latest.latest_latency_ms",
 		"latest.dialed_recently",
 	} {

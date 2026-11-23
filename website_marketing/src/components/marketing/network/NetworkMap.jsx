@@ -12,6 +12,10 @@ import {
 } from "@frameworks/map-core";
 import timezoneCoordinates from "../../../data/timezone-coordinates.json";
 import { browserTimeZone, frameClusters, timezoneOrigin } from "../../../lib/mapFraming";
+import {
+  dedupeOrchestratorVantages,
+  orchestratorLocation,
+} from "../../../lib/orchestratorLocation.js";
 import { useNetworkStatus } from "./useNetworkStatus";
 import { spreadOverlappingMarkers } from "./spreadOverlap";
 import { pointOnPath, samplePath } from "./arc";
@@ -44,7 +48,6 @@ const MEMBERSHIP_COLORS = {
   livepeer: "rgba(34, 197, 94, 0.3)",
   "livepeer-gateway": "rgba(34, 197, 94, 0.3)",
 };
-const UNKNOWN_GEO_ANCHOR = [-42, -145];
 const WORLD_CAMERA = { center: [10, 25], zoom: 2 };
 const FRAME_OPTIONS = { padding: 56, maxZoom: 4 };
 
@@ -158,30 +161,6 @@ function withAlpha(rgb, alpha) {
   return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
 }
 
-function hashString(value) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index++) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash);
-}
-
-function unknownGeoLatLng(key) {
-  const hash = hashString(key);
-  return [
-    UNKNOWN_GEO_ANCHOR[0] + (hash % 700) / 100,
-    UNKNOWN_GEO_ANCHOR[1] + ((hash >> 4) % 1000) / 100,
-  ];
-}
-
-function vantageLatLng(vantage) {
-  const lat = Number(vantage.latitude ?? 0);
-  const lng = Number(vantage.longitude ?? 0);
-  return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)
-    ? [lat, lng]
-    : unknownGeoLatLng(`${vantage.orchAddr}:${vantage.resolvedIp}:${vantage.gatewayId}`);
-}
-
 function markerLatLng(marker, fallback) {
   if (!marker) return fallback;
   const point = marker.getLngLat();
@@ -238,7 +217,7 @@ function nodeDetail(node, services) {
 }
 
 function orchestratorDetail(vantage, peerVantages = []) {
-  const hasGeo = Number(vantage.latitude) !== 0 || Number(vantage.longitude) !== 0;
+  const hasGeo = orchestratorLocation(vantage) !== null;
   const rows = [
     detailRow("Orch", vantage.orchAddr || "unknown", true),
     detailRow("Instance IP", vantage.resolvedIp || "unknown"),
@@ -276,24 +255,6 @@ function orchestratorSizeForZoom(zoom) {
   if (zoom <= 3) return { size: 8, glow: 2 };
   if (zoom <= 5) return { size: 11, glow: 4 };
   return { size: 14, glow: 6 };
-}
-
-function dedupeOrchestratorVantages(vantages) {
-  const byInstance = new Map();
-  for (const vantage of vantages || []) {
-    if (!vantage.dialedRecently) continue;
-    const key = `${vantage.orchAddr}:${vantage.resolvedIp}`;
-    const current = byInstance.get(key);
-    if (
-      !current ||
-      Number(vantage.latestLatencyMs || 0) < Number(current.latestLatencyMs || 0) ||
-      (Number(vantage.latestLatencyMs || 0) === Number(current.latestLatencyMs || 0) &&
-        Number(vantage.score || 0) > Number(current.score || 0))
-    ) {
-      byInstance.set(key, vantage);
-    }
-  }
-  return [...byInstance.values()];
 }
 
 function convexHull(points) {
@@ -556,7 +517,9 @@ function drawTopology(maplibre, map, markersRef, pulsePathsRef, data, showOrches
     : [];
   const sizing = orchestratorSizeForZoom(map.getZoom());
   for (const vantage of visibleOrchestrators) {
-    const [lat, lng] = vantageLatLng(vantage);
+    const location = orchestratorLocation(vantage);
+    if (!location) continue;
+    const [lat, lng] = location;
     const color = orchestratorColor(vantage);
     const html = `<span class="network-viz__shape-wrap" style="filter:drop-shadow(0 0 ${sizing.glow}px ${color})"><span class="network-viz__orch-triangle" style="width:${sizing.size}px;height:${sizing.size}px;--glow-color:${color}"></span></span>`;
     const element = createMarkerElement(html);
@@ -901,6 +864,9 @@ export function NetworkMap({ viewport } = {}) {
      give the space back if the gateway has nothing to draw. */
   if (loading) return <div className="network-viz-pending" aria-hidden="true" />;
   if (!data) return null;
+  const unlocated = dedupeOrchestratorVantages(data.orchestratorVantages).filter(
+    (vantage) => !orchestratorLocation(vantage)
+  );
   const status = overallStatus(data.clusters);
   const color = NETWORK_STATUS_COLORS[status] || NETWORK_STATUS_COLORS.unknown;
   return (
@@ -921,6 +887,18 @@ export function NetworkMap({ viewport } = {}) {
         </span>
       </div>
       <NetworkMapInner data={data} viewport={viewport} />
+      {unlocated.length > 0 ? (
+        <details className="network-viz__unlocated">
+          <summary>{unlocated.length} orchestrator endpoints with unknown location</summary>
+          <ul>
+            {unlocated.map((vantage) => (
+              <li key={`${vantage.orchAddr}:${vantage.resolvedIp}`}>
+                {vantage.orchAddr} · {vantage.resolvedIp || "IP unknown"}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
       <div className="network-viz__summary">
         <span>
           {data.healthyNodes}/{data.totalNodes} Nodes

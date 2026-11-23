@@ -555,6 +555,7 @@ services:
   # endpoint except while the scenario's prober is polling.
   network-prober:
     environment:
+      NETWORK_OBSERVER_URL: http://bridge:18000/network-observer
       NETWORK_PROBER_ID: stack-prober-real
       NETWORK_PROBER_REGION: stack-us
       NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS: ${STACK_SUBNET:-10.231.1.0/24}

@@ -93,6 +93,9 @@ func (h *NetworkHandlers) ProberRelay(path string) gin.HandlerFunc {
 			contentType = "application/octet-stream"
 		}
 		c.Header("Cache-Control", "no-store")
+		if relayed.RetryAfter != "" {
+			c.Header("Retry-After", relayed.RetryAfter)
+		}
 		c.Data(relayed.Status, contentType, relayed.Body)
 	}
 }
@@ -175,6 +178,10 @@ func (h *NetworkHandlers) serve(c *gin.Context, details bool) {
 	for i := range inventory.Observers {
 		o := &inventory.Observers[i]
 		o.ID = obs.Key("observation-site", inventory.Network, inventory.Environment, o.ID)
+		o.SourceIP = ""
+		if !details {
+			o.Delivery = nil
+		}
 		if !o.Location.Valid() {
 			o.Location = obs.Location{Source: "unknown"}
 		}

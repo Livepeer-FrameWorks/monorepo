@@ -76,6 +76,7 @@ export type Response = {
       region: string;
       location: Location;
       last_seen: string;
+      collection_status?: "reporting" | "offline" | "unverified" | "delayed" | "idle";
     }>;
   };
   history: {

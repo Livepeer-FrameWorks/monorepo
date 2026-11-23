@@ -3899,6 +3899,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"lookout":            {},
 		"bosun":              {},
 		"navigator":          {},
+		"network-observer":   {},
 		"periscope-ingest":   {},
 		"periscope-metering": {},
 		"periscope-query":    {},
