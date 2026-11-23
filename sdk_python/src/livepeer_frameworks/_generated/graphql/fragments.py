@@ -15049,9 +15049,15 @@ class TenantEventDefaultTrackListUpdate(BaseModel):
     primary_width: Optional[int] = Field(alias="primaryWidth")
     primary_height: Optional[int] = Field(alias="primaryHeight")
     primary_fps: Optional[float] = Field(alias="primaryFps")
-    primary_video_bitrate: Optional[int] = Field(alias="primaryVideoBitrate")
+    primary_video_bitrate: Optional[int] = Field(
+        alias="primaryVideoBitrate", description="Primary video bitrate in kbps."
+    )
+    "Primary video bitrate in kbps."
     primary_video_codec: Optional[str] = Field(alias="primaryVideoCodec")
-    primary_audio_bitrate: Optional[int] = Field(alias="primaryAudioBitrate")
+    primary_audio_bitrate: Optional[int] = Field(
+        alias="primaryAudioBitrate", description="Primary audio bitrate in kbps."
+    )
+    "Primary audio bitrate in kbps."
     primary_audio_codec: Optional[str] = Field(alias="primaryAudioCodec")
     primary_audio_channels: Optional[int] = Field(alias="primaryAudioChannels")
     primary_audio_sample_rate: Optional[int] = Field(alias="primaryAudioSampleRate")
@@ -15123,8 +15129,15 @@ class TenantEventDefaultTrackListUpdateTracks(BaseModel):
     track_name: str = Field(alias="trackName")
     track_type: str = Field(alias="trackType")
     codec: Optional[str]
-    bitrate_kbps: Optional[int] = Field(alias="bitrateKbps")
-    bitrate_bps: Optional[int] = Field(alias="bitrateBps")
+    bitrate_kbps: Optional[int] = Field(
+        alias="bitrateKbps",
+        description="Track bitrate in kilobits per second (1 kbit = 1000 bits).",
+    )
+    "Track bitrate in kilobits per second (1 kbit = 1000 bits)."
+    bitrate_bps: Optional[int] = Field(
+        alias="bitrateBps", description="Track bitrate in bits per second."
+    )
+    "Track bitrate in bits per second."
     buffer: Optional[int]
     jitter: Optional[int]
     width: Optional[int]
@@ -15883,8 +15896,15 @@ class TrackListEventDefaultTracks(BaseModel):
     track_name: str = Field(alias="trackName")
     track_type: str = Field(alias="trackType")
     codec: Optional[str]
-    bitrate_kbps: Optional[int] = Field(alias="bitrateKbps")
-    bitrate_bps: Optional[int] = Field(alias="bitrateBps")
+    bitrate_kbps: Optional[int] = Field(
+        alias="bitrateKbps",
+        description="Track bitrate in kilobits per second (1 kbit = 1000 bits).",
+    )
+    "Track bitrate in kilobits per second (1 kbit = 1000 bits)."
+    bitrate_bps: Optional[int] = Field(
+        alias="bitrateBps", description="Track bitrate in bits per second."
+    )
+    "Track bitrate in bits per second."
     buffer: Optional[int]
     jitter: Optional[int]
     width: Optional[int]
@@ -16269,8 +16289,15 @@ class TrackListEventInNodeDefaultTracks(BaseModel):
     track_name: str = Field(alias="trackName")
     track_type: str = Field(alias="trackType")
     codec: Optional[str]
-    bitrate_kbps: Optional[int] = Field(alias="bitrateKbps")
-    bitrate_bps: Optional[int] = Field(alias="bitrateBps")
+    bitrate_kbps: Optional[int] = Field(
+        alias="bitrateKbps",
+        description="Track bitrate in kilobits per second (1 kbit = 1000 bits).",
+    )
+    "Track bitrate in kilobits per second (1 kbit = 1000 bits)."
+    bitrate_bps: Optional[int] = Field(
+        alias="bitrateBps", description="Track bitrate in bits per second."
+    )
+    "Track bitrate in bits per second."
     buffer: Optional[int]
     jitter: Optional[int]
     width: Optional[int]
@@ -16293,9 +16320,15 @@ class TrackListUpdateDefault(BaseModel):
     primary_width: Optional[int] = Field(alias="primaryWidth")
     primary_height: Optional[int] = Field(alias="primaryHeight")
     primary_fps: Optional[float] = Field(alias="primaryFps")
-    primary_video_bitrate: Optional[int] = Field(alias="primaryVideoBitrate")
+    primary_video_bitrate: Optional[int] = Field(
+        alias="primaryVideoBitrate", description="Primary video bitrate in kbps."
+    )
+    "Primary video bitrate in kbps."
     primary_video_codec: Optional[str] = Field(alias="primaryVideoCodec")
-    primary_audio_bitrate: Optional[int] = Field(alias="primaryAudioBitrate")
+    primary_audio_bitrate: Optional[int] = Field(
+        alias="primaryAudioBitrate", description="Primary audio bitrate in kbps."
+    )
+    "Primary audio bitrate in kbps."
     primary_audio_codec: Optional[str] = Field(alias="primaryAudioCodec")
     primary_audio_channels: Optional[int] = Field(alias="primaryAudioChannels")
     primary_audio_sample_rate: Optional[int] = Field(alias="primaryAudioSampleRate")
@@ -16659,8 +16692,15 @@ class TrackListUpdateDefaultTracks(BaseModel):
     track_name: str = Field(alias="trackName")
     track_type: str = Field(alias="trackType")
     codec: Optional[str]
-    bitrate_kbps: Optional[int] = Field(alias="bitrateKbps")
-    bitrate_bps: Optional[int] = Field(alias="bitrateBps")
+    bitrate_kbps: Optional[int] = Field(
+        alias="bitrateKbps",
+        description="Track bitrate in kilobits per second (1 kbit = 1000 bits).",
+    )
+    "Track bitrate in kilobits per second (1 kbit = 1000 bits)."
+    bitrate_bps: Optional[int] = Field(
+        alias="bitrateBps", description="Track bitrate in bits per second."
+    )
+    "Track bitrate in bits per second."
     buffer: Optional[int]
     jitter: Optional[int]
     width: Optional[int]
