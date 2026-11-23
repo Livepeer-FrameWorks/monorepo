@@ -62,28 +62,31 @@ func (h *ProcessingJobHandler) processingVideoSelector(log *logrus.Entry, mistCl
 
 // chooseProcessingVideoSelector is the pure selection decision: the complete
 // requested rendition set if every requested short side maps to a distinct track
-// that covers the span, otherwise the source passthrough. It never returns a
-// partial rendition set. sourceIDs names the source tracks by processing
-// track id; nil means Mist lineage names them.
+// that covers the span, otherwise the source passthrough. An original that
+// retains a rung is that rung's rendition. It never returns a partial
+// rendition set. sourceIDs names the source tracks by processing track id; nil
+// means Mist lineage names them.
 func chooseProcessingVideoSelector(log *logrus.Entry, processesJSON string, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, spanMs float64, sourceIDs map[int64]bool) string {
 	sourceSelector := processingSourceVideoSelector(videoTracks, sourceIDs)
-	expected, err := mist.ExpectedVideoRenditions(processesJSON, source)
-	expectedHeights := renditionShortSides(expected)
+	infos, positions := retentionTracks(videoTracks, sourceIDs)
+	expected, err := mist.ExpectedVideoRenditions(processesJSON, source, infos...)
 	if err != nil {
 		log.WithError(err).Warn("Track selection: cannot determine requested rendition ladder; using source video")
 		return sourceSelector
 	}
-	if len(expectedHeights) == 0 {
+	if len(expected) == 0 {
 		return sourceSelector
 	}
 	if spanMs <= 0 {
 		log.Warn("Track selection: source span unavailable before push; using source video")
 		return sourceSelector
 	}
-	selected, ok := completeRenditionTracks(expectedHeights, videoTracks, sourceIDs, spanMs)
+	expectedHeights, retained := splitRetainedRenditions(expected, positions)
+	selected, ok := completeRenditionTracks(expectedHeights, videoTracks, sourceIDs, spanMs, retained...)
 	if !ok {
 		log.WithFields(logrus.Fields{
 			"requested_short_sides": expectedHeights,
+			"retained_originals":    len(retained),
 			"available_heights":     videoTrackHeights(videoTracks),
 		}).Info("Track selection: complete rendition set unavailable; using source video")
 		return sourceSelector
@@ -167,15 +170,24 @@ func processingMetaSelector(processesJSON string) string {
 // completeRenditionTracks returns the tracks satisfying every requested short side
 // (each by a distinct track covering the span within tolerance), and false if
 // the set is not fully satisfiable — so the caller never publishes a partial
-// ladder. The source passthrough track is excluded from the candidate pool.
-func completeRenditionTracks(expectedHeights []int, videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool, spanMs float64) ([]processingMetaVideoTrack, bool) {
+// ladder. Source tracks are excluded from the candidate pool; retained names
+// the videoTracks positions of the originals that are renditions themselves,
+// each held to the same span and identity requirements.
+func completeRenditionTracks(expectedHeights []int, videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool, spanMs float64, retained ...int) ([]processingMetaVideoTrack, bool) {
 	if len(videoTracks) == 0 {
 		return nil, false
+	}
+	selected := make([]processingMetaVideoTrack, 0, len(expectedHeights)+len(retained))
+	for _, pos := range retained {
+		track := videoTracks[pos]
+		if spanMs-track.spanMs() > maxRenditionSpanShortfallMs || track.selector() == "" {
+			return nil, false
+		}
+		selected = append(selected, track)
 	}
 	pool := nonSourceVideoTracks(videoTracks, sourceIDs)
 
 	consumed := make([]bool, len(pool))
-	selected := make([]processingMetaVideoTrack, 0, len(expectedHeights))
 	for _, expected := range expectedHeights {
 		if expected <= 0 {
 			return nil, false

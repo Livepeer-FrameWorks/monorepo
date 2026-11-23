@@ -40,7 +40,7 @@ func TestBusyMemoryMustPreserveLookahead(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
-	admitted, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, string(retained), source, func(*ipcpb.ControlMessage) {})
+	admitted, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, string(retained), source, nil, func(*ipcpb.ControlMessage) {})
 	var capacity *processingCapacityError
 	if !errors.As(err, &capacity) || capacity.nodeTooSmall || admitted != "" {
 		t.Fatalf("busy memory must return temporary capacity wait: policy=%s err=%v", admitted, err)

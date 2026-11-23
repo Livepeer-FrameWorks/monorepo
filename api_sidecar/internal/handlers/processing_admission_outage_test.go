@@ -20,7 +20,7 @@ func TestAdmissionInfrastructureOutageDoesNotSpendTenantRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return 0, 0, errors.New("cgroup temporarily unreadable") }}
-	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, `[{"process":"AV","codec":"H264"}]`, mist.SourceMediaInfo{Width: 1920, Height: 1080}, nil)
+	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, `[{"process":"AV","codec":"H264"}]`, mist.SourceMediaInfo{Width: 1920, Height: 1080}, nil, nil)
 	outputs := processingMemoryFailureOutputs(err)
 	if processingMemoryFailureStatus(err) != "retryable" || outputs[mist.ProcessingResultRetryCause] != "processing_node_unavailable" {
 		t.Fatalf("infrastructure admission outage spends tenant retry: err=%v status=%s outputs=%v", err, processingMemoryFailureStatus(err), outputs)

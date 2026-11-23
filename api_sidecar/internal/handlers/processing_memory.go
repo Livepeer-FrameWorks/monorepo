@@ -92,8 +92,8 @@ func boundedProcessingMemoryConfig(raw string) (string, error) {
 	return mist.ProcessingMemoryDefaults(raw, runtime.GOMAXPROCS(0))
 }
 
-func processingMemoryEstimate(raw string, source mist.SourceMediaInfo) (uint64, error) {
-	return mist.EstimateProcessingMemory(raw, source)
+func processingMemoryEstimate(raw string, source mist.SourceMediaInfo, tracks ...mist.TrackInfo) (uint64, error) {
+	return mist.EstimateProcessingMemory(raw, source, tracks...)
 }
 
 func processingMemoryBudget(total uint64) uint64 {
@@ -161,7 +161,10 @@ func reserveProcessingMemory(stream, job string, desired string, bytes, total, a
 	return true, nil
 }
 
-func (h *ProcessingJobHandler) admitProcessingPolicy(log *logrus.Entry, req *ipcpb.ProcessingJobRequest, stream, desired string, source mist.SourceMediaInfo, send func(*ipcpb.ControlMessage)) (string, error) {
+// admitProcessingPolicy reserves memory for the rungs this edge encodes;
+// tracks are the stream's video tracks, and a rung one of them retains starts
+// no encoder and reserves nothing.
+func (h *ProcessingJobHandler) admitProcessingPolicy(log *logrus.Entry, req *ipcpb.ProcessingJobRequest, stream, desired string, source mist.SourceMediaInfo, tracks []mist.TrackInfo, send func(*ipcpb.ControlMessage)) (string, error) {
 	snapshot := h.memorySnapshot
 	if snapshot == nil {
 		snapshot = processingMemorySnapshot
@@ -179,18 +182,18 @@ func (h *ProcessingJobHandler) admitProcessingPolicy(log *logrus.Entry, req *ipc
 			return "", fmt.Errorf("invalid processing memory floor: %w", parseErr)
 		}
 	}
-	plan, err := mist.PlanProcessingMemory(desired, source, budget, runtime.GOMAXPROCS(0))
+	plan, err := mist.PlanProcessingMemory(desired, source, budget, runtime.GOMAXPROCS(0), tracks...)
 	if err != nil {
 		return "", err
 	}
-	minimum, err := mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, 0, 1)
+	minimum, err := mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, 0, 1, tracks...)
 	if err != nil {
 		return "", err
 	}
 	minimum.Bytes = max(minimum.Bytes, floor)
 	plan.Fits = plan.Fits && floor <= budget
 	if !plan.Fits {
-		minimum, err = mist.PlanProcessingMemory(desired, source, 0, 1)
+		minimum, err = mist.PlanProcessingMemory(desired, source, 0, 1, tracks...)
 		if err != nil {
 			return "", err
 		}
@@ -217,7 +220,7 @@ func (h *ProcessingJobHandler) admitProcessingPolicy(log *logrus.Entry, req *ipc
 		if freeErr != nil {
 			return "", freeErr
 		}
-		plan, err = mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, free, runtime.GOMAXPROCS(0))
+		plan, err = mist.PlanProcessingMemoryThreads(plan.ProcessesJSON, source, free, runtime.GOMAXPROCS(0), tracks...)
 		if err != nil {
 			return "", err
 		}
@@ -308,7 +311,7 @@ func (h *ProcessingJobHandler) prepareProcessingMemory(log *logrus.Entry, client
 			return "", source, err
 		}
 	}
-	admitted, err := h.admitProcessingPolicy(log, req, stream, desired, source, send)
+	admitted, err := h.admitProcessingPolicy(log, req, stream, desired, source, readinessVideoTracks(probe.Outputs), send)
 	return admitted, source, err
 }
 
@@ -356,7 +359,7 @@ func processingMemoryFailureStatus(err error) string {
 	return processingReadinessFailureStatus(err)
 }
 
-func (h *ProcessingJobHandler) admitLocalProcessingFallback(log *logrus.Entry, client processingRuntimeClient, req *ipcpb.ProcessingJobRequest, stream, output string, pushID int, desired string, source mist.SourceMediaInfo, send func(*ipcpb.ControlMessage)) (string, error) {
+func (h *ProcessingJobHandler) admitLocalProcessingFallback(log *logrus.Entry, client processingRuntimeClient, req *ipcpb.ProcessingJobRequest, stream, output string, pushID int, desired string, source mist.SourceMediaInfo, tracks []mist.TrackInfo, send func(*ipcpb.ControlMessage)) (string, error) {
 	if err := h.restartProcessingStreamForLocalFallback(log, client, stream, output, pushID); err != nil {
 		return "", &processingAdmissionError{err: err}
 	}
@@ -364,7 +367,7 @@ func (h *ProcessingJobHandler) admitLocalProcessingFallback(log *logrus.Entry, c
 		return "", err
 	}
 	clearProcessingResourceFailures(stream)
-	return h.admitProcessingPolicy(log, req, stream, desired, source, send)
+	return h.admitProcessingPolicy(log, req, stream, desired, source, tracks, send)
 }
 
 // The caller must have confirmed the generation drained before releasing it.

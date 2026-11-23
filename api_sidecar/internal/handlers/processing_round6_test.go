@@ -66,7 +66,7 @@ func TestNodeCapacityRefusalCarriesPlacementRequirement(t *testing.T) {
 	total := uint64(1536) * memoryMiB
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	policy := mist.ReplaceLivepeerWithLocal(`[{"process":"Livepeer","target_profiles":[{"height":2160,"bitrate":16000000},{"height":1440,"bitrate":8000000},{"height":1080,"bitrate":5000000},{"height":720,"bitrate":3000000},{"height":480,"bitrate":1200000},{"height":360,"bitrate":800000}]}]`)
-	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
+	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, mist.SourceMediaInfo{Width: 3840, Height: 2160}, nil, func(*ipcpb.ControlMessage) {})
 	if err == nil {
 		t.Fatal("oversized local work was admitted")
 	}

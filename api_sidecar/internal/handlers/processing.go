@@ -1223,10 +1223,15 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// process policy: the persisted STREAM_PROCESS override (so a buffer reboot
 	// keeps it), Foghorn's cached config, and the readiness expectations.
 	adoptLocalProcessingPolicy := func() bool {
+		// Without an observed track list no rung counts as retained, which
+		// over-reserves rather than under-reserves.
+		var admissionTracks []mist.TrackInfo
 		if data, err := h.getActiveProcessingStreamData(mistClient, streamName); err == nil {
-			observed, _ := sourceFromReadinessOutputs(inspectProcessingActiveStream(data).outputs)
+			observedOutputs := inspectProcessingActiveStream(data).outputs
+			observed, _ := sourceFromReadinessOutputs(observedOutputs)
 			if observed.Width > 0 && observed.Height > 0 {
 				admissionSource = observed
+				admissionTracks = readinessVideoTracks(observedOutputs)
 			}
 		}
 		localConfig, err := mist.EnsureRotatedSourceRendition(mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON), admissionSource)
@@ -1234,7 +1239,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			h.sendResult(send, req.GetJobId(), "failed", err.Error(), nil, "", 0)
 			return false
 		}
-		admitted, err := h.admitLocalProcessingFallback(log, mistClient, req, streamName, outputPath, activePushID, localConfig, admissionSource, send)
+		admitted, err := h.admitLocalProcessingFallback(log, mistClient, req, streamName, outputPath, activePushID, localConfig, admissionSource, admissionTracks, send)
 		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), processingMemoryFailureStatus(err), fmt.Sprintf("fallback memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
@@ -1286,7 +1291,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 	if uprightConfig != effectiveProcessesJSON {
-		admitted, err := h.admitProcessingPolicy(log, req, streamName, localEncoderConfig(uprightConfig), source, send)
+		admitted, err := h.admitProcessingPolicy(log, req, streamName, localEncoderConfig(uprightConfig), source, readinessVideoTracks(outputs), send)
 		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), processingMemoryFailureStatus(err), fmt.Sprintf("rotation memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
@@ -1332,7 +1337,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// it is rejected by comparing its TimeStarted against this.
 	currentPushStartedAt := time.Now().Unix()
 	var pushErr error
-	activePushID, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
+	var pushTargetURI string
+	activePushID, pushTargetURI, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath, h.processingRecordingSelector(log, mistClient, streamName, effectiveProcessesJSON, outputs))
 	if pushErr != nil {
 		h.sendResult(send, req.GetJobId(), "failed", pushErr.Error(), nil, "", 0)
 		return
@@ -1350,7 +1356,6 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	}
 	absoluteTimeout := time.After(absoluteRemaining)
 
-	pushTargetURI := processingMuxTargetURI(outputPath)
 	stallWatch := newRecorderStallWatch(time.Now())
 	var recordingEnd *ProcessingRecordingEndEvent
 	pushStartWallMs := time.Now().UnixMilli()
@@ -1397,7 +1402,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		}
 		sourceEndMs = max(sourceEndMs, sourceStartMs+float64(sourceDurationMs))
 		currentPushStartedAt = time.Now().Unix()
-		activePushID, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
+		activePushID, pushTargetURI, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath, h.processingRecordingSelector(log, mistClient, streamName, effectiveProcessesJSON, outputs))
 		if pushErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", pushErr), nil, "", 0)
@@ -1686,10 +1691,12 @@ loop:
 // rolling forward, parallel processing jobs — gets reconciled before
 // each restart instead of failing late with ENOSPC.
 //
-// Returns an error that is safe to surface to the caller's sendResult
-// "failed" path; admission rejection and push failure are both fatal
-// to the job.
-func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, vodDir, streamName, outputPath string) (int, error) {
+// videoSelector picks the recorded video tracks ("all", or the selector of
+// processingRecordingVideoSelector). Returns the push id and its target URI,
+// and an error that is safe to surface to the caller's sendResult "failed"
+// path; admission rejection and push failure are both fatal to the job.
+func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, vodDir, streamName, outputPath, videoSelector string) (int, string, error) {
+	targetURI := processingMuxTargetURIWithVideo(outputPath, videoSelector)
 	if sm := GetStorageManager(); sm != nil {
 		var estSize uint64
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1700,13 +1707,12 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 		decision, decErr := sm.Decide(context.Background(), vodDir, admission.IntentProcessingOutput, estSize)
 		if decErr != nil || decision == admission.CacheReject {
 			log.WithError(decErr).WithField("est_size", estSize).Error("Processing output admission rejected")
-			return 0, fmt.Errorf("admission rejected: %w", decErr)
+			return 0, targetURI, fmt.Errorf("admission rejected: %w", decErr)
 		}
 	}
-	targetURI := processingMuxTargetURI(outputPath)
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		log.WithError(err).Error("Failed to start push")
-		return 0, fmt.Errorf("push_start failed: %w", err)
+		return 0, targetURI, fmt.Errorf("push_start failed: %w", err)
 	}
 	pushID := findProcessingPushID(log, mistClient, streamName, targetURI)
 	log.WithFields(logrus.Fields{
@@ -1714,7 +1720,21 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 		"target_uri":  targetURI,
 		"push_id":     pushID,
 	}).Info("Started push for processing stream")
-	return pushID, nil
+	return pushID, targetURI, nil
+}
+
+// processingRecordingSelector reads the processing stream's video tracks and
+// returns the stored VOD's video selector. When the tracks cannot be read it
+// records every track; the processes' own masks still apply then.
+func (h *ProcessingJobHandler) processingRecordingSelector(log *logrus.Entry, mistClient *mist.Client, streamName, processesJSON string, outputs map[string]string) string {
+	streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
+	if err != nil {
+		log.WithError(err).Warn("Recording selector: could not inspect tracks before push; recording every video track")
+		return "all"
+	}
+	presence := inspectProcessingActiveStream(streamData)
+	source, _ := sourceFromReadinessOutputs(outputs)
+	return processingRecordingVideoSelector(log, processesJSON, presence.videoTracks, source)
 }
 
 func findProcessingPushID(log *logrus.Entry, mistClient processingPushLister, streamName, targetURI string) int {
@@ -2148,6 +2168,7 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 				if v, ok := track["height"].(float64); ok {
 					t.height = int(v)
 				}
+				t.bps = healthTrackBps(track)
 				// Health carries no firstms/lastms, only the buffered span; a
 				// declared track that never received media reports 0.
 				if v, ok := track["buffer"].(float64); ok && v > 0 {
@@ -2205,6 +2226,7 @@ type processingMetaVideoTrack struct {
 	width         int
 	height        int
 	rotation      int
+	bps           uint64 // Mist track bps: bytes per second
 	firstms       float64
 	lastms        float64
 	trackID       int64
@@ -2252,10 +2274,12 @@ func mapInt64(values map[string]interface{}, keys ...string) (int64, bool) {
 }
 
 // renditionsComplete requires every requested video rung to reach the observed
-// source end. Source tracks are excluded by lineage even when their dimensions
-// match a requested rung.
+// source end. A rung an original track retains is satisfied by that original;
+// every other rung needs a process output, and originals are excluded from
+// that pool by lineage even when their dimensions match the rung.
 func renditionsComplete(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceEndMs, sourceStartMs float64, recordedDurationMs int64) bool {
-	expected, err := mist.ExpectedVideoRenditions(processesJSON, source)
+	infos, positions := retentionTracks(tracks, nil)
+	expected, err := mist.ExpectedVideoRenditions(processesJSON, source, infos...)
 	if err != nil {
 		log.WithError(err).Warn("Cannot determine requested rendition ladder")
 		return false
@@ -2267,24 +2291,26 @@ func renditionsComplete(log *logrus.Entry, processesJSON string, tracks []proces
 		}
 		return true
 	}
-	return renditionsCompleteFromTracks(log, renditionShortSides(expected), tracks, sourceEndMs-sourceStartMs)
+	shortSides, retained := splitRetainedRenditions(expected, positions)
+	return renditionsCompleteFromTracks(log, shortSides, tracks, sourceEndMs-sourceStartMs, retained...)
 }
 
-func renditionShortSides(expected []mist.ExpectedRendition) []int {
-	out := make([]int, len(expected))
-	for i, r := range expected {
-		out[i] = r.ShortSide
-	}
-	return out
-}
-
-func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, videoTracks []processingMetaVideoTrack, sourceSpanMs float64) bool {
+// renditionsCompleteFromTracks proves each expected short side by a distinct
+// process output and each retained original (a videoTracks position) by its
+// own span, all against the source span.
+func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, videoTracks []processingMetaVideoTrack, sourceSpanMs float64, retained ...int) bool {
 	for _, idx := range sourceVideoTrackIndexes(videoTracks, nil) {
 		sourceSpanMs = max(sourceSpanMs, videoTracks[idx].spanMs())
 	}
 	if sourceSpanMs <= 0 {
 		log.Warn("Source span unavailable; refusing to prove rendition completeness")
 		return false
+	}
+	for _, pos := range retained {
+		if track := videoTracks[pos]; sourceSpanMs-track.spanMs() > maxRenditionSpanShortfallMs {
+			log.WithFields(logrus.Fields{"retained_short_side": min(track.width, track.height), "source_span_ms": sourceSpanMs, "track_span_ms": track.spanMs()}).Warn("Retained original rendition truncated")
+			return false
+		}
 	}
 	pool := nonSourceVideoTracks(videoTracks, nil)
 	consumed := make([]bool, len(pool))
@@ -2434,6 +2460,9 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		if v, ok := track["firstms"].(float64); ok {
 			t.firstms = v
 		}
+		if v, ok := mapInt64(track, "bps"); ok && v > 0 {
+			t.bps = uint64(v)
+		}
 		if rotation, ok := mapInt64(track, "rotation"); ok {
 			t.rotation = int(rotation)
 		}
@@ -2464,22 +2493,23 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 // registers the ingest's tracks before any process adds a rendition, and a cut
 // of it keeps that order.
 func sortProcessingVideoTracks(tracks []processingMetaVideoTrack) {
-	sort.SliceStable(tracks, func(i, j int) bool {
-		a, b := tracks[i], tracks[j]
-		if a.hasTrackIndex != b.hasTrackIndex {
-			return a.hasTrackIndex
-		}
-		if a.hasTrackIndex && a.trackIndex != b.trackIndex {
-			return a.trackIndex < b.trackIndex
-		}
-		if a.hasTrackID != b.hasTrackID {
-			return a.hasTrackID
-		}
-		if a.hasTrackID && a.trackID != b.trackID {
-			return a.trackID < b.trackID
-		}
-		return a.name < b.name
-	})
+	sort.SliceStable(tracks, func(i, j int) bool { return processingVideoTrackBefore(tracks[i], tracks[j]) })
+}
+
+func processingVideoTrackBefore(a, b processingMetaVideoTrack) bool {
+	if a.hasTrackIndex != b.hasTrackIndex {
+		return a.hasTrackIndex
+	}
+	if a.hasTrackIndex && a.trackIndex != b.trackIndex {
+		return a.trackIndex < b.trackIndex
+	}
+	if a.hasTrackID != b.hasTrackID {
+		return a.hasTrackID
+	}
+	if a.hasTrackID && a.trackID != b.trackID {
+		return a.trackID < b.trackID
+	}
+	return a.name < b.name
 }
 
 func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVideoTrack {
@@ -2501,11 +2531,13 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 		if track.WrittenFirstMs != nil && track.WrittenLastMs != nil {
 			firstMs, lastMs = track.GetWrittenFirstMs(), track.GetWrittenLastMs()
 		}
+		// The RECORDING_END summary carries Mist's track bps as is.
 		out = append(out, processingMetaVideoTrack{
 			codec:         codec,
 			name:          track.GetTrackName(),
 			width:         int(track.GetWidth()),
 			height:        int(track.GetHeight()),
+			bps:           uint64(max(track.GetBitrateBps(), 0)),
 			firstms:       float64(firstMs),
 			lastms:        float64(lastMs),
 			source:        track.GetSourceTrack(),
@@ -2733,19 +2765,55 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 		return ""
 	}
 
-	if i := mist.PrimaryVideoIndex(len(tracks), func(i int) mist.VideoTrackFacts {
-		height := int32(0)
-		if v, ok := tracks[i]["height"].(float64); ok {
-			height = int32(v)
+	// The source is the track Mist transcodes from: the highest-bitrate
+	// original (mist.TranscodeSourceIndex). The video track list is kept for
+	// memory admission, which leaves rungs an original retains unreserved.
+	var videoTracks []processingMetaVideoTrack
+	var videoHealth []int
+	for i, track := range tracks {
+		codec := normalizeTrackCodec(stringField(track, "codec"))
+		if trackType(i) != "video" || mist.IsImageVideoCodec(codec) {
+			continue
 		}
-		return mist.VideoTrackFacts{
-			TrackType:   trackType(i),
-			Codec:       normalizeTrackCodec(stringField(tracks[i], "codec")),
-			SourceTrack: stringField(tracks[i], "source"),
-			Height:      height,
-			TrackIndex:  trackIndex(i),
+		t := processingMetaVideoTrack{codec: codec, name: names[i], source: stringField(track, "source"), bps: healthTrackBps(track)}
+		if v, ok := track["width"].(float64); ok {
+			t.width = int(v)
 		}
-	}); i >= 0 {
+		if v, ok := track["height"].(float64); ok {
+			t.height = int(v)
+		}
+		if idx, ok := mapInt64(track, "idx", "track_index"); ok {
+			t.trackIndex, t.hasTrackIndex = int(idx), true
+		}
+		if id, ok := mapInt64(track, "id", "track_id"); ok {
+			t.trackID, t.hasTrackID = id, true
+		}
+		videoTracks = append(videoTracks, t)
+		videoHealth = append(videoHealth, i)
+	}
+	infos, positions := retentionTracks(videoTracks, nil)
+	if encoded, err := json.Marshal(infos); err == nil && len(infos) > 0 {
+		outputs[processingSourceVideoTracksOutput] = string(encoded)
+	}
+	var primary int
+	if source := mist.TranscodeSourceIndex(infos); source >= 0 {
+		primary = videoHealth[positions[source]]
+	} else {
+		primary = mist.PrimaryVideoIndex(len(tracks), func(i int) mist.VideoTrackFacts {
+			height := int32(0)
+			if v, ok := tracks[i]["height"].(float64); ok {
+				height = int32(v)
+			}
+			return mist.VideoTrackFacts{
+				TrackType:   trackType(i),
+				Codec:       normalizeTrackCodec(stringField(tracks[i], "codec")),
+				SourceTrack: stringField(tracks[i], "source"),
+				Height:      height,
+				TrackIndex:  trackIndex(i),
+			}
+		})
+	}
+	if i := primary; i >= 0 {
 		track := tracks[i]
 		if codec := normalizeTrackCodec(stringField(track, "codec")); codec != "" {
 			outputs["video_codec"] = codec
@@ -3708,7 +3776,7 @@ func (h *ProcessingJobHandler) sendCompletedResult(send func(*ipcpb.ControlMessa
 	res := &ipcpb.ProcessingJobResult{
 		JobId:           jobID,
 		Status:          "completed",
-		Outputs:         outputs,
+		Outputs:         completedResultOutputs(outputs),
 		OutputPath:      outputPath,
 		OutputSizeBytes: outputSizeBytes,
 		Tracks:          tracks,

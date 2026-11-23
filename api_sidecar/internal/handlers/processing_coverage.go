@@ -30,11 +30,13 @@ func recordingEndRetryable(evt ProcessingRecordingEndEvent) bool {
 // source reports none.
 const renditionStartToleranceMs = 2000
 
-// renditionCoverageError checks every derived video rendition in the
-// recorded track set against the source video it was made from, by the span
-// the recording wrote on each track. A rendition that starts later than one
-// source key interval after the source, or ends more than the rendition
-// shortfall allowance before it, is missing media: publishing it as READY
+// renditionCoverageError checks every recorded video rendition against the
+// source video, by the span the recording wrote on each track: the derived
+// renditions and the original tracks that retain a rung (every recorded
+// original besides the reference, since masked originals are not recorded).
+// A rendition that starts later than one source key interval after the
+// source, or ends more than the rendition shortfall allowance before it, is
+// missing media: publishing it as READY
 // would serve a ladder whose rungs disagree about what the video holds.
 // Image (JPEG) tracks are thumbnails, not renditions. Tracks without a written
 // span (a Mist that does not report one) are not judged.
@@ -68,7 +70,7 @@ func renditionCoverageError(tracks []*ipcpb.StreamTrack) error {
 		startTolerance = k
 	}
 	for _, t := range tracks {
-		if t.GetTrackType() != "video" || t.GetSourceTrack() == "" || strings.EqualFold(t.GetCodec(), "JPEG") || !written(t) {
+		if t == source || t.GetTrackType() != "video" || strings.EqualFold(t.GetCodec(), "JPEG") || !written(t) {
 			continue
 		}
 		if late := t.GetWrittenFirstMs() - source.GetWrittenFirstMs(); late > startTolerance {

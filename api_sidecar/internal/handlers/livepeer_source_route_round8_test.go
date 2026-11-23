@@ -102,7 +102,7 @@ func TestLiveReplacementSharesDurableLedgerWithoutOverridingWholePolicy(t *testi
 	snapshot := func() (uint64, uint64, error) { return total, total, nil }
 	source := mist.SourceMediaInfo{Width: 3840, Height: 2160}
 	policy := fourKLadder(t)
-	admitted, err := reserveLiveReplacement("live+reserved", policy, source, snapshot)
+	admitted, err := reserveLiveReplacement("live+reserved", policy, source, nil, snapshot)
 	if err != nil || admitted == "" {
 		t.Fatalf("first live ladder not admitted: %s %v", admitted, err)
 	}

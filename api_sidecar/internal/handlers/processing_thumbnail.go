@@ -130,13 +130,12 @@ func (h *ProcessingJobHandler) handleThumbnail(req *ipcpb.ProcessingJobRequest, 
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
 
 	currentPushStartedAt := time.Now().Unix()
-	pushID, pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
+	pushID, pushTargetURI, pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath, "all")
 	if pushErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed", pushErr.Error(), nil, "", 0)
 		return
 	}
-	pushTargetURI := processingMuxTargetURI(outputPath)
 
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()

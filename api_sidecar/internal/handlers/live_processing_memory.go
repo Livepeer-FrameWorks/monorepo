@@ -26,17 +26,20 @@ func admitLiveReplacement(evt ProcessReplaceEvent, policy string) (string, error
 	if !ok {
 		return "", &processingAdmissionError{err: errors.New("live source is not active")}
 	}
-	source, _ := sourceFromReadinessOutputs(extractActiveStreamMetadata(data))
+	outputs := extractActiveStreamMetadata(data)
+	source, _ := sourceFromReadinessOutputs(outputs)
 	if source.Width <= 0 || source.Height <= 0 {
 		return "", &processingAdmissionError{err: errors.New("live source dimensions unavailable")}
 	}
-	return reserveLiveReplacement(evt.StreamName, policy, source, processingMemorySnapshot)
+	return reserveLiveReplacement(evt.StreamName, policy, source, readinessVideoTracks(outputs), processingMemorySnapshot)
 }
 
 // Live replacements share the durable memory ledger with upload jobs. Their
 // configs replace just one process in a running buffer, so they must never
-// replace its complete STREAM_PROCESS policy on a later buffer start.
-func reserveLiveReplacement(stream, policy string, source mist.SourceMediaInfo, snapshot func() (uint64, uint64, error)) (string, error) {
+// replace its complete STREAM_PROCESS policy on a later buffer start. A rung
+// one of the live tracks retains (an E-RTMP multitrack rendition) reserves
+// nothing, as for uploads.
+func reserveLiveReplacement(stream, policy string, source mist.SourceMediaInfo, tracks []mist.TrackInfo, snapshot func() (uint64, uint64, error)) (string, error) {
 	policy, err := mist.EnsureRotatedSourceRendition(policy, source)
 	if err != nil {
 		return "", err
@@ -57,7 +60,7 @@ func reserveLiveReplacement(stream, policy string, source mist.SourceMediaInfo, 
 		return "", err
 	}
 	h := &ProcessingJobHandler{memorySnapshot: snapshot}
-	admitted, err := h.admitProcessingPolicy(logger.WithField("stream", stream), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, source, nil)
+	admitted, err := h.admitProcessingPolicy(logger.WithField("stream", stream), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, source, tracks, nil)
 	if err != nil {
 		clearProcessingProcessOverride(stream, job)
 	}
