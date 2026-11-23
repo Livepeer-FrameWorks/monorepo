@@ -86,7 +86,9 @@ func processLookahead(process map[string]any) int {
 	}
 }
 
-func localProcessRenditions(process map[string]any, source SourceMediaInfo) ([]ExpectedRendition, error) {
+// localProcessRenditions returns the rungs a local AV process encodes. A rung
+// an original track retains starts no encoder, so it costs no memory.
+func localProcessRenditions(process map[string]any, source SourceMediaInfo, tracks []TrackInfo) ([]ExpectedRendition, error) {
 	if process["process"] != "AV" {
 		return nil, nil
 	}
@@ -94,12 +96,39 @@ func localProcessRenditions(process map[string]any, source SourceMediaInfo) ([]E
 	if err != nil {
 		return nil, err
 	}
-	return ExpectedVideoRenditions(string(encoded), source)
+	expected, err := ExpectedVideoRenditions(string(encoded), source, tracks...)
+	if err != nil {
+		return nil, err
+	}
+	encodes := expected[:0]
+	for _, rung := range expected {
+		if !rung.Retained {
+			encodes = append(encodes, rung)
+		}
+	}
+	return encodes, nil
+}
+
+// processRetainsRung reports whether an original track retains the process's
+// rung. Such a process stays in the published policy even when the source is
+// too small for it: the policy is what readiness, completeness and the VOD
+// selector read the retained rung from.
+func processRetainsRung(process map[string]any, source SourceMediaInfo, tracks []TrackInfo) bool {
+	if _, retainable := process["track_retain"]; !retainable || len(tracks) == 0 {
+		return false
+	}
+	encoded, err := json.Marshal([]map[string]any{process})
+	if err != nil {
+		return false
+	}
+	expected, err := ExpectedVideoRenditions(string(encoded), source, tracks...)
+	return err == nil && len(expected) == 1 && expected[0].Retained
 }
 
 // EstimateProcessingMemory counts only processes running on this edge.
 // Livepeer owns compressed request/response buffers, not local video decoders.
-func EstimateProcessingMemory(raw string, source SourceMediaInfo) (uint64, error) {
+// Tracks are the stream's video tracks; a rung one of them retains is free.
+func EstimateProcessingMemory(raw string, source SourceMediaInfo, tracks ...TrackInfo) (uint64, error) {
 
 	if source.Width < 0 || source.Height < 0 || source.Width > 32768 || source.Height > 32768 {
 		return 0, fmt.Errorf("source dimensions outside memory admission range")
@@ -125,7 +154,7 @@ func EstimateProcessingMemory(raw string, source SourceMediaInfo) (uint64, error
 		case "Thumbs":
 			bytes += (32*processingMiB + pixels*4) * 115 / 100
 		case "AV":
-			rungs, err := localProcessRenditions(process, source)
+			rungs, err := localProcessRenditions(process, source, tracks)
 			if err != nil {
 				return 0, err
 			}
@@ -150,17 +179,17 @@ func EstimateProcessingMemory(raw string, source SourceMediaInfo) (uint64, error
 // PlanProcessingMemory spends memory on parallelism while retaining the preset's
 // lookahead. Only a node that cannot fit even one codec thread per rendition
 // reduces lookahead, starting with the largest local H264 rendition.
-func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int) (ProcessingMemoryPlan, error) {
-	return planProcessingMemory(raw, source, budget, cpus, false)
+func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int, tracks ...TrackInfo) (ProcessingMemoryPlan, error) {
+	return planProcessingMemory(raw, source, budget, cpus, false, tracks)
 }
 
 // PlanProcessingMemoryThreads changes concurrency while preserving the quality
 // selected against the node's full budget, including any explicit lookahead.
-func PlanProcessingMemoryThreads(raw string, source SourceMediaInfo, budget uint64, cpus int) (ProcessingMemoryPlan, error) {
-	return planProcessingMemory(raw, source, budget, cpus, true)
+func PlanProcessingMemoryThreads(raw string, source SourceMediaInfo, budget uint64, cpus int, tracks ...TrackInfo) (ProcessingMemoryPlan, error) {
+	return planProcessingMemory(raw, source, budget, cpus, true, tracks)
 }
 
-func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int, preserveQuality bool) (ProcessingMemoryPlan, error) {
+func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpus int, preserveQuality bool, tracks []TrackInfo) (ProcessingMemoryPlan, error) {
 	base, err := ProcessingMemoryDefaults(raw, cpus)
 	if err != nil {
 		return ProcessingMemoryPlan{}, err
@@ -188,7 +217,7 @@ func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 		if process["process"] == "AV" {
 			codec, knownCodec := process["codec"].(string)
 			inhibitor, knownInhibitor := process["track_inhibit"].(string)
-			if knownCodec && knownInhibitor && isAVVideoCodec(codec) && shouldInhibitLivepeerSelector(inhibitor, source) {
+			if knownCodec && knownInhibitor && isAVVideoCodec(codec) && shouldInhibitLivepeerSelector(inhibitor, source) && !processRetainsRung(process, source, tracks) {
 				continue
 			}
 		}
@@ -202,7 +231,7 @@ func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 	var local []candidate
 	var largest uint64
 	for i, process := range processes {
-		rungs, parseErr := localProcessRenditions(process, source)
+		rungs, parseErr := localProcessRenditions(process, source, tracks)
 		if parseErr != nil {
 			return ProcessingMemoryPlan{}, parseErr
 		}
@@ -234,7 +263,7 @@ func planProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 			if encodeErr != nil {
 				return false, encodeErr
 			}
-			bytes, estimateErr := EstimateProcessingMemory(string(encoded), source)
+			bytes, estimateErr := EstimateProcessingMemory(string(encoded), source, tracks...)
 			if estimateErr != nil {
 				return false, estimateErr
 			}
