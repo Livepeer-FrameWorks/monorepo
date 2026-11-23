@@ -170,3 +170,54 @@ func TestLivepeerProfileMismatchDoesNotRoundNumericFields(t *testing.T) {
 		t.Fatalf("a changed numeric field must not be rounded away, got %q", diff)
 	}
 }
+
+func retainProfiles(retainable ...bool) []LivepeerJSONProfile {
+	rungs := []LivepeerJSONProfile{
+		{"name": "360p", "bitrate": 900000, "height": 360, "profile": "H264ConstrainedHigh"},
+		{"name": "720p", "bitrate": 4500000, "height": 720, "profile": "H264ConstrainedHigh"},
+		{"name": "1080p", "bitrate": 7800000, "height": 1080, "profile": "H264ConstrainedHigh"},
+	}
+	for i, retain := range retainable {
+		if retain {
+			h, _ := livepeerProfileInt(rungs[i], "height")
+			b, _ := livepeerProfileInt(rungs[i], "bitrate")
+			rungs[i]["track_retain"] = RetainSelector(RetainRung{h, int64(b)})
+		}
+	}
+	return rungs
+}
+
+func TestLivepeerAuthorizedProfilesAcceptsOmittedRetainableRungs(t *testing.T) {
+	source := SourceMediaInfo{Width: 1920, Height: 1080, FPS: 30}
+	expected := NormalizeLivepeerProfiles(retainProfiles(true, true, true), source)
+	observed := gatewayWire(t, []wireRung{{"360p", 640, 360, 900000}}, 30000, 1000)
+	got, diff := LivepeerAuthorizedProfiles(observed, expected, source)
+	if diff != "" {
+		t.Fatalf("subset with retainable omissions rejected: %s", diff)
+	}
+	if len(got) != 1 || got[0]["name"] != "360p" {
+		t.Fatalf("authorized profiles = %v, want only 360p", got)
+	}
+	if _, present := got[0]["track_retain"]; present {
+		t.Errorf("authorized profile keeps track_retain, which the gateway's strict decoder refuses: %v", got[0])
+	}
+	all, diff := LivepeerAuthorizedProfiles(gatewayWire(t, []wireRung{{"360p", 640, 360, 900000}, {"720p", 1280, 720, 4500000}, {"1080p", 1920, 1080, 7800000}}, 30000, 1000), expected, source)
+	if diff != "" || len(all) != 3 {
+		t.Fatalf("full set = %v, %q", all, diff)
+	}
+}
+
+func TestLivepeerAuthorizedProfilesRejectsOmittedRungWithoutRetain(t *testing.T) {
+	source := SourceMediaInfo{Width: 1920, Height: 1080, FPS: 30}
+	expected := NormalizeLivepeerProfiles(retainProfiles(false, true, true), source)
+	for name, observed := range map[string][]LivepeerJSONProfile{
+		"missing non-retainable 360p": gatewayWire(t, []wireRung{{"720p", 1280, 720, 4500000}}, 30000, 1000),
+		"unknown extra profile":       gatewayWire(t, []wireRung{{"360p", 640, 360, 900000}, {"540p", 960, 540, 2000000}}, 30000, 1000),
+		"changed bitrate":             gatewayWire(t, []wireRung{{"360p", 640, 360, 900001}}, 30000, 1000),
+		"reordered":                   gatewayWire(t, []wireRung{{"360p", 640, 360, 900000}, {"1080p", 1920, 1080, 7800000}, {"720p", 1280, 720, 4500000}}, 30000, 1000),
+	} {
+		if got, diff := LivepeerAuthorizedProfiles(observed, expected, source); diff == "" {
+			t.Errorf("%s accepted: %v", name, got)
+		}
+	}
+}

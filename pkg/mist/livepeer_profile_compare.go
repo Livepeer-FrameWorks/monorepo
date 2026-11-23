@@ -114,3 +114,36 @@ func livepeerProfileNames(profiles []LivepeerJSONProfile) string {
 	}
 	return "[" + strings.Join(names, ",") + "]"
 }
+
+// LivepeerAuthorizedProfiles matches the profiles a Livepeer gateway reports
+// against a job spec's normalised profiles and returns the spec profiles the
+// gateway will transcode, or describes the first difference. Mist leaves out a
+// profile whose track_retain selected an original track, so the gateway may
+// report an in-order subset of the spec in which every omitted profile carries
+// track_retain; any other omission, addition or reordering is a mismatch. The
+// returned profiles carry no track_retain, a key lpms' strict decoder refuses.
+func LivepeerAuthorizedProfiles(observed, expected []LivepeerJSONProfile, source SourceMediaInfo) ([]LivepeerJSONProfile, string) {
+	authorized := make([]LivepeerJSONProfile, 0, len(expected))
+	next := 0
+	for i, want := range expected {
+		if next < len(observed) && livepeerProfileString(observed[next], "name") == livepeerProfileString(want, "name") {
+			if diff := livepeerProfileFieldMismatch(observed[next], want, source); diff != "" {
+				return nil, fmt.Sprintf("profile %d (%s): %s", i, livepeerProfileString(want, "name"), diff)
+			}
+			profile := copyLivepeerProfile(want)
+			delete(profile, "track_retain")
+			authorized = append(authorized, profile)
+			next++
+			continue
+		}
+		if retain, ok := want["track_retain"].(string); !ok || strings.TrimSpace(retain) == "" {
+			return nil, fmt.Sprintf("profile %d (%s) missing without track_retain (observed %s, expected %s)",
+				i, livepeerProfileString(want, "name"), livepeerProfileNames(observed), livepeerProfileNames(expected))
+		}
+	}
+	if next < len(observed) {
+		return nil, fmt.Sprintf("unexpected profile %s (observed %s, expected %s)",
+			livepeerProfileString(observed[next], "name"), livepeerProfileNames(observed), livepeerProfileNames(expected))
+	}
+	return authorized, ""
+}

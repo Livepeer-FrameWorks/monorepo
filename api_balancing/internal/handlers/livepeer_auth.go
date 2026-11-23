@@ -224,7 +224,8 @@ func finishLivepeerAuthorization(manifestID string, req livepeerAuthRequest, cla
 	}
 	if len(req.Profiles) > 0 {
 		observed := mist.NormalizeLivepeerProfiles(req.Profiles, source)
-		if diff := mist.LivepeerProfileMismatch(observed, profiles, source); diff != "" {
+		authorized, diff := mist.LivepeerAuthorizedProfiles(observed, profiles, source)
+		if diff != "" {
 			if logger != nil {
 				logger.WithFields(logging.Fields{
 					"manifest_id":       manifestID,
@@ -236,9 +237,13 @@ func finishLivepeerAuthorization(manifestID string, req livepeerAuthRequest, cla
 			}
 			return nil, authRejectSpecMismatch
 		}
-		if mist.LivepeerProfileMismatch(req.Profiles, profiles, source) != "" && metrics != nil && metrics.LivepeerAuthProfileNormalized != nil {
+		if mist.LivepeerProfileMismatch(req.Profiles, authorized, source) != "" && metrics != nil && metrics.LivepeerAuthProfileNormalized != nil {
 			metrics.LivepeerAuthProfileNormalized.WithLabelValues().Inc()
 		}
+		profiles = authorized
+	} else {
+		// A gateway that reports no profiles transcodes the full spec.
+		profiles, _ = mist.LivepeerAuthorizedProfiles(profiles, profiles, source)
 	}
 	authCtx.InternalName = canonicalLivepeerManifestID(manifestID)
 	authCtx.ProcessesJSON = ""

@@ -693,3 +693,38 @@ func TestExtractManifestID(t *testing.T) {
 		}
 	}
 }
+
+// A Livepeer process omits a profile whose track_retain picked an original
+// track. Foghorn accepts that subset of the signed spec, answers with exactly
+// the profiles the gateway transcodes, and still refuses a gateway that drops
+// a profile the spec did not mark retainable.
+func TestFinishLivepeerAuthorizationAcceptsRetainedProfileSubset(t *testing.T) {
+	retain := mist.RetainSelector(mist.RetainRung{ShortSide: 1080, Bitrate: 7800000})
+	spec := `[{"process":"Livepeer","workload":"vod","target_profiles":[` +
+		`{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"},` +
+		`{"name":"1080p","bitrate":7800000,"height":1080,"profile":"H264ConstrainedHigh","track_retain":"` + retain + `"}]}]`
+	request := livepeerAuthRequest{
+		Source: livepeerSource{Width: 1920, Height: 1080, FPS: 30, Codec: "h264"},
+		Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "width": 640, "height": 360,
+			"fps": 30000, "fpsDen": 1000, "profile": "H264ConstrainedHigh", "gop": "0.0"}},
+	}
+	claims := control.TranscodeJobClaims{NodeID: "edge-1", SpecDigest: strings.Repeat("a", 64)}
+	got, reason := finishLivepeerAuthorization("processing+job", request, claims, &LivepeerAuthContext{ProcessesJSON: spec})
+	if got == nil || reason != "" {
+		t.Fatalf("retained 1080p omission rejected: reason=%q", reason)
+	}
+	if len(got.Profiles) != 1 || got.Profiles[0]["name"] != "360p" {
+		t.Fatalf("authorized profiles = %v, want only 360p", got.Profiles)
+	}
+	encoded, err := json.Marshal(got.Profiles)
+	if err != nil || strings.Contains(string(encoded), "track_retain") {
+		t.Fatalf("auth response profiles carry track_retain: %s", encoded)
+	}
+
+	request.Profiles = []livepeerJSONProfile{{"name": "1080p", "bitrate": 7800000, "width": 1920, "height": 1080,
+		"fps": 30000, "fpsDen": 1000, "profile": "H264ConstrainedHigh", "gop": "0.0"}}
+	got, reason = finishLivepeerAuthorization("processing+job", request, claims, &LivepeerAuthContext{ProcessesJSON: spec})
+	if got != nil || reason != authRejectSpecMismatch {
+		t.Fatalf("omitted non-retainable 360p accepted: reason=%q context=%+v", reason, got)
+	}
+}
