@@ -217,9 +217,10 @@ published Mist once and bundles it into the edge artifacts and release manifest.
 pin or separate platform release is needed. Stack scenarios 78 and 79 are required validation.
 Scenario 79 also pushes a live Matroska source with a clockwise 90-degree projection. It requires
 `source_rotated` routing for the active ingest runtime and upright HLS renditions and decoded
-pixels through every Foghorn replica. The live publisher uses the isolated Mist HTTP listener
-on the stack and the public edge HTTPS endpoint for a requested deployed smoke run;
-`STACK_LIVE_MKV_INGEST_URL` can override that endpoint.
+pixels through every Foghorn replica. The live publisher pushes to the edge's public URL: the
+edge proxy on port 8082 on the stack (Mist's HTTP listener is loopback-only) and the public edge
+HTTPS endpoint for a requested deployed smoke run; `STACK_LIVE_MKV_INGEST_URL` can override that
+endpoint.
 
 1. `CreateVodUpload` in `api_balancing/internal/grpc/server.go` creates the S3 multipart,
    mints/accepts the `vod` `artifact_hash`, and inserts the artifact row
