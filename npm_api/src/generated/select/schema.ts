@@ -6017,7 +6017,9 @@ export interface StreamTrack {
     trackName: Scalars['String']
     trackType: Scalars['String']
     codec: (Scalars['String'] | null)
+    /** Track bitrate in kilobits per second (1 kbit = 1000 bits). */
     bitrateKbps: (Scalars['Int'] | null)
+    /** Track bitrate in bits per second. */
     bitrateBps: (Scalars['Int'] | null)
     buffer: (Scalars['Int'] | null)
     jitter: (Scalars['Int'] | null)
@@ -6466,8 +6468,10 @@ export interface TrackListUpdate {
     primaryWidth: (Scalars['Int'] | null)
     primaryHeight: (Scalars['Int'] | null)
     primaryFps: (Scalars['Float'] | null)
+    /** Primary video bitrate in kbps. */
     primaryVideoBitrate: (Scalars['Int'] | null)
     primaryVideoCodec: (Scalars['String'] | null)
+    /** Primary audio bitrate in kbps. */
     primaryAudioBitrate: (Scalars['Int'] | null)
     primaryAudioCodec: (Scalars['String'] | null)
     primaryAudioChannels: (Scalars['Int'] | null)
@@ -14605,7 +14609,9 @@ export interface StreamTrackGenqlSelection{
     trackName?: boolean | number
     trackType?: boolean | number
     codec?: boolean | number
+    /** Track bitrate in kilobits per second (1 kbit = 1000 bits). */
     bitrateKbps?: boolean | number
+    /** Track bitrate in bits per second. */
     bitrateBps?: boolean | number
     buffer?: boolean | number
     jitter?: boolean | number
@@ -15160,8 +15166,10 @@ export interface TrackListUpdateGenqlSelection{
     primaryWidth?: boolean | number
     primaryHeight?: boolean | number
     primaryFps?: boolean | number
+    /** Primary video bitrate in kbps. */
     primaryVideoBitrate?: boolean | number
     primaryVideoCodec?: boolean | number
+    /** Primary audio bitrate in kbps. */
     primaryAudioBitrate?: boolean | number
     primaryAudioCodec?: boolean | number
     primaryAudioChannels?: boolean | number
