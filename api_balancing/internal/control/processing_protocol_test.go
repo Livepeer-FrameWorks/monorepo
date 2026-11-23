@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,5 +48,31 @@ func TestProcessingProtocolUsesFencedRemoteOwner(t *testing.T) {
 	redis.Close()
 	if supported, known := NodeProcessingProtocolOK(t.Context(), "13"); supported || !known {
 		t.Fatal("failed ownership read allowed processing dispatch")
+	}
+}
+
+func TestProcessingRelayProtocolRefusalKeepsConnectionOwner(t *testing.T) {
+	ensureRegistry(t)
+	store, _ := newTestStore(t)
+	ctx := t.Context()
+	ok, err := store.AcquireConnOwnerFenced(ctx, "edge", "peer", "peer:9090", 1, state.ConnProtocol{ProtocolVersion: 12})
+	if err != nil || !ok {
+		t.Fatalf("register owner: %v", err)
+	}
+	before, err := store.GetConnOwner(ctx, "edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeFoghornRelayClient{err: status.Error(codes.FailedPrecondition, "edge sidecar upgrade required for processing result tenant binding")}
+	relay := buildRelay(t, store, "self", "self:9090", &mockRelayPool{client: &mockRelayClient{relay: client}})
+	request := &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "edge", Command: &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &ipcpb.ProcessingJobRequest{JobId: "job", TenantId: "tenant"}}}
+	setCommandRelay(t, relay)
+	err = SendProcessingJob("edge", request.GetProcessingJob())
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("lost processing refusal code: %v", err)
+	}
+	after, readErr := store.GetConnOwner(ctx, "edge")
+	if readErr != nil || after != before {
+		t.Fatalf("valid owner evicted after a protocol refusal: before=%+v after=%+v error=%v", before, after, readErr)
 	}
 }
