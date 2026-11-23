@@ -3931,7 +3931,9 @@ createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
-monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, /** Primary video bitrate in kbps. */
+primaryVideoBitrate: number | null, primaryVideoCodec: string | null, /** Primary audio bitrate in kbps. */
+primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -4107,7 +4109,9 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
 
-export type TrackListUpdateDefaultFieldsFragment = { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+export type TrackListUpdateDefaultFieldsFragment = { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, /** Primary video bitrate in kbps. */
+primaryVideoBitrate: number | null, primaryVideoCodec: string | null, /** Primary audio bitrate in kbps. */
+primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -8918,7 +8922,9 @@ createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
-monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, /** Primary video bitrate in kbps. */
+primaryVideoBitrate: number | null, primaryVideoCodec: string | null, /** Primary audio bitrate in kbps. */
+primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
@@ -9205,7 +9211,9 @@ export type LiveTrackListUpdatesSubscriptionVariables = Exact<{
 
 /** Track list updates when stream quality tiers change. Fires when tracks are added, removed, or quality changes. */
 export type LiveTrackListUpdatesSubscription = { /** Track list updates when stream quality tiers change. Fires when tracks are added, removed, or quality changes. */
-liveTrackListUpdates: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
+liveTrackListUpdates: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, /** Primary video bitrate in kbps. */
+primaryVideoBitrate: number | null, primaryVideoCodec: string | null, /** Primary audio bitrate in kbps. */
+primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */

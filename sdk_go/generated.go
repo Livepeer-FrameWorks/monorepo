@@ -114649,22 +114649,24 @@ func (v *TenantEventDefaultFieldsSystemHealthEvent) GetTimestamp() time.Time { r
 
 // TenantEventDefaultFieldsTrackListUpdate includes the requested fields of the GraphQL type TrackListUpdate.
 type TenantEventDefaultFieldsTrackListUpdate struct {
-	StreamId               string                                                     `json:"streamId"`
-	Stream                 *TenantEventDefaultFieldsTrackListUpdateStream             `json:"stream"`
-	Tracks                 []TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack `json:"tracks"`
-	TotalTracks            *int                                                       `json:"totalTracks"`
-	VideoTrackCount        *int                                                       `json:"videoTrackCount"`
-	AudioTrackCount        *int                                                       `json:"audioTrackCount"`
-	QualityTier            *string                                                    `json:"qualityTier"`
-	PrimaryWidth           *int                                                       `json:"primaryWidth"`
-	PrimaryHeight          *int                                                       `json:"primaryHeight"`
-	PrimaryFps             *float64                                                   `json:"primaryFps"`
-	PrimaryVideoBitrate    *int                                                       `json:"primaryVideoBitrate"`
-	PrimaryVideoCodec      *string                                                    `json:"primaryVideoCodec"`
-	PrimaryAudioBitrate    *int                                                       `json:"primaryAudioBitrate"`
-	PrimaryAudioCodec      *string                                                    `json:"primaryAudioCodec"`
-	PrimaryAudioChannels   *int                                                       `json:"primaryAudioChannels"`
-	PrimaryAudioSampleRate *int                                                       `json:"primaryAudioSampleRate"`
+	StreamId        string                                                     `json:"streamId"`
+	Stream          *TenantEventDefaultFieldsTrackListUpdateStream             `json:"stream"`
+	Tracks          []TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack `json:"tracks"`
+	TotalTracks     *int                                                       `json:"totalTracks"`
+	VideoTrackCount *int                                                       `json:"videoTrackCount"`
+	AudioTrackCount *int                                                       `json:"audioTrackCount"`
+	QualityTier     *string                                                    `json:"qualityTier"`
+	PrimaryWidth    *int                                                       `json:"primaryWidth"`
+	PrimaryHeight   *int                                                       `json:"primaryHeight"`
+	PrimaryFps      *float64                                                   `json:"primaryFps"`
+	// Primary video bitrate in kbps.
+	PrimaryVideoBitrate *int    `json:"primaryVideoBitrate"`
+	PrimaryVideoCodec   *string `json:"primaryVideoCodec"`
+	// Primary audio bitrate in kbps.
+	PrimaryAudioBitrate    *int    `json:"primaryAudioBitrate"`
+	PrimaryAudioCodec      *string `json:"primaryAudioCodec"`
+	PrimaryAudioChannels   *int    `json:"primaryAudioChannels"`
+	PrimaryAudioSampleRate *int    `json:"primaryAudioSampleRate"`
 }
 
 // GetStreamId returns TenantEventDefaultFieldsTrackListUpdate.StreamId, and is useful for accessing the field via an interface.
@@ -114829,20 +114831,22 @@ func (v *TenantEventDefaultFieldsTrackListUpdateStream) GetMonitoring() Monitori
 
 // TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack includes the requested fields of the GraphQL type StreamTrack.
 type TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack struct {
-	TrackName   string   `json:"trackName"`
-	TrackType   string   `json:"trackType"`
-	Codec       *string  `json:"codec"`
-	BitrateKbps *int     `json:"bitrateKbps"`
-	BitrateBps  *int     `json:"bitrateBps"`
-	Buffer      *int     `json:"buffer"`
-	Jitter      *int     `json:"jitter"`
-	Width       *int     `json:"width"`
-	Height      *int     `json:"height"`
-	Fps         *float64 `json:"fps"`
-	Resolution  *string  `json:"resolution"`
-	HasBFrames  *bool    `json:"hasBFrames"`
-	Channels    *int     `json:"channels"`
-	SampleRate  *int     `json:"sampleRate"`
+	TrackName string  `json:"trackName"`
+	TrackType string  `json:"trackType"`
+	Codec     *string `json:"codec"`
+	// Track bitrate in kilobits per second (1 kbit = 1000 bits).
+	BitrateKbps *int `json:"bitrateKbps"`
+	// Track bitrate in bits per second.
+	BitrateBps *int     `json:"bitrateBps"`
+	Buffer     *int     `json:"buffer"`
+	Jitter     *int     `json:"jitter"`
+	Width      *int     `json:"width"`
+	Height     *int     `json:"height"`
+	Fps        *float64 `json:"fps"`
+	Resolution *string  `json:"resolution"`
+	HasBFrames *bool    `json:"hasBFrames"`
+	Channels   *int     `json:"channels"`
+	SampleRate *int     `json:"sampleRate"`
 }
 
 // GetTrackName returns TenantEventDefaultFieldsTrackListUpdateTracksStreamTrack.TrackName, and is useful for accessing the field via an interface.
@@ -119509,20 +119513,22 @@ func (v *TrackListEventDefaultFieldsStreamThumbnailAssets) GetAssetKey() string 
 
 // TrackListEventDefaultFieldsTracksStreamTrack includes the requested fields of the GraphQL type StreamTrack.
 type TrackListEventDefaultFieldsTracksStreamTrack struct {
-	TrackName   string   `json:"trackName"`
-	TrackType   string   `json:"trackType"`
-	Codec       *string  `json:"codec"`
-	BitrateKbps *int     `json:"bitrateKbps"`
-	BitrateBps  *int     `json:"bitrateBps"`
-	Buffer      *int     `json:"buffer"`
-	Jitter      *int     `json:"jitter"`
-	Width       *int     `json:"width"`
-	Height      *int     `json:"height"`
-	Fps         *float64 `json:"fps"`
-	Resolution  *string  `json:"resolution"`
-	HasBFrames  *bool    `json:"hasBFrames"`
-	Channels    *int     `json:"channels"`
-	SampleRate  *int     `json:"sampleRate"`
+	TrackName string  `json:"trackName"`
+	TrackType string  `json:"trackType"`
+	Codec     *string `json:"codec"`
+	// Track bitrate in kilobits per second (1 kbit = 1000 bits).
+	BitrateKbps *int `json:"bitrateKbps"`
+	// Track bitrate in bits per second.
+	BitrateBps *int     `json:"bitrateBps"`
+	Buffer     *int     `json:"buffer"`
+	Jitter     *int     `json:"jitter"`
+	Width      *int     `json:"width"`
+	Height     *int     `json:"height"`
+	Fps        *float64 `json:"fps"`
+	Resolution *string  `json:"resolution"`
+	HasBFrames *bool    `json:"hasBFrames"`
+	Channels   *int     `json:"channels"`
+	SampleRate *int     `json:"sampleRate"`
 }
 
 // GetTrackName returns TrackListEventDefaultFieldsTracksStreamTrack.TrackName, and is useful for accessing the field via an interface.
@@ -120213,20 +120219,22 @@ func (v *TrackListEventInNodeDefaultFieldsStreamThumbnailAssets) GetAssetKey() s
 
 // TrackListEventInNodeDefaultFieldsTracksStreamTrack includes the requested fields of the GraphQL type StreamTrack.
 type TrackListEventInNodeDefaultFieldsTracksStreamTrack struct {
-	TrackName   string   `json:"trackName"`
-	TrackType   string   `json:"trackType"`
-	Codec       *string  `json:"codec"`
-	BitrateKbps *int     `json:"bitrateKbps"`
-	BitrateBps  *int     `json:"bitrateBps"`
-	Buffer      *int     `json:"buffer"`
-	Jitter      *int     `json:"jitter"`
-	Width       *int     `json:"width"`
-	Height      *int     `json:"height"`
-	Fps         *float64 `json:"fps"`
-	Resolution  *string  `json:"resolution"`
-	HasBFrames  *bool    `json:"hasBFrames"`
-	Channels    *int     `json:"channels"`
-	SampleRate  *int     `json:"sampleRate"`
+	TrackName string  `json:"trackName"`
+	TrackType string  `json:"trackType"`
+	Codec     *string `json:"codec"`
+	// Track bitrate in kilobits per second (1 kbit = 1000 bits).
+	BitrateKbps *int `json:"bitrateKbps"`
+	// Track bitrate in bits per second.
+	BitrateBps *int     `json:"bitrateBps"`
+	Buffer     *int     `json:"buffer"`
+	Jitter     *int     `json:"jitter"`
+	Width      *int     `json:"width"`
+	Height     *int     `json:"height"`
+	Fps        *float64 `json:"fps"`
+	Resolution *string  `json:"resolution"`
+	HasBFrames *bool    `json:"hasBFrames"`
+	Channels   *int     `json:"channels"`
+	SampleRate *int     `json:"sampleRate"`
 }
 
 // GetTrackName returns TrackListEventInNodeDefaultFieldsTracksStreamTrack.TrackName, and is useful for accessing the field via an interface.
@@ -120287,22 +120295,24 @@ func (v *TrackListEventInNodeDefaultFieldsTracksStreamTrack) GetSampleRate() *in
 
 // TrackListUpdateDefaultFields includes the GraphQL fields of TrackListUpdate requested by the fragment TrackListUpdateDefaultFields.
 type TrackListUpdateDefaultFields struct {
-	StreamId               string                                          `json:"streamId"`
-	Stream                 *TrackListUpdateDefaultFieldsStream             `json:"stream"`
-	Tracks                 []TrackListUpdateDefaultFieldsTracksStreamTrack `json:"tracks"`
-	TotalTracks            *int                                            `json:"totalTracks"`
-	VideoTrackCount        *int                                            `json:"videoTrackCount"`
-	AudioTrackCount        *int                                            `json:"audioTrackCount"`
-	QualityTier            *string                                         `json:"qualityTier"`
-	PrimaryWidth           *int                                            `json:"primaryWidth"`
-	PrimaryHeight          *int                                            `json:"primaryHeight"`
-	PrimaryFps             *float64                                        `json:"primaryFps"`
-	PrimaryVideoBitrate    *int                                            `json:"primaryVideoBitrate"`
-	PrimaryVideoCodec      *string                                         `json:"primaryVideoCodec"`
-	PrimaryAudioBitrate    *int                                            `json:"primaryAudioBitrate"`
-	PrimaryAudioCodec      *string                                         `json:"primaryAudioCodec"`
-	PrimaryAudioChannels   *int                                            `json:"primaryAudioChannels"`
-	PrimaryAudioSampleRate *int                                            `json:"primaryAudioSampleRate"`
+	StreamId        string                                          `json:"streamId"`
+	Stream          *TrackListUpdateDefaultFieldsStream             `json:"stream"`
+	Tracks          []TrackListUpdateDefaultFieldsTracksStreamTrack `json:"tracks"`
+	TotalTracks     *int                                            `json:"totalTracks"`
+	VideoTrackCount *int                                            `json:"videoTrackCount"`
+	AudioTrackCount *int                                            `json:"audioTrackCount"`
+	QualityTier     *string                                         `json:"qualityTier"`
+	PrimaryWidth    *int                                            `json:"primaryWidth"`
+	PrimaryHeight   *int                                            `json:"primaryHeight"`
+	PrimaryFps      *float64                                        `json:"primaryFps"`
+	// Primary video bitrate in kbps.
+	PrimaryVideoBitrate *int    `json:"primaryVideoBitrate"`
+	PrimaryVideoCodec   *string `json:"primaryVideoCodec"`
+	// Primary audio bitrate in kbps.
+	PrimaryAudioBitrate    *int    `json:"primaryAudioBitrate"`
+	PrimaryAudioCodec      *string `json:"primaryAudioCodec"`
+	PrimaryAudioChannels   *int    `json:"primaryAudioChannels"`
+	PrimaryAudioSampleRate *int    `json:"primaryAudioSampleRate"`
 }
 
 // GetStreamId returns TrackListUpdateDefaultFields.StreamId, and is useful for accessing the field via an interface.
@@ -120927,20 +120937,22 @@ func (v *TrackListUpdateDefaultFieldsStreamThumbnailAssets) GetAssetKey() string
 
 // TrackListUpdateDefaultFieldsTracksStreamTrack includes the requested fields of the GraphQL type StreamTrack.
 type TrackListUpdateDefaultFieldsTracksStreamTrack struct {
-	TrackName   string   `json:"trackName"`
-	TrackType   string   `json:"trackType"`
-	Codec       *string  `json:"codec"`
-	BitrateKbps *int     `json:"bitrateKbps"`
-	BitrateBps  *int     `json:"bitrateBps"`
-	Buffer      *int     `json:"buffer"`
-	Jitter      *int     `json:"jitter"`
-	Width       *int     `json:"width"`
-	Height      *int     `json:"height"`
-	Fps         *float64 `json:"fps"`
-	Resolution  *string  `json:"resolution"`
-	HasBFrames  *bool    `json:"hasBFrames"`
-	Channels    *int     `json:"channels"`
-	SampleRate  *int     `json:"sampleRate"`
+	TrackName string  `json:"trackName"`
+	TrackType string  `json:"trackType"`
+	Codec     *string `json:"codec"`
+	// Track bitrate in kilobits per second (1 kbit = 1000 bits).
+	BitrateKbps *int `json:"bitrateKbps"`
+	// Track bitrate in bits per second.
+	BitrateBps *int     `json:"bitrateBps"`
+	Buffer     *int     `json:"buffer"`
+	Jitter     *int     `json:"jitter"`
+	Width      *int     `json:"width"`
+	Height     *int     `json:"height"`
+	Fps        *float64 `json:"fps"`
+	Resolution *string  `json:"resolution"`
+	HasBFrames *bool    `json:"hasBFrames"`
+	Channels   *int     `json:"channels"`
+	SampleRate *int     `json:"sampleRate"`
 }
 
 // GetTrackName returns TrackListUpdateDefaultFieldsTracksStreamTrack.TrackName, and is useful for accessing the field via an interface.

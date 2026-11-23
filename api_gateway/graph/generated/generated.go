@@ -28602,8 +28602,10 @@ type TrackListUpdate {
   primaryWidth: Int
   primaryHeight: Int
   primaryFps: Float
+  "Primary video bitrate in kbps."
   primaryVideoBitrate: Int
   primaryVideoCodec: String
+  "Primary audio bitrate in kbps."
   primaryAudioBitrate: Int
   primaryAudioCodec: String
   primaryAudioChannels: Int
@@ -30049,7 +30051,9 @@ type StreamTrack {
   trackName: String!
   trackType: String!
   codec: String
+  "Track bitrate in kilobits per second (1 kbit = 1000 bits)."
   bitrateKbps: Int
+  "Track bitrate in bits per second."
   bitrateBps: Int
   buffer: Int
   jitter: Int
