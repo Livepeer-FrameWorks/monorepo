@@ -182,7 +182,7 @@ fi
 if [ "${STACK_TARGET:-stack}" = staging ]; then
   live_ingest=${STACK_LIVE_MKV_INGEST_URL:-https://$EDGE_A_HOST}
 else
-  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-http://$EDGE_A_HOST:8080}
+  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-http://$EDGE_A_HOST:8082}
 fi
 live_sid='' live_pub=''
 cleanup_live_rotation() {
