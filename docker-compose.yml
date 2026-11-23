@@ -496,7 +496,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1
+      test:
+        ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 10s
       timeout: 5s
       retries: 5
