@@ -44,13 +44,13 @@ func TakeProcessingInputUnavailable(assetHash string) (string, bool) {
 // noteProcessingInputFailure records err for assetHash when it is a transient
 // upstream failure: the upstream did not answer before the reader gave up, the
 // connection failed, or the upstream answered a server-side error. A source
-// shorter than its catalog size is recorded as a defect instead. An upstream
-// that answered a client error (missing, forbidden) is a property of the
-// source and is not recorded.
+// shorter than its catalog size is recorded as a defect instead. A definitive
+// upstream refusal is recorded separately as terminal source unavailability.
 func noteProcessingInputFailure(assetHash string, err error) {
 	if assetHash == "" || err == nil {
 		return
 	}
+	noteProcessingInputUnavailable(assetHash, err)
 	var short upstreamShortSourceError
 	if errors.As(err, &short) {
 		processingInputDefects.Store(assetHash, err.Error())

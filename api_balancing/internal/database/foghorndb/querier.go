@@ -676,6 +676,7 @@ type Querier interface {
 	// same node from marking a newer one. Sessions without a public stream ID are
 	// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
 	MarkBoundIngestSessionPlayable(ctx context.Context, arg MarkBoundIngestSessionPlayableParams) (MarkBoundIngestSessionPlayableRow, error)
+	MarkBoundPushBufferEnded(ctx context.Context, arg MarkBoundPushBufferEndedParams) (MarkBoundPushBufferEndedRow, error)
 	MarkCompletingVODFailed(ctx context.Context, arg MarkCompletingVODFailedParams) (int64, error)
 	MarkCompletingVODProcessing(ctx context.Context, arg MarkCompletingVODProcessingParams) (int64, error)
 	MarkDVRChapterBackfillComplete(ctx context.Context, artifactHash string) error

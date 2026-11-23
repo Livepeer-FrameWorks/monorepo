@@ -317,5 +317,10 @@ execution; each node stop carries its session generation and connector identity.
 revive it after a sidecar restart. A pending stop keeps the ingest session reserved until the node
 confirms termination. Key rotation with `endActiveSession` publishes refreshed authority before
 stopping that captured publisher. Completion emits `stream.ingest_disconnected` once through the
-cell outbox with `session_id` and `reason`; an already ended session settles without stopping a
+cell outbox with `session_id` and `reason`. A close report that follows the durable stop request
+can arrive before the node acknowledgement; it still completes that request's event. A session
+that ended before the stop request settles without claiming platform causation or stopping a
 replacement. `stream.idle` describes ingest ending, while `stream.ended` describes buffer unload.
+An isolated runtime's unload records its own historical session event even after a replacement
+connects; it cannot alter the replacement's state. An inventory absence alone never emits that
+buffer-unload event.

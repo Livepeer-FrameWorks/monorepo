@@ -89,9 +89,19 @@ func PublisherRuntimeBindingForClaim(ctx context.Context, tenant, internal, node
 	return PublisherRuntimeBindingForGeneration(ctx, tenant, internal, node, session.Generation)
 }
 
-// EndBoundPublisherRuntime retires the session named by a physical publisher's
-// terminal report. A relay's end carries no authority to end any publisher.
+// EndBoundPublisherRuntime records the exact physical buffer's unload. Its
+// historical event does not give a relay authority to end any publisher.
 func EndBoundPublisherRuntime(ctx context.Context, tenant, node, runtime string, eventMillis int64, logger logging.Logger) (int, error) {
+	return endBoundPublisherRuntime(ctx, tenant, node, runtime, eventMillis, logger, true)
+}
+
+// RetireAbsentPublisherRuntime ends an absent publisher without manufacturing
+// a STREAM_END observation; a later unload owns stream.ended.
+func RetireAbsentPublisherRuntime(ctx context.Context, tenant, node, runtime string, eventMillis int64, logger logging.Logger) (int, error) {
+	return endBoundPublisherRuntime(ctx, tenant, node, runtime, eventMillis, logger, false)
+}
+
+func endBoundPublisherRuntime(ctx context.Context, tenant, node, runtime string, eventMillis int64, logger logging.Logger, bufferUnloaded bool) (int, error) {
 	parsed, ok := streamident.ParseRuntimeBinding(runtime)
 	if !ok {
 		return 0, errors.New("terminal report has no isolated runtime binding")
@@ -110,6 +120,9 @@ func EndBoundPublisherRuntime(ctx context.Context, tenant, node, runtime string,
 		return 0, errors.New("terminal runtime differs from persisted publisher binding")
 	}
 	ended, err := EndExactMissingIngestSession(ctx, tenant, node, parsed.InternalName, parsed.ExecutionID, binding.ConnectorPID, eventMillis, logger)
+	if err == nil && bufferUnloaded {
+		err = markBoundPublisherBufferEnded(ctx, tenant, node, parsed.InternalName, parsed.ExecutionID, runtime, eventMillis)
+	}
 	if ended {
 		return 1, err
 	}

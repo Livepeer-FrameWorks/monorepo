@@ -54,6 +54,12 @@ const (
 	ProcessingNodeMemoryBudget             = "processing_memory_budget_bytes"
 )
 
+// Terminal failure causes survive diagnostic error wrapping across the edge RPC.
+const (
+	ProcessingResultFailureCause            = "failure_cause"
+	ProcessingFailureCauseSourceUnavailable = "source_unavailable"
+)
+
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
 // budget for VOD/processing transcodes. It is generous versus realtime so a slow
 // first segment or a momentarily-loaded orchestrator does not trip the client,

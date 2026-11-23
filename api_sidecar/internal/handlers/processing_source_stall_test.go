@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -145,8 +146,9 @@ func TestProcessingBootFailureOnMissingSourceIsTerminal(t *testing.T) {
 	if got := processingReadinessFailureStatus(err); got != "failed" {
 		t.Fatalf("status = %q (%v), want failed", got, err)
 	}
-	if outputs := processingReadinessFailureOutputs(err); outputs != nil {
-		t.Fatalf("a missing source names no retry cause, got %v", outputs)
+	outputs := processingReadinessFailureOutputs(err)
+	if outputs[mist.ProcessingResultRetryCause] != "" || outputs[mist.ProcessingResultFailureCause] != mist.ProcessingFailureCauseSourceUnavailable {
+		t.Fatalf("a missing source carries its terminal cause without a retry cause, got %v", outputs)
 	}
 }
 
@@ -166,6 +168,11 @@ func TestProcessingReadinessFailsOnSourceTheRelayProbeHeardMissing(t *testing.T)
 	}
 	if got := processingReadinessFailureStatus(err); got != "failed" {
 		t.Fatalf("status = %q, want failed", got)
+	}
+	for _, failure := range []error{err, fmt.Errorf("processing memory admission: %w", err)} {
+		if cause := processingMemoryFailureOutputs(failure)["failure_cause"]; cause != "source_unavailable" {
+			t.Fatalf("source failure lost its transport classification through wrapping: got %q", cause)
+		}
 	}
 }
 

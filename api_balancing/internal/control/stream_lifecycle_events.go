@@ -120,3 +120,25 @@ func markStreamBufferEndedTx(ctx context.Context, tx *sql.Tx, tenant, node, inte
 	}
 	return domainevents.StreamEnded(ctx, tx, tenant, streamID, playbackID, sessionID)
 }
+
+// markBoundPublisherBufferEnded records a historical runtime's unload without
+// granting it authority over a replacement publisher's state or buffer.
+func markBoundPublisherBufferEnded(ctx context.Context, tenant, node, internal, generation, runtime string, eventMillis int64) error {
+	playbackID := streamEventPlaybackID(ctx, internal)
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		if err := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenant, internal)); err != nil {
+			return err
+		}
+		row, err := q.MarkBoundPushBufferEnded(ctx, foghorndb.MarkBoundPushBufferEndedParams{
+			TenantID: tenant, Generation: generation, NodeID: node, InternalName: internal, RuntimeName: runtime, EventMillis: eventMillis,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil || row.StreamID == "" {
+			return err
+		}
+		return domainevents.StreamEnded(ctx, tx, tenant, row.StreamID, playbackID, row.SessionID)
+	})
+}

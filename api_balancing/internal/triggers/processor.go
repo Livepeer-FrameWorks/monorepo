@@ -6232,7 +6232,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			if generation := slu.GetIngestGeneration(); generation != "" && generation != binding.ExecutionID {
 				return "", false, errors.New("offline runtime generation differs")
 			}
-			if _, err := control.EndBoundPublisherRuntime(context.Background(), trigger.GetTenantId(), nodeID, runtimeName, offlineEventUnixMillis(trigger), p.logger); err != nil {
+			if _, err := control.RetireAbsentPublisherRuntime(context.Background(), trigger.GetTenantId(), nodeID, runtimeName, offlineEventUnixMillis(trigger), p.logger); err != nil {
 				return "", false, err
 			}
 		}
