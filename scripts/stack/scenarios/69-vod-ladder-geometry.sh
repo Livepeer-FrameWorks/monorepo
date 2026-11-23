@@ -18,10 +18,12 @@ gateway_absent() {
   [ "$(gateway_state)" != healthy ] && [ "$(date +%s)" -ge "$DISCOVERY_DRAIN_AT" ]
 }
 gateway_present() {
+  local health
   [ "$(gateway_state)" = healthy ] || return 1
   # The gateway's health endpoint reports the pool used by actual selection.
-  curl -fsS --connect-timeout 2 --max-time 5 "http://$GATEWAY:8935/healthz" |
-    jq -e '(.orchestrators | type)=="number" and .orchestrators>0' >/dev/null
+  health=$(curl -fsS --connect-timeout 2 --max-time 5 "http://$GATEWAY:8935/healthz") || return 1
+  printf '%s\n' "$health" |
+    jq -e -s 'length==1 and (.[0].orchestrators | type)=="number" and .[0].orchestrators>0' >/dev/null
 }
 orchestrator_present() {
   stack_running "$ORCHESTRATOR" &&
