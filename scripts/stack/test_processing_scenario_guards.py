@@ -158,6 +158,10 @@ gateway_present
                  ("healthy", '{"orchestrators":true}', 0, False),
                  ("healthy", '{}', 0, False),
                  ("healthy", 'unreadable', 0, False),
+                 ("healthy", '', 0, False),
+                 ("healthy", '   ', 0, False),
+                 ("healthy", '{"orchestrators":1}', 22, False),
+                 ("healthy", '{"orchestrators":1}\n{"orchestrators":1}', 0, False),
                  ("healthy", '', 22, False)]
         for state, health, code, expected in cases:
             with self.subTest(state=state, health=health, code=code):
