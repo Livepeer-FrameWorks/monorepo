@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   classifyTrack,
   formatTrackBitrate,
+  trackBitrateFieldsFromKbps,
+  trackBitrateKbps,
   trackDisplayName,
   trackFps,
   trackKindLabel,
@@ -65,4 +67,13 @@ describe("track-display helpers", () => {
 
 it("classifies Mist EAC-3 without a type label as audio", () => {
   expect(classifyTrack({ codec: "EAC-3" })).toBe("audio");
+});
+
+it("keeps a kbps metric in kbps when it fills track bitrate fields", () => {
+  expect(trackBitrateFieldsFromKbps(2500)).toEqual({ bitrateKbps: 2500, bitrateBps: 2_500_000 });
+  expect(trackBitrateFieldsFromKbps(null)).toEqual({ bitrateKbps: null, bitrateBps: null });
+});
+
+it("reads Mist health kbits as Kibit/s", () => {
+  expect(trackBitrateKbps({ kbits: 3906 })).toBe(4000);
 });

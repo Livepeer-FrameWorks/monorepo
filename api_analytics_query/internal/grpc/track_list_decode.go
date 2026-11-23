@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -69,16 +70,28 @@ func streamTrackFromMap(name string, index int, m map[string]any) *ipcpb.StreamT
 	if v, ok := int64FromMap(m, "last_ms", "lastMs", "lastms"); ok {
 		track.LastMs = &v
 	}
-	if v, ok := int64FromMap(m, "bitrate_kbps", "bitrateKbps", "kbits"); ok {
+	// Stored StreamTrack keys are bits/s and decimal kbit/s; raw Mist keys are
+	// bps (bytes/s) and health kbits (Kibit/s).
+	if v, ok := float64FromMap(m, "kbits"); ok {
+		bps := mist.TrackBitsPerSecondFromMistKbits(v)
+		kbps := mist.TrackKbpsFromBitsPerSecond(bps)
+		track.BitrateBps, track.BitrateKbps = &bps, &kbps
+	}
+	if v, ok := int64FromMap(m, "bps"); ok {
+		bps := mist.TrackBitsPerSecondFromMistBps(v)
+		kbps := mist.TrackKbpsFromBitsPerSecond(bps)
+		track.BitrateBps, track.BitrateKbps = &bps, &kbps
+	}
+	if v, ok := int64FromMap(m, "bitrate_kbps", "bitrateKbps"); ok {
 		n := int32(v)
 		track.BitrateKbps = &n
 		bps := int64(n) * 1000
 		track.BitrateBps = &bps
 	}
-	if v, ok := int64FromMap(m, "bitrate_bps", "bitrateBps", "bps"); ok {
+	if v, ok := int64FromMap(m, "bitrate_bps", "bitrateBps"); ok {
 		track.BitrateBps = &v
-		if track.BitrateKbps == nil {
-			kbps := int32(v / 1000)
+		if _, hasKbps := int64FromMap(m, "bitrate_kbps", "bitrateKbps"); !hasKbps {
+			kbps := mist.TrackKbpsFromBitsPerSecond(v)
 			track.BitrateKbps = &kbps
 		}
 	}

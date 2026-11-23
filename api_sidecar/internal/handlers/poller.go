@@ -1730,8 +1730,9 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 
 					// Extract bitrate (this is the real-time accurate bitrate!)
 					if kbits, ok := trackMap["kbits"].(float64); ok {
-						trackDetail["bitrate_kbps"] = int(kbits)
-						trackDetail["bitrate_bps"] = int64(kbits * 1000)
+						bitsPerSecond := mist.TrackBitsPerSecondFromMistKbits(kbits)
+						trackDetail["bitrate_kbps"] = int(mist.TrackKbpsFromBitsPerSecond(bitsPerSecond))
+						trackDetail["bitrate_bps"] = bitsPerSecond
 					}
 
 					// Extract buffer info

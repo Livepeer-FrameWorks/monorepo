@@ -844,7 +844,7 @@ func TestParseTracksFromJSON(t *testing.T) {
 		// Audio classified by codec alone (no explicit type); carries bps.
 		"audio_0": map[string]any{
 			"codec":    "AAC",
-			"channels": float64(2), "rate": float64(48000), "bps": float64(128000),
+			"channels": float64(2), "rate": float64(48000), "bps": float64(16000),
 		},
 		// Meta classified by codec JSON.
 		"meta_0": map[string]any{"codec": "JSON"},
@@ -875,8 +875,8 @@ func TestParseTracksFromJSON(t *testing.T) {
 	if video.GetFps() != 30 {
 		t.Fatalf("fps should be fpks/1000=30, got %v", video.GetFps())
 	}
-	if video.GetBitrateKbps() != 800 || video.GetBitrateBps() != 800000 {
-		t.Fatalf("kbits bitrate should populate both kbps and bps: %+v", video)
+	if video.GetBitrateKbps() != 819 || video.GetBitrateBps() != 819200 {
+		t.Fatalf("kbits (Kibit/s) should populate bits/s and decimal kbit/s: %+v", video)
 	}
 	if !video.GetHasBframes() {
 		t.Fatalf("has_bframes should be true")
@@ -892,9 +892,9 @@ func TestParseTracksFromJSON(t *testing.T) {
 	if audio.GetChannels() != 2 || audio.GetSampleRate() != 48000 {
 		t.Fatalf("audio fields mismatch: %+v", audio)
 	}
-	// bps encoding populates bps directly and derives kbps via integer division.
+	// Mist bps is bytes/s: 16000 B/s is 128000 bit/s.
 	if audio.GetBitrateBps() != 128000 || audio.GetBitrateKbps() != 128 {
-		t.Fatalf("bps bitrate should derive kbps=128: %+v", audio)
+		t.Fatalf("bps (bytes/s) bitrate should give 128000 bit/s and 128 kbit/s: %+v", audio)
 	}
 
 	if meta := byName["meta_0"]; meta == nil || meta.GetTrackType() != "meta" {

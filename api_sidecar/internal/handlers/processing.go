@@ -2531,13 +2531,13 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 		if track.WrittenFirstMs != nil && track.WrittenLastMs != nil {
 			firstMs, lastMs = track.GetWrittenFirstMs(), track.GetWrittenLastMs()
 		}
-		// The RECORDING_END summary carries Mist's track bps as is.
+		// StreamTrack carries bits/s; processing compares Mist bytes/s.
 		out = append(out, processingMetaVideoTrack{
 			codec:         codec,
 			name:          track.GetTrackName(),
 			width:         int(track.GetWidth()),
 			height:        int(track.GetHeight()),
-			bps:           uint64(max(track.GetBitrateBps(), 0)),
+			bps:           uint64(max(track.GetBitrateBps(), 0) / 8),
 			firstms:       float64(firstMs),
 			lastms:        float64(lastMs),
 			source:        track.GetSourceTrack(),
@@ -2842,7 +2842,7 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 			outputs["fps"] = fmt.Sprintf("%.2f", v/1000.0)
 		}
 		if v, ok := track["kbits"].(float64); ok && v > 0 {
-			outputs["bitrate_kbps"] = strconv.Itoa(int(v))
+			outputs["bitrate_kbps"] = strconv.Itoa(int(mist.TrackKbpsFromBitsPerSecond(mist.TrackBitsPerSecondFromMistKbits(v))))
 		}
 	}
 	if i := mist.PrimaryAudioIndex(len(tracks), func(i int) mist.AudioTrackFacts {

@@ -863,16 +863,18 @@ func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
 			track.SourceTrack = &source
 		}
 
-		// Extract bitrate
+		// Health maps carry kbits, stream/track-list/recording maps carry bps
+		// (bytes/s); both are stored as bits/s and decimal kbit/s.
+		bitsPerSecond, hasBitrate := int64(0), false
 		if kbits, ok := trackMap["kbits"].(float64); ok {
-			bitrateKbps := int32(kbits)
-			bitrateBps := int64(kbits * 1000)
-			track.BitrateKbps = &bitrateKbps
-			track.BitrateBps = &bitrateBps
+			bitsPerSecond, hasBitrate = TrackBitsPerSecondFromMistKbits(kbits), true
 		}
 		if bps, ok := int64FromAny(trackMap["bps"]); ok {
-			track.BitrateBps = &bps
-			kbps := int32(bps / 1000)
+			bitsPerSecond, hasBitrate = TrackBitsPerSecondFromMistBps(bps), true
+		}
+		if hasBitrate {
+			kbps := TrackKbpsFromBitsPerSecond(bitsPerSecond)
+			track.BitrateBps = &bitsPerSecond
 			track.BitrateKbps = &kbps
 		}
 

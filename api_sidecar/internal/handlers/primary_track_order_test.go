@@ -47,7 +47,7 @@ func TestPollerPrimaryTracksAreTheSourceTracks(t *testing.T) {
 		pm.processObservedStreamDataContext(context.Background(), "node", "live+stream",
 			map[string]any{"inputs": float64(1), "health": health}, now.Add(-time.Second), now)
 		update := sent.GetStreamLifecycleUpdate()
-		if update.GetPrimaryWidth() != 1920 || update.GetPrimaryHeight() != 1080 || update.GetPrimaryBitrate() != 5800 {
+		if update.GetPrimaryWidth() != 1920 || update.GetPrimaryHeight() != 1080 || update.GetPrimaryBitrate() != 5939 { // 5800 Kibit/s
 			t.Fatalf("run %d: primary video is a rendition: %dx%d @ %d kbps", i, update.GetPrimaryWidth(), update.GetPrimaryHeight(), update.GetPrimaryBitrate())
 		}
 		if update.GetAudioCodec() != "AAC" {

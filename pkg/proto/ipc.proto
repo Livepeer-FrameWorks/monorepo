@@ -2164,10 +2164,10 @@ message StreamTrackListTrigger {
   optional int32 primary_width = 7;
   optional int32 primary_height = 8;
   optional double primary_fps = 9;
-  optional int32 primary_video_bitrate = 10;
+  optional int32 primary_video_bitrate = 10;  // kbit/s
   optional string primary_video_codec = 11;
   // Primary audio track info
-  optional int32 primary_audio_bitrate = 12;
+  optional int32 primary_audio_bitrate = 12;  // kbit/s
   optional string primary_audio_codec = 13;
   optional int32 primary_audio_channels = 14;
   optional int32 primary_audio_sample_rate = 15;
@@ -3154,8 +3154,8 @@ message StreamTrack {
   string track_name = 1;     // e.g., "video_1", "audio_1", "meta_1"
   string track_type = 2;     // "video", "audio", "meta", "unknown"
   string codec = 3;          // H264, AAC, JSON, etc.
-  optional int32 bitrate_kbps = 4;
-  optional int64 bitrate_bps = 5;
+  optional int32 bitrate_kbps = 4;  // decimal kbit/s
+  optional int64 bitrate_bps = 5;   // bits/s; Mist track bps is bytes/s, health kbits is Kibit/s
   optional int32 buffer = 6;
   optional int32 jitter = 7;
   

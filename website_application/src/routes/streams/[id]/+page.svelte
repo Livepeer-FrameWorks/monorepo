@@ -55,6 +55,7 @@
   import type { SourceLocationDraft } from "$lib/source-location";
   import { resolveOperationalStreamId } from "$lib/route-ids";
   import { shouldRefreshPushTargets } from "$lib/utils/push-target-events";
+  import { trackBitrateFieldsFromKbps } from "$lib/utils/track-display";
   import {
     DropdownMenu,
     DropdownMenuContent,
@@ -341,10 +342,7 @@
           width: streamMetrics.primaryWidth ?? null,
           height: streamMetrics.primaryHeight ?? null,
           fps: streamMetrics.primaryFps ?? null,
-          bitrateKbps: streamMetrics.primaryBitrate
-            ? Math.round(streamMetrics.primaryBitrate / 1000)
-            : null,
-          bitrateBps: streamMetrics.primaryBitrate ?? null,
+          ...trackBitrateFieldsFromKbps(streamMetrics.primaryBitrate),
           buffer: null,
           jitter: null,
           resolution:
