@@ -64,3 +64,43 @@ func TestSetTranscodeLadderReplacesOnlyTheLivepeerProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestSetTranscodeLadderMasksReplacedOriginals(t *testing.T) {
+	rungs := []contract.RenditionSpec{{Name: "720p", Codec: "H264", Resolution: "x720", Bitrate: 4500000, Profile: "high", TrackInhibit: "video=<1280x720"}}
+	got, err := SetTranscodeLadder(`[{"process":"Livepeer","track_inhibit":"video=<640x360"},{"process":"Thumbs"}]`, rungs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var processes []map[string]any
+	if err := json.Unmarshal([]byte(got), &processes); err != nil {
+		t.Fatal(err)
+	}
+	if processes[0]["mask_replaced_originals"] != true {
+		t.Errorf("Livepeer mask_replaced_originals = %#v, want true", processes[0]["mask_replaced_originals"])
+	}
+	if _, set := processes[1]["mask_replaced_originals"]; set {
+		t.Errorf("Thumbs carries mask_replaced_originals: %s", got)
+	}
+}
+
+func TestReplaceLivepeerWithLocalCarriesRetention(t *testing.T) {
+	retain := RetainSelector(RetainRung{720, 4500000})
+	input := `[{"process":"Livepeer","mask_replaced_originals":true,"target_profiles":[` +
+		`{"name":"720p","height":720,"bitrate":4500000,"track_retain":"` + retain + `"},` +
+		`{"name":"custom","height":540,"bitrate":2000000}]}]`
+	var processes []map[string]any
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &processes); err != nil {
+		t.Fatal(err)
+	}
+	if len(processes) != 2 {
+		t.Fatalf("local processes = %v, want 2", processes)
+	}
+	for i, wantRetain := range []any{retain, nil} {
+		if processes[i]["track_retain"] != wantRetain {
+			t.Errorf("process %d track_retain = %#v, want %#v", i, processes[i]["track_retain"], wantRetain)
+		}
+		if processes[i]["mask_replaced_originals"] != true {
+			t.Errorf("process %d mask_replaced_originals = %#v, want true", i, processes[i]["mask_replaced_originals"])
+		}
+	}
+}

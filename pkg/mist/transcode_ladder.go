@@ -81,7 +81,8 @@ func lpmsProfiles(renditions []contract.RenditionSpec, shortSide bool) []Livepee
 }
 
 // SetTranscodeLadder replaces only the video profiles, preserving routing and
-// source masks. Audio and thumbnail processes keep their own policy.
+// source masks, and has the ladder mask the original tracks its transcoded
+// rungs replace. Audio and thumbnail processes keep their own policy.
 func SetTranscodeLadder(processesJSON string, renditions []contract.RenditionSpec) (string, error) {
 	if err := contract.ValidatePolicy(renditions); err != nil {
 		return "", err
@@ -97,6 +98,7 @@ func SetTranscodeLadder(processesJSON string, renditions []contract.RenditionSpe
 			if proc["track_inhibit"] == "video=<640x360" {
 				proc["track_inhibit"] = "video=<0x360"
 			}
+			proc["mask_replaced_originals"] = true
 			changed = true
 		}
 	}

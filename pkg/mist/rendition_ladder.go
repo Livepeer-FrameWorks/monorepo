@@ -8,15 +8,23 @@ import (
 )
 
 // ExpectedRendition describes the output geometry of a video process. ShortSide
-// is the ladder dimension in both landscape and portrait orientations.
+// is the ladder dimension in both landscape and portrait orientations. A
+// Retained rung starts no process: original track TrackIndex is the rendition
+// and Width/Height are that track's.
 type ExpectedRendition struct {
 	Name, Process            string
 	Width, Height, ShortSide int
+	Retained                 bool
+	TrackIndex               int
 }
 
-// ExpectedVideoRenditions applies Mist's source inhibitors and sizing rules to
-// every Livepeer profile and local AV video process. Invalid intent fails closed.
-func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]ExpectedRendition, error) {
+// ExpectedVideoRenditions applies Mist's retention selectors, source inhibitors
+// and sizing rules to every Livepeer profile and local AV video process.
+// Source is the transcode source (TranscodeSourceIndex of tracks), the only
+// track a rung's size inhibitor is judged against; tracks are the stream's
+// video tracks, and without them no rung is retained. Invalid intent fails
+// closed.
+func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo, tracks ...TrackInfo) ([]ExpectedRendition, error) {
 	var processes []map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
 		return nil, fmt.Errorf("parse process config: %w", err)
@@ -28,7 +36,8 @@ func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]Ex
 		if err := json.Unmarshal(proc["process"], &process); err != nil {
 			return nil, fmt.Errorf("missing or invalid process name")
 		}
-		if process != "Livepeer" && processTrackInhibited(proc, source) {
+		_, retainable := proc["track_retain"]
+		if process != "Livepeer" && !retainable && processTrackInhibited(proc, source) {
 			continue
 		}
 		switch process {
@@ -42,10 +51,33 @@ func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]Ex
 					return nil, fmt.Errorf("null Livepeer profile")
 				}
 			}
-			if processTrackInhibited(proc, source) {
-				continue
-			}
-			for _, p := range NormalizeLivepeerProfiles(profiles, source) {
+			inhibited := processTrackInhibited(proc, source)
+			for _, profile := range profiles {
+				name := ""
+				if value, ok := profile["name"].(string); ok {
+					name = value
+				}
+				selector, isString := profile["track_retain"].(string)
+				if _, present := profile["track_retain"]; present && !isString {
+					return nil, fmt.Errorf("invalid Livepeer track_retain")
+				}
+				bitrate, _ := livepeerProfileInt(profile, "bitrate")
+				track, retained, err := retainedTrack(selector, int64(bitrate), tracks)
+				if err != nil {
+					return nil, err
+				}
+				if retained {
+					out = append(out, retainedRendition(name, process, track))
+					continue
+				}
+				if inhibited {
+					continue
+				}
+				normalized := NormalizeLivepeerProfiles([]LivepeerJSONProfile{profile}, source)
+				if len(normalized) == 0 {
+					continue
+				}
+				p := normalized[0]
 				pw, _ := livepeerProfileInt(p, "width")
 				ph, _ := livepeerProfileInt(p, "height")
 				if w <= 0 || h <= 0 || pw <= 0 || ph <= 0 {
@@ -74,10 +106,6 @@ func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]Ex
 					}
 				}
 				pw, ph = pw/2*2, ph/2*2
-				name := ""
-				if value, ok := p["name"].(string); ok {
-					name = value
-				}
 				out = append(out, ExpectedRendition{Name: name, Process: process, Width: pw, Height: ph, ShortSide: min(pw, ph)})
 			}
 		case "AV":
@@ -90,12 +118,30 @@ func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]Ex
 			if !isAVVideoCodec(codec) {
 				continue
 			}
-			for key, value := range map[string]*string{"resolution": &resolution, "x-LSP-name": &name} {
+			var selector string
+			for key, value := range map[string]*string{"resolution": &resolution, "x-LSP-name": &name, "track_retain": &selector} {
 				if raw := proc[key]; len(raw) > 0 {
 					if parseErr := json.Unmarshal(raw, value); parseErr != nil {
 						return nil, fmt.Errorf("invalid AV %s: %w", key, parseErr)
 					}
 				}
+			}
+			var bitrate float64
+			if raw := proc["bitrate"]; selector != "" && len(raw) > 0 {
+				if parseErr := json.Unmarshal(raw, &bitrate); parseErr != nil {
+					return nil, fmt.Errorf("invalid AV bitrate: %w", parseErr)
+				}
+			}
+			track, retained, err := retainedTrack(selector, int64(bitrate), tracks)
+			if err != nil {
+				return nil, err
+			}
+			if retained {
+				out = append(out, retainedRendition(name, process, track))
+				continue
+			}
+			if processTrackInhibited(proc, source) {
+				continue
 			}
 			pw, ph := w, h
 			if resolution != "" {
@@ -141,6 +187,13 @@ func ExpectedVideoRenditions(processesJSON string, source SourceMediaInfo) ([]Ex
 		}
 	}
 	return out, nil
+}
+
+func retainedRendition(name, process string, track TrackInfo) ExpectedRendition {
+	return ExpectedRendition{
+		Name: name, Process: process, Width: track.Width, Height: track.Height,
+		ShortSide: min(track.Width, track.Height), Retained: true, TrackIndex: track.Index,
+	}
 }
 
 func evenAVDimension(v int) int {
