@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -18,7 +20,7 @@ type redisPinger interface {
 }
 
 // runRedisConnectivityGauge reports whether this Foghorn can currently reach
-// its cell's Redis. Startup waits for a Sentinel topology, but a later loss
+// its cell's Redis. Startup waits for any configured topology, but a later loss
 // does not stop the process, so this gauge is what the
 // FoghornRedisDisconnected alert reads.
 func runRedisConnectivityGauge(ctx context.Context, client redisPinger, gauge prometheus.Gauge) {
@@ -42,4 +44,16 @@ func observeRedisConnectivity(ctx context.Context, client redisPinger, gauge pro
 		return
 	}
 	gauge.Set(1)
+}
+
+func redisHealthCheck(client redisPinger) monitoring.HealthCheck {
+	return func() monitoring.CheckResult {
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), redisConnectivityTimeout)
+		defer cancel()
+		if err := client.Ping(ctx).Err(); err != nil {
+			return monitoring.CheckResult{Status: monitoring.StatusUnhealthy, Message: "Redis is unreachable", Latency: time.Since(started).String()}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusHealthy, Latency: time.Since(started).String()}
+	}
 }

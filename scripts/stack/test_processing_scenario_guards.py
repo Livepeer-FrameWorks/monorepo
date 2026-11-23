@@ -17,6 +17,38 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_producer_swap_preserves_pipes_in_job_json(self):
+        source = (ROOT / "scenarios" / "12-producer-swap.sh").read_text()
+        row_function = re.search(r"^job_row\(\) \{[^\n]*\n.*?^\}", source, re.M | re.S).group(0)
+        first = next(line for line in source.splitlines() if line.startswith('P=$(job_row'))
+        final = source[source.index('ROW=$(job_row'):source.index('check "the job finished')]
+        final = "\n".join(line for line in final.splitlines() if line.startswith(("ROW=", "P=", "ERR=")))
+        error = "PROCESS_TRACKS_CHANGED: old|new producer"
+        for phase, processes in (("initial", [{"process": "Livepeer", "track_select": "video=1|audio=none"}]),
+                                 ("final", [{"process": "AV", "track_select": "video=1|audio=none"}])):
+            with self.subTest(phase=phase):
+                record = {"status": "completed", "retry_count": 1, "processes": processes, "error": error}
+                legacy = "completed|1|" + json.dumps(processes) + "|" + error
+                # psql's default unaligned format uses pipes. The JSON query
+                # keeps the entire row in one field, including selector pipes.
+                pg = 'pg() { case "$2" in *jsonb_build_object*) printf "%s\\n" ' + shlex.quote(json.dumps(record))
+                pg += ' ;; *) printf "%s\\n" ' + shlex.quote(legacy) + ' ;; esac; }\n'
+                script = 'set -uo pipefail\nFOGHORN_A_DB=foghorn STACK_TENANT_ID=fixture VHASH=artifact\n'
+                script += row_function + '\n' + pg + (first if phase == "initial" else final)
+                script += '\nprintf "%s\\n" "$P"\n'
+                if phase == "final":
+                    script += 'printf "%s\\n" "$ERR"\n'
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rows = result.stdout.splitlines()
+                try:
+                    actual = json.loads(rows[0])
+                except (ValueError, IndexError) as exc:
+                    self.fail("producer-swap assertion truncated selector JSON at a pipe: " + result.stdout + str(exc))
+                self.assertEqual(actual, processes, "producer types and selectors must survive the DB row parser")
+                if phase == "final":
+                    self.assertEqual(rows[1], error, "failure details must preserve pipes too")
+
     def test_vod_multipart_upload_sends_each_source_byte_once(self):
         lib = (ROOT / "lib.sh").read_text()
         upload = re.search(r"^upload_vod\(\) \{\n.*?^\}", lib, re.M | re.S).group(0)

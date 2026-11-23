@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	goredis "github.com/redis/go-redis/v9"
@@ -32,5 +34,22 @@ func TestObserveRedisConnectivityTracksPingResult(t *testing.T) {
 	observeRedisConnectivity(context.Background(), fakeRedisPinger{err: errors.New("connection refused")}, gauge)
 	if got := testutil.ToFloat64(gauge); got != 0 {
 		t.Fatalf("gauge after failed ping = %v, want 0", got)
+	}
+}
+
+func TestRedisHealthTracksLossAndRecovery(t *testing.T) {
+	client := &fakeRedisPinger{}
+	checker := monitoring.NewHealthChecker("foghorn", "test")
+	checker.AddCheck("redis", redisHealthCheck(client))
+	if got := checker.CheckHealth().Status; got != monitoring.StatusHealthy {
+		t.Fatalf("connected Redis health=%s", got)
+	}
+	client.err = errors.New("connection refused")
+	if got := checker.CheckHealth().Status; got != monitoring.StatusUnhealthy {
+		t.Fatalf("lost Redis health=%s; required placement dependency must not be healthy", got)
+	}
+	client.err = nil
+	if got := checker.CheckHealth().Status; got != monitoring.StatusHealthy {
+		t.Fatalf("recovered Redis health=%s", got)
 	}
 }

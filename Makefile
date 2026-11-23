@@ -753,7 +753,7 @@ build-bin-cli: cli-embed-assets
 	cd cli && go build $(GO_TAG_FLAGS) $(call component_ldflags,cli,cli) -o ../bin/cli .
 
 # This driver exists only in the stack test binary; it cannot ship in Purser.
-.PHONY: build-stack-billing-runner build-stack-walletsign verify-stack-fixtures
+.PHONY: build-stack-billing-runner build-stack-walletsign verify-stack-fixtures test-stack-lib test-stack-processing-scenarios
 build-stack-walletsign:
 	cd scripts/stack/walletsign && go build -buildvcs=false -o ../../../bin/stack-walletsign .
 
@@ -772,11 +772,11 @@ verify-stack-fixtures: test-stack-bootstrap-results
 	python3 scripts/stack/test_replica_pin.py
 	python3 scripts/stack/test_node_audience.py
 	python3 scripts/stack/test_edge_group_lifecycle.py
-	python3 scripts/stack/test_processing_scenario_guards.py
+	$(MAKE) --no-print-directory test-stack-processing-scenarios
 	python3 scripts/stack/test_rotate_live_mkv.py
 	python3 scripts/stack/test_native_source.py
 	bash scripts/stack/test_storage_pressure_fixture.sh
-	bash scripts/stack/test_lib.sh
+	$(MAKE) --no-print-directory test-stack-lib
 	bash scripts/stack/test_managed_access_cleanup.sh
 	bash scripts/stack/test_logcheck.sh
 	bash scripts/stack/test_sweep.sh
@@ -787,6 +787,12 @@ verify-stack-fixtures: test-stack-bootstrap-results
 	bash scripts/stack/test_mcp_smoke.sh
 	bash scripts/stack/test_test_tenant.sh
 	$(MAKE) --no-print-directory test-stack-media-runtime
+
+test-stack-lib:
+	bash scripts/stack/test_lib.sh
+
+test-stack-processing-scenarios:
+	python3 scripts/stack/test_processing_scenario_guards.py
 
 .PHONY: test-stack-media-runtime
 test-stack-media-runtime:

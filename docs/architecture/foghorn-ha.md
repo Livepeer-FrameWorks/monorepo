@@ -2,7 +2,7 @@
 
 Foghorn can run as multiple instances per cluster with Redis as the shared state backend. Local stream/node/artifact state mutations write through to Redis, and each instance maintains an in-memory cache synced via an ordered, replayable **changelog** (a Redis Stream per cache) for sub-millisecond local routing reads. Federation, relay ownership, startup rehydration, and peer-address lookup also use Redis directly.
 
-Single-Foghorn cells have no Redis at all: the in-memory layer is the only layer, and all sync machinery stays behind `if redisStore != nil`.
+Legacy in-memory state helpers remain available without Redis, but signed-policy placement and federation require the cell's Redis. Configured Redis is never optional at startup: URL, single-node, Sentinel and Cluster topologies connect within the same bounded startup attempts or the process exits before accepting traffic. A transient first ping cannot leave the process serving without placement handlers. The Redis health check fails while the dependency is unreachable and recovers using the same client and installed handlers.
 
 ## Architecture
 

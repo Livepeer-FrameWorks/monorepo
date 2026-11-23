@@ -65,7 +65,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -379,30 +378,9 @@ func main() {
 		}
 	}
 
-	var redisClient goredis.UniversalClient
-	if foghornCfg.Redis.Mode == pkgredis.ModeSentinel {
-		// A Sentinel topology makes this Foghorn an HA replica: shared state,
-		// relay grants, and the command relay depend on Redis, so startup waits
-		// for the topology and exits if it never becomes reachable.
-		client, connectErr := connectRequiredRedis(context.Background(), foghornCfg.Redis, pkgredis.NewUniversalClient, sentinelConnectAttempts, sentinelConnectMaxBackoff, logger)
-		if connectErr != nil {
-			logger.WithError(connectErr).Fatal("Redis Sentinel is configured but unreachable")
-		}
-		redisClient = client
-	} else if foghornCfg.Redis.Mode != "" {
-		var err error
-		redisClient, err = pkgredis.NewUniversalClient(context.Background(), foghornCfg.Redis)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to initialize redis (universal mode)")
-			redisClient = nil
-		}
-	} else if foghornCfg.RedisURL != "" {
-		client, err := pkgredis.NewClientFromURL(context.Background(), foghornCfg.RedisURL)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to initialize redis state store")
-		} else {
-			redisClient = client
-		}
+	redisClient, redisErr := connectConfiguredRedis(context.Background(), foghornCfg.Redis, foghornCfg.RedisURL, pkgredis.NewUniversalClient, pkgredis.NewClientFromURL, redisConnectAttempts, redisConnectMaxBackoff, logger)
+	if redisErr != nil {
+		logger.WithError(redisErr).Fatal("Configured Redis is unreachable")
 	}
 	var redisStore *state.RedisStateStore
 	if redisClient != nil {
@@ -442,6 +420,9 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+	if redisClient != nil {
+		healthChecker.AddCheck("redis", redisHealthCheck(redisClient))
+	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"DATABASE_URL": dbURL,
 	}))
