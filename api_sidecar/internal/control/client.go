@@ -65,7 +65,8 @@ const foghornInternalServerName = "foghorn.internal"
 //   - Version 11 = isolates publisher and relay executions, confirms exact runtime drains,
 //     and persists recording source transitions with writer-bound progress and stop reports.
 //   - Version 12 = durably rejects delayed admissions for explicitly stopped generations.
-const controlProtocolVersion int32 = 12
+//   - Version 13 = echoes the tenant supplied with every processing job result.
+const controlProtocolVersion int32 = 13
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)

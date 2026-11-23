@@ -10,6 +10,8 @@ import (
 
 const processingInventoryGrace = time.Minute
 
+var processingNodeProtocolOK = control.NodeProcessingProtocolOK
+
 type processingClusterInventory struct {
 	ids     []string
 	budgets map[string]uint64
@@ -28,12 +30,23 @@ func (i processingClusterInventory) budget(id string, sm *state.StreamStateManag
 }
 
 type processingTickInventory struct {
-	warm     bool
-	clusters map[string]processingClusterInventory
+	warm      bool
+	clusters  map[string]processingClusterInventory
+	protocols map[string]bool
 }
 
 func newProcessingTickInventory(warm bool) *processingTickInventory {
-	return &processingTickInventory{warm: warm, clusters: make(map[string]processingClusterInventory)}
+	return &processingTickInventory{warm: warm, clusters: make(map[string]processingClusterInventory), protocols: make(map[string]bool)}
+}
+
+func (t *processingTickInventory) protocolCompatible(ctx context.Context, nodeID string) bool {
+	if supported, present := t.protocols[nodeID]; present {
+		return supported
+	}
+	supported, known := processingNodeProtocolOK(ctx, nodeID)
+	compatible := !known || supported
+	t.protocols[nodeID] = compatible
+	return compatible
 }
 
 func (t *processingTickInventory) cluster(ctx context.Context, id string) processingClusterInventory {

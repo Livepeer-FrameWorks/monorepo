@@ -26,6 +26,8 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ProcessingDispatcherConfig struct {
@@ -382,7 +384,7 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 		var source map[string]string
 		if json.Unmarshal([]byte(job.SourceParams.String), &source) == nil && (source["source_kind"] == "live" || source["source_kind"] == "dvr_rolling") {
 			alive := false
-			for _, id := range state.DefaultManager().AliveNodeIDs(time.Minute) {
+			for _, id := range state.DefaultManager().ConnectedNodeIDs(time.Minute) {
 				alive = alive || id == job.PreferredNode.String
 			}
 			if !alive {
@@ -597,8 +599,12 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 			"job_id":  job.JobID,
 			"node_id": nodeID,
 		}).Warn("Failed to dispatch processing job")
-		d.revertToQueued(ctx, job.JobID)
-		d.markArtifactQueued(ctx, job, "dispatch failed")
+		if status.Code(err) == codes.FailedPrecondition {
+			d.deferUnroutable(ctx, job.JobID, job.TenantID, mist.ProcessingWaitFittingNodeUnavailable)
+		} else {
+			d.revertToQueued(ctx, job.JobID)
+			d.markArtifactQueued(ctx, job, "dispatch failed")
+		}
 		return
 	}
 
@@ -878,7 +884,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 			d.logger.WithError(listErr).Warn("Failed to inspect pinned processing sources")
 		} else {
 			alive := make(map[string]bool)
-			for _, id := range state.DefaultManager().AliveNodeIDs(time.Minute) {
+			for _, id := range state.DefaultManager().ConnectedNodeIDs(time.Minute) {
 				alive[id] = true
 			}
 			for _, job := range pinned {

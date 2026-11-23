@@ -18,7 +18,7 @@ func TestDVRDispatchReservesBothLinkDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream := &fakeControlStream{}
-	registry.conns["storage"] = &conn{stream: stream}
+	registry.conns["storage"] = &conn{stream: stream, protocolVersion: ProcessingTenantEchoProtocolMin}
 	if err := SendDVRStart("storage", &ipcpb.DVRStartRequest{DvrHash: "recording", InternalName: "stream", SourceRuntimeName: "live+stream"}); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestProcessingDispatchReservesSourceAndWorker(t *testing.T) {
 		sm.SetNodeInfo(node, "https://edge.test", true, nil, nil, "", "", nil)
 	}
 	stream := &fakeControlStream{}
-	registry.conns["worker"] = &conn{stream: stream}
+	registry.conns["worker"] = &conn{stream: stream, protocolVersion: ProcessingTenantEchoProtocolMin}
 	req := &ipcpb.ProcessingJobRequest{JobId: "job", InternalName: "clip", Params: map[string]string{"source_node_id": "source", "source_stream_name": "live+stream"}}
 	if err := SendProcessingJob("worker", req); err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestReviewSameNodeRecordingDoesNotReserveNICBandwidth(t *testing.T) {
 	}
 	sm.SetNodeCapacity("same-node", &ipcpb.NodeBandwidthCapacity{EgressBudgetBytesPerSec: 1, IngressBudgetBytesPerSec: 1})
 	stream := &fakeControlStream{}
-	registry.conns["same-node"] = &conn{stream: stream}
+	registry.conns["same-node"] = &conn{stream: stream, protocolVersion: ProcessingTenantEchoProtocolMin}
 	err := SendDVRStart("same-node", &ipcpb.DVRStartRequest{DvrHash: "local-recording", InternalName: "local", SourceRuntimeName: "live+local"})
 	if err != nil {
 		t.Fatalf("local recording refused despite requiring no NIC traffic: %v", err)
@@ -115,7 +115,7 @@ func TestProcessingSendFailureReleasesPendingBandwidth(t *testing.T) {
 			wantErr := ErrNotConnected
 			if connected {
 				wantErr = errors.New("processing stream write failed")
-				registry.conns["worker"] = &conn{stream: &fakeControlStream{err: wantErr}}
+				registry.conns["worker"] = &conn{stream: &fakeControlStream{err: wantErr}, protocolVersion: ProcessingTenantEchoProtocolMin}
 			}
 			req := &ipcpb.ProcessingJobRequest{JobId: "failed-send", InternalName: "clip", Params: map[string]string{"source_node_id": "source", "source_stream_name": "live+stream"}}
 			if err := SendProcessingJob("worker", req); !errors.Is(err, wantErr) {
@@ -140,7 +140,7 @@ func TestFailedProcessingRetryPreservesActiveBandwidth(t *testing.T) {
 		sm.SetNodeInfo(node, "https://edge.test", true, nil, nil, "", "", nil)
 	}
 	stream := &fakeControlStream{}
-	registry.conns["worker"] = &conn{stream: stream}
+	registry.conns["worker"] = &conn{stream: stream, protocolVersion: ProcessingTenantEchoProtocolMin}
 	req := &ipcpb.ProcessingJobRequest{JobId: "active-job", InternalName: "clip", Params: map[string]string{"source_node_id": "source", "source_stream_name": "live+stream"}}
 	if err := SendProcessingJob("worker", req); err != nil {
 		t.Fatal(err)

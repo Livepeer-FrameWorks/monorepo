@@ -100,6 +100,9 @@ func routeProcessingJobWithInventory(ctx context.Context, job *processingJob, ti
 		if inventory.err == nil && !registered[n.NodeID] {
 			return false
 		}
+		if !tick.protocolCompatible(ctx, n.NodeID) {
+			return false
+		}
 		return n.IsHealthy && nodeAcceptsProcessing(n, preferred) && fits(n)
 	}
 	alive := sm.AliveNodeIDs(60 * time.Second)

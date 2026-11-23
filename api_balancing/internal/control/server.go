@@ -5098,6 +5098,9 @@ func RedriveNodeDeletions(nodeID string) {
 // processor sees is from an authoritative session.
 const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 
+// ProcessingTenantEchoProtocolMin gates jobs whose results must echo the request tenant.
+const ProcessingTenantEchoProtocolMin int32 = 13
+
 // ControlFeatures is the SINGLE place a sidecar session's protocol-gated capabilities are decided. It is derived
 // once from the negotiated control-protocol version (Register.control_protocol_version) and consumed by placement
 // and handlers, so protocol behavior lives in one contract instead of scattered `if version < X` checks. Registration
@@ -5106,6 +5109,7 @@ const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 // A false capability never means "drop the node": a dispatched operation the session cannot do FAILS CLOSED and the
 // work stays local/retryable until the sidecar is upgraded.
 type ControlFeatures struct {
+	ProcessingTenantEcho     bool
 	IsolatedPublisherRuntime bool
 	ClaimedPublisherStop     bool
 	ConfirmedSessionStop     bool // effect acknowledgement scoped to an exact node connection
@@ -5120,6 +5124,7 @@ type ControlFeatures struct {
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
 func ControlFeaturesForProtocol(v int32) ControlFeatures {
 	return ControlFeatures{
+		ProcessingTenantEcho:     v >= ProcessingTenantEchoProtocolMin,
 		IsolatedPublisherRuntime: v >= IsolatedPublisherRuntimeProtocolMin, ConfirmedSessionStop: v >= StopSessionsAckProtocolMin, ClaimedPublisherStop: v >= ClaimedPublisherStopProtocolMin,
 		StagedFreeze:           v >= FreezeStagedProtocolMin,
 		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
@@ -9442,6 +9447,9 @@ func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) erro
 	defer c.sendGate.Unlock()
 	if c.superseded.Load() || !connIsCurrentlyRegistered(nodeID, c) {
 		return ErrConnSuperseded
+	}
+	if !c.features().ProcessingTenantEcho {
+		return status.Error(codes.FailedPrecondition, "edge sidecar upgrade required for processing result tenant binding")
 	}
 	msg := &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobRequest{ProcessingJobRequest: req},
