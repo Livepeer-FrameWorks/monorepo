@@ -10,7 +10,8 @@ import (
 // TrackInfo is one video track of a stream as the rendition retention rule
 // reads it. Codec is Mist's codec name, Bps is Mist's track bps (bytes per
 // second), Original is true for a track no process produced and Image is true
-// for still-image tracks.
+// for still-image tracks. Only an upright, unreflected original can retain a rung;
+// transformed originals remain eligible as decode sources.
 type TrackInfo struct {
 	Index         int
 	Codec         string
@@ -18,6 +19,8 @@ type TrackInfo struct {
 	Bps           uint64
 	Original      bool
 	Image         bool
+	Rotation      int  `json:"rotation"`
+	Mirror        bool `json:"mirror"`
 }
 
 // RetainRung is one ladder rung: its short side in pixels and its target
@@ -144,7 +147,7 @@ func retainedTrack(selector string, bitrate int64, tracks []TrackInfo) (TrackInf
 	found := false
 	var bestDist uint64
 	for _, track := range selected {
-		if !track.Original || track.Image {
+		if !track.Original || track.Image || track.Rotation%360 != 0 || track.Mirror {
 			continue
 		}
 		dist := absDiff(track.Bps*8, uint64(max(bitrate, 0)))

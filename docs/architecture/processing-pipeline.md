@@ -110,6 +110,12 @@ the last-good record for the next pass.
 
 ### Rendition completeness
 
+An original can satisfy a ladder rung only when its pixels are upright and unreflected.
+A rotated or mirrored original remains eligible as the decode source, but its rung must be
+rendered. Helmsman carries both orientation fields through readiness, memory planning and
+recording selection. Cached readiness without either field is not used to reduce the memory
+reservation; the source must be inspected again.
+
 `mist.ExpectedVideoRenditions` models both local MistProcAV and Livepeer/LPMS output sizes.
 Height-only ladder profiles name the short side for portrait video. Named ladders use
 `video=<0xN` inhibitors to compare the source short side with rung N, including square and
