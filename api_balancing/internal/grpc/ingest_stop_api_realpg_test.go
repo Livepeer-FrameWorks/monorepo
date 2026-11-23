@@ -67,4 +67,42 @@ func testClaimedIngestStopEventIsDurableOnce(t *testing.T, conn *sql.DB) {
 	if err := proto.Unmarshal(payload, &event); err != nil || event.GetSessionId() != generation || event.GetStreamId() != stream || event.GetReason() != "requested" {
 		t.Fatalf("disconnect event lost exact identity: %v %v", &event, err)
 	}
+
+	t.Run("edge close report wins the stop acknowledgement race", func(t *testing.T) {
+		generation, claim := uuid.NewString(), uuid.NewString()
+		if _, err := conn.ExecContext(ctx, `INSERT INTO foghorn.ingest_sessions(id,tenant_id,node_id,stream_internal_name,connector_pid,start_trigger_uuid,started_at_unix_millis,stream_id,ended_at,ended_reason,ingest_disconnect_requested_at) VALUES($1::uuid,$2::uuid,'old-node',$3,124,$4,(EXTRACT(EPOCH FROM NOW())*1000)::bigint,$5::uuid,NOW(),'push_input_close',NOW()-INTERVAL '1 second')`, generation, tenant, name, claim, stream); err != nil {
+			t.Fatal(err)
+		}
+		request := &pb.TerminateStreamSessionsRequest{TenantId: tenant, StreamId: stream, StreamNames: []string{name}, ClaimFences: map[string]string{name: claim}, Reason: "key_rotated"}
+		for range 2 {
+			if _, err := server.TerminateClaimedStreamSessions(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var payload []byte
+		rows, err := conn.QueryContext(ctx, `SELECT payload FROM foghorn.domain_event_outbox WHERE tenant_id=$1::uuid AND event_type='stream.ingest_disconnected'`, tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		matches := 0
+		for rows.Next() {
+			if err := rows.Scan(&payload); err != nil {
+				t.Fatal(err)
+			}
+			var event publicv1.StreamIngestDisconnected
+			if err := proto.Unmarshal(payload, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.GetSessionId() == generation && event.GetStreamId() == stream && event.GetReason() == "key_rotated" {
+				matches++
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if matches != 1 {
+			t.Fatalf("edge close before stop acknowledgement emitted %d exact-session disconnect events, want 1", matches)
+		}
+	})
 }

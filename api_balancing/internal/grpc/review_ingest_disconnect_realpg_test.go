@@ -32,6 +32,15 @@ func TestReviewNaturalEndDoesNotEmitPlatformDisconnect_RealPG(t *testing.T) {
 			if events != 0 {
 				t.Fatalf("natural publisher end emitted %d platform-disconnected events for %s", events, reason)
 			}
+			if _, err := conn.ExecContext(t.Context(), `UPDATE foghorn.ingest_sessions SET ingest_disconnect_requested_at=ended_at+INTERVAL '1 second' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant, generation); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := server.TerminateClaimedStreamSessions(context.WithValue(t.Context(), ctxkeys.KeyAuthType, "service"), request); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.QueryRowContext(t.Context(), `SELECT count(*) FROM foghorn.domain_event_outbox WHERE tenant_id=$1::uuid AND event_type='stream.ingest_disconnected'`, tenant).Scan(&events); err != nil || events != 0 {
+				t.Fatalf("a later stop claimed a naturally ended session: events=%d err=%v", events, err)
+			}
 		})
 	}
 }

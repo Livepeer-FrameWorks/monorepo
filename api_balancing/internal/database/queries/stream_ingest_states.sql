@@ -38,6 +38,16 @@ WHERE target.tenant_id=sqlc.arg(tenant_id)::uuid AND target.id=c.id
   )
 RETURNING target.id::text AS session_id,COALESCE(target.stream_id::text,'')::text AS stream_id;
 
+-- name: MarkBoundPushBufferEnded :one
+UPDATE foghorn.ingest_sessions
+SET buffer_ended_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(generation)::uuid
+  AND node_id=sqlc.arg(node_id) AND stream_internal_name=sqlc.arg(internal_name)
+  AND runtime_name=sqlc.arg(runtime_name) AND runtime_layout_version=1
+  AND ended_at IS NOT NULL AND buffer_ended_at IS NULL
+  AND playable_at_unix_millis<sqlc.arg(event_millis)::bigint
+RETURNING id::text AS session_id,COALESCE(stream_id::text,'')::text AS stream_id;
+
 -- name: MarkPullBufferEnded :one
 WITH candidate AS (
   SELECT s.id,s.cell_session_id,s.started_at FROM foghorn.pull_ingest_sessions s

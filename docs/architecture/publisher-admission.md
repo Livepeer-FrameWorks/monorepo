@@ -167,7 +167,9 @@ older binary over an active isolated execution.
 ### Recording continuation
 
 A short reconnect on the same source node retains its recording through an
-explicit source handoff. Under the artifact lock, Foghorn persists the new
+explicit source handoff. Each connector still gets a distinct ingest session and
+physical generation; continuing a recording does not reuse its predecessor's
+admission or public session ID. Under the artifact lock, Foghorn persists the new
 ingest generation and a `source_handoff_pending` descriptor containing both
 runtime names before dispatching. Progress and terminal reports are checked
 against that writer binding under the same row lock. Old reports cannot

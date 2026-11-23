@@ -80,6 +80,45 @@ func (q *Queries) GetStreamIngestStates(ctx context.Context, arg GetStreamIngest
 	return items, nil
 }
 
+const markBoundPushBufferEnded = `-- name: MarkBoundPushBufferEnded :one
+UPDATE foghorn.ingest_sessions
+SET buffer_ended_at=NOW()
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+  AND node_id=$3 AND stream_internal_name=$4
+  AND runtime_name=$5 AND runtime_layout_version=1
+  AND ended_at IS NOT NULL AND buffer_ended_at IS NULL
+  AND playable_at_unix_millis<$6::bigint
+RETURNING id::text AS session_id,COALESCE(stream_id::text,'')::text AS stream_id
+`
+
+type MarkBoundPushBufferEndedParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	Generation   string `db:"generation" json:"generation"`
+	NodeID       string `db:"node_id" json:"node_id"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+	RuntimeName  string `db:"runtime_name" json:"runtime_name"`
+	EventMillis  int64  `db:"event_millis" json:"event_millis"`
+}
+
+type MarkBoundPushBufferEndedRow struct {
+	SessionID string `db:"session_id" json:"session_id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) MarkBoundPushBufferEnded(ctx context.Context, arg MarkBoundPushBufferEndedParams) (MarkBoundPushBufferEndedRow, error) {
+	row := q.db.QueryRowContext(ctx, markBoundPushBufferEnded,
+		arg.TenantID,
+		arg.Generation,
+		arg.NodeID,
+		arg.InternalName,
+		arg.RuntimeName,
+		arg.EventMillis,
+	)
+	var i MarkBoundPushBufferEndedRow
+	err := row.Scan(&i.SessionID, &i.StreamID)
+	return i, err
+}
+
 const markPullBufferEnded = `-- name: MarkPullBufferEnded :one
 WITH candidate AS (
   SELECT s.id,s.cell_session_id,s.started_at FROM foghorn.pull_ingest_sessions s

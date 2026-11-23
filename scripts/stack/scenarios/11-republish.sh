@@ -48,9 +48,10 @@ eventually 30 'the public ingest state exposes the first live session' ingest_li
 FIRST_SESSION=$(ingest | jq -r '.data.stream.ingest.sessionId // empty')
 wait_publisher "$PUB" 100 || fail "first publisher still running after 100 s"
 
-# Inside Mist's resume window the buffer is still loaded: the publisher resumes
-# its tracks and the recording it left continues. Resumed media continues the
-# recording's timeline without the wall-clock gap, so progress is counted in
+# Inside the recording resume window a new connector gets its own fenced
+# ingest session, while its recording continues through the source handoff.
+# Resumed media continues the recording's timeline without the wall-clock gap,
+# so progress is counted in
 # segments: the segment open at the stop closes, and at least one more follows.
 log "republish 5 s after the stop, inside the resume window"
 sleep 5
@@ -58,8 +59,9 @@ SEGMENTS_AT_STOP=$(segments_of "$FIRST")
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
 continues() { [ "$(segments_of "$FIRST")" -ge $((SEGMENTS_AT_STOP + 2)) ]; }
 eventually 30 "the resumed publish continues the same recording within 30 s" continues
-same_ingest() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"LIVE\" and .data.stream.ingest.sessionId==\"$FIRST_SESSION\""; }
-eventually 15 'the resumed publisher keeps its public session ID' same_ingest
+resumed_ingest() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"LIVE\" and .data.stream.ingest.sessionId!=null and .data.stream.ingest.liveSince!=null and .data.stream.ingest.sessionId!=\"$FIRST_SESSION\""; }
+eventually 15 'the resumed connector has its own fenced ingest session' resumed_ingest
+RESUMED_SESSION=$(ingest | jq -r '.data.stream.ingest.sessionId // empty')
 one_recording() { [ "$(dvr_hashes | wc -l | tr -d ' ')" = 1 ]; }
 check "the resumed publish does not start a second recording" one_recording
 wait_publisher "$PUB" 100 || fail "resumed publisher still running after 100 s"
@@ -68,14 +70,15 @@ wait_publisher "$PUB" 100 || fail "resumed publisher still running after 100 s"
 # (a segment within 30 s) and announce recording.started.
 log "republish 30 s after the stop, after the buffer unloaded"
 sleep 30
-ingest_idle() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"IDLE\" and .data.stream.ingest.sessionId==\"$FIRST_SESSION\" and .data.stream.ingest.endedAt!=null and .data.stream.ingest.resumableUntil!=null"; }
+ingest_idle() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"IDLE\" and .data.stream.ingest.sessionId==\"$RESUMED_SESSION\" and .data.stream.ingest.endedAt!=null and .data.stream.ingest.resumableUntil!=null"; }
 eventually 15 'the ended publisher exposes its final session timestamps' ingest_idle
-eventually 60 'stream.ended identifies the unloaded session' saw_event "$SINCE" stream.ended ".streamId==\"$UUID\" and .sessionId==\"$FIRST_SESSION\""
+eventually 60 'stream.ended identifies the first unloaded session' saw_event "$SINCE" stream.ended ".streamId==\"$UUID\" and .sessionId==\"$FIRST_SESSION\""
+eventually 60 'stream.ended identifies the resumed unloaded session' saw_event "$SINCE" stream.ended ".streamId==\"$UUID\" and .sessionId==\"$RESUMED_SESSION\""
 REPUB_AT=$(date +%s)
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 60)
 new_dvr() { SECOND=$(dvr_hashes | tail -1); [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ]; }
 eventually 30 "the republish starts a new recording" new_dvr
-new_ingest() { ingest_live && json_has "$(ingest)" ".data.stream.ingest.sessionId!=\"$FIRST_SESSION\""; }
+new_ingest() { json_has "$(ingest)" ".errors==null and .data.stream.ingest.state==\"LIVE\" and .data.stream.ingest.liveSince!=null and .data.stream.ingest.sessionId!=null and .data.stream.ingest.sessionId!=\"$FIRST_SESSION\" and .data.stream.ingest.sessionId!=\"$RESUMED_SESSION\""; }
 eventually 15 'a new broadcast has a new public ingest session' new_ingest
 # Only a recording distinct from the first session counts: without a new DVR,
 # SECOND still names the first recording and its segments would pass this.

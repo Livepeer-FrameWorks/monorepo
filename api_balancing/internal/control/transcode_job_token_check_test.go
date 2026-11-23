@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Every token rejection names the check that failed, so an invalid_token at the
@@ -94,6 +97,24 @@ func TestProcessingFailureReasonClassifiesHelmsmanErrors(t *testing.T) {
 		if got := ProcessingFailureReason(errMsg).String(); got != want {
 			t.Errorf("ProcessingFailureReason(%q) = %s, want %s", errMsg, got, want)
 		}
+	}
+}
+
+func TestProcessingResultFailureReasonPreservesTerminalCause(t *testing.T) {
+	for _, tc := range []struct {
+		name, cause, diagnostic, want string
+	}{
+		{"wrapped source", mist.ProcessingFailureCauseSourceUnavailable, "processing memory admission: source unavailable: 404 Not Found", "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE"},
+		{"legacy source", "", "source unavailable: 404 Not Found", "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE"},
+		{"unknown cause", "future_cause", "processing stalled at 12%", "MEDIA_FAILURE_REASON_TIMED_OUT"},
+		{"unknown cause cannot imply missing source", "future_cause", "encoder crashed", "MEDIA_FAILURE_REASON_PROCESSING_FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &ipcpb.ProcessingJobResult{Error: tc.diagnostic, Outputs: map[string]string{mist.ProcessingResultFailureCause: tc.cause}}
+			if got := processingResultFailureReason(result).String(); got != tc.want {
+				t.Fatalf("failure reason = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

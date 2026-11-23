@@ -1807,12 +1807,12 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 			return nil, 0, err
 		}
 		if failure, ok := takeProcessingSourceFailure(streamName); ok {
-			return nil, 0, errors.New(failure)
+			return nil, 0, &processingSourceUnavailableError{message: failure}
 		}
 		// The relay's shared size probe heard the source refuse after Mist's
 		// reads had given up, so no STREAM_SOURCE probe saw the answer.
 		if status, ok := relay.TakeProcessingInputUnavailable(req.GetArtifactHash()); ok {
-			return nil, 0, fmt.Errorf("source unavailable: %s", status)
+			return nil, 0, &processingSourceUnavailableError{message: fmt.Sprintf("source unavailable: %s", status)}
 		}
 		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
 			evtFields := processExitFields(evt)

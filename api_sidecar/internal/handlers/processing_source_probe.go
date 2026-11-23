@@ -144,6 +144,10 @@ func failProcessingSourceIfUnavailable(ctx context.Context, streamName, sourceUR
 	return true
 }
 
+type processingSourceUnavailableError struct{ message string }
+
+func (e *processingSourceUnavailableError) Error() string { return e.message }
+
 // processingSourceStallError is a processing stream that did not boot while
 // the relay could not read its source from upstream storage. Another attempt
 // can succeed once storage answers again.
@@ -173,9 +177,13 @@ func processingReadinessFailureStatus(err error) string {
 	return "failed"
 }
 
-// processingReadinessFailureOutputs names a source stall as the retry cause, so
-// Foghorn retries it within its stall window instead of its retry budget.
+// processingReadinessFailureOutputs preserves terminal and retry causes
+// independently of the diagnostic message and any admission error wrapping.
 func processingReadinessFailureOutputs(err error) map[string]string {
+	var unavailable *processingSourceUnavailableError
+	if errors.As(err, &unavailable) {
+		return map[string]string{mist.ProcessingResultFailureCause: mist.ProcessingFailureCauseSourceUnavailable}
+	}
 	if outputs := processingOOMOutputs(err); outputs != nil {
 		return outputs
 	}

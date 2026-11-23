@@ -8948,7 +8948,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 
 	case "failed":
-		return failProcessingJobOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
+		return failProcessingJobWithReasonOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), processingResultFailureReason(result), logger, fields)
 
 	case "retryable":
 
@@ -9128,6 +9128,13 @@ func ProcessingFailureReason(errMsg string) publicv1.MediaFailureReason {
 	return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED
 }
 
+func processingResultFailureReason(result *ipcpb.ProcessingJobResult) publicv1.MediaFailureReason {
+	if result.GetOutputs()[mist.ProcessingResultFailureCause] == mist.ProcessingFailureCauseSourceUnavailable {
+		return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE
+	}
+	return ProcessingFailureReason(result.GetError())
+}
+
 func logProcessingFailureIgnored(logger logging.Logger, fields logging.Fields, reason, errMsg, reportingNode, assignedNode, jobStatus string) {
 	incProcessingResultIgnored("failed", reason)
 	logger.WithFields(fields).WithFields(logging.Fields{
@@ -9157,6 +9164,10 @@ func FailUnplaceableProcessingJob(ctx context.Context, conn *sql.DB, jobID, tena
 }
 
 func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, reportingNode, expectedTenant string, logger logging.Logger, fields logging.Fields) error {
+	return failProcessingJobWithReasonOnDB(ctx, conn, jobID, errMsg, reportingNode, expectedTenant, ProcessingFailureReason(errMsg), logger, fields)
+}
+
+func failProcessingJobWithReasonOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, reportingNode, expectedTenant string, failureReason publicv1.MediaFailureReason, logger logging.Logger, fields logging.Fields) error {
 	if strings.TrimSpace(expectedTenant) == "" {
 		return fmt.Errorf("processing failure requires tenant_id")
 	}
@@ -9237,7 +9248,7 @@ func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, rep
 				}
 				failed := &publicv1.ClipFailed{
 					Artifact: artifactoutbox.ClipArtifact(artHash, streamID),
-					Reason:   ProcessingFailureReason(errMsg),
+					Reason:   failureReason,
 				}
 				if err := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); err != nil {
 					return fmt.Errorf("enqueue clip failure lifecycle for %s: %w", artHash, err)
@@ -9253,7 +9264,7 @@ func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, rep
 				}
 				failed := &publicv1.UploadFailed{
 					Artifact: artifactoutbox.UploadArtifact(artHash),
-					Reason:   ProcessingFailureReason(errMsg),
+					Reason:   failureReason,
 				}
 				if err := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); err != nil {
 					return fmt.Errorf("enqueue vod failure lifecycle for %s: %w", artHash, err)

@@ -618,6 +618,11 @@ Foghorn's `processProcessingJobResult` (`api_balancing/internal/control/server.g
   failed state atomically (`failProcessingJobAtomic`): the job and — for clip/VOD — the artifact
   flip to failed and the failure lifecycle enqueues in one committed transaction, so a failed job
   is never left with an artifact still "processing".
+- A definitively missing processing source carries `failure_cause=source_unavailable`
+  in the terminal result outputs. Helmsman preserves that typed cause through local
+  admission error wrapping; Foghorn uses it for the public failure reason independently
+  of the diagnostic message. Older edges without this metadata retain the legacy
+  error classification. Unknown causes also use that fallback and never imply a retry.
 
 `handleChapterFinalizeResult` (`api_balancing/internal/control/dvr_chapter_finalize_hook.go`) does
 the equivalent for the chapter VOD as one transaction (`finalizeChapterArtifactTx`): it locks the

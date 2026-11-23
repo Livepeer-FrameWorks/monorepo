@@ -10,7 +10,7 @@ ORDER BY started_at DESC,id LIMIT 1001;
 UPDATE foghorn.ingest_sessions SET ingest_disconnected_at=NOW()
 WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(session_id)::uuid
  AND ingest_disconnected_at IS NULL AND ended_at IS NOT NULL
- AND ended_reason='admission_abandoned' AND ingest_disconnect_requested_at IS NOT NULL;
+ AND ingest_disconnect_requested_at IS NOT NULL AND ingest_disconnect_requested_at <= ended_at;
 
 -- name: MarkIngestDisconnectRequested :execrows
 UPDATE foghorn.ingest_sessions SET ingest_disconnect_requested_at=COALESCE(ingest_disconnect_requested_at,NOW())

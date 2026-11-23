@@ -73,8 +73,9 @@ func (s *FoghornGRPCServer) TerminateClaimedStreamSessions(ctx context.Context, 
 				completed[index] = true
 				return
 			}
-			// A natural end settles the stop request without claiming platform causation.
-			if row.EndedAt.Valid && (!row.IngestDisconnectRequestedAt.Valid || row.EndedReason != control.IngestEndedAdmissionAbandoned) {
+			// The edge's close report can win the stop acknowledgement race.
+			// Only a stop requested before the recorded end owns its disconnect event.
+			if row.EndedAt.Valid && (!row.IngestDisconnectRequestedAt.Valid || row.EndedAt.Time.Before(row.IngestDisconnectRequestedAt.Time)) {
 				return
 			}
 			if !row.EndedAt.Valid {

@@ -88,6 +88,42 @@ func TestProcessingFailureReachesFailed_RealPG(t *testing.T) {
 	if failed.GetReason() != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE {
 		t.Fatalf("upload.failed reason = %s, want SOURCE_UNAVAILABLE", failed.GetReason())
 	}
+
+	t.Run("wrapped source failure preserves its cause", func(t *testing.T) {
+		const job = "7a1e0000-0000-4000-8000-0000000000f3"
+		const hash = "importfailhash000000000000000002"
+		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status)
+			VALUES ($1, 'vod', $2::uuid, 'processing')`, hash, processingFailureTenant); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, processing_node_id)
+			VALUES ($1::uuid, $2::uuid, $3, 'transcode', 'processing', 'edge-1')`, job, processingFailureTenant, hash); err != nil {
+			t.Fatal(err)
+		}
+		result := &ipcpb.ProcessingJobResult{JobId: job, Status: "failed",
+			Error:   "processing memory admission: source unavailable: 404 Not Found",
+			Outputs: map[string]string{mist.ProcessingResultTenantID: processingFailureTenant, "failure_cause": "source_unavailable"}}
+		if err := processProcessingJobResult(result, "edge-1", logger); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range domainRows(t, conn, "upload.failed") {
+			_, message, err := events.Decode("upload.failed", row.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure, ok := message.(*publicv1.UploadFailed)
+			if !ok {
+				t.Fatalf("upload.failed decoded as %T", message)
+			}
+			if failure.GetArtifact().GetArtifactId() == hash {
+				if failure.GetReason() != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE {
+					t.Fatalf("wrapped source failure became %s, want SOURCE_UNAVAILABLE", failure.GetReason())
+				}
+				return
+			}
+		}
+		t.Fatal("wrapped source failure emitted no upload.failed event")
+	})
 }
 
 // A job retried after a failed attempt and then completed reports no error: the

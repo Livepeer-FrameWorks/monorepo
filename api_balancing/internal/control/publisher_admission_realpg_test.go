@@ -234,6 +234,9 @@ func testPublisherAdmissionOperations(t *testing.T, conn *sql.DB, dsn string) {
 		if applied, _, err := repository.Project(ctx, registry, req, old, AdmissionEffectIntent{}); err != nil || !applied {
 			t.Fatalf("project old runtime: %v %v", applied, err)
 		}
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET playable_at=started_at,playable_at_unix_millis=started_at_unix_millis WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, old.Generation); err != nil {
+			t.Fatal(err)
+		}
 		if ended, err := RetireIngestSession(ctx, old.Generation, req.TenantID, req.InternalName, ingestEndedPlacementClaimLost, logger); err != nil || !ended {
 			t.Fatalf("retire: %v %v", ended, err)
 		}
@@ -252,6 +255,17 @@ func testPublisherAdmissionOperations(t *testing.T, conn *sql.DB, dsn string) {
 		}
 		if _, err := EndBoundPublisherRuntime(ctx, req.TenantID, req.NodeID, old.RuntimeName, time.Now().UnixMilli(), logger); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := EndBoundPublisherRuntime(ctx, req.TenantID, req.NodeID, old.RuntimeName, time.Now().UnixMilli(), logger); err != nil {
+			t.Fatal(err)
+		}
+		var unloadMarked bool
+		if err := conn.QueryRowContext(ctx, `SELECT buffer_ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, old.Generation).Scan(&unloadMarked); err != nil || !unloadMarked {
+			t.Fatalf("isolated buffer unload lost its terminal marker after publisher close: marked=%v err=%v", unloadMarked, err)
+		}
+		var endedEvents int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM foghorn.domain_event_outbox WHERE tenant_id=$1::uuid AND aggregate_id=$2 AND event_type='stream.ended'`, req.TenantID, req.StreamID).Scan(&endedEvents); err != nil || endedEvents != 1 {
+			t.Fatalf("isolated buffer unload must emit one historical session event: count=%d err=%v", endedEvents, err)
 		}
 		var ended bool
 		if err := conn.QueryRowContext(ctx, `SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, next.Generation).Scan(&ended); err != nil || ended {
