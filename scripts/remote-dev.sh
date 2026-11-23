@@ -15,8 +15,9 @@ Environment:
   REMOTE_DEV_MIN_FREE_GB Free disk budget per occupied heavy-job slot (default: 48)
 
 Storage maintenance:
-  storage <slot> [--apply] [--wait-seconds N] [--keep-workspace NAME]
+  storage <slot> [--usage | --apply] [--wait-seconds N] [--keep-workspace NAME]
   Audits by default. Apply reserves all heavy-job slots before bounding caches.
+  --usage reports directory and Docker usage without changing storage or locks.
 EOF
 }
 
@@ -194,6 +195,15 @@ EOF
   storage)
     resolve_slot "${1:-}"
     shift || true
+    if [[ ${1:-} == --usage ]]; then
+      [[ $# == 1 ]] || die '--usage is read-only and cannot be combined with maintenance options'
+      usage_script=$(cat "$repo_root/scripts/remote-dev-usage.py")
+      remote_script="set -e; cd $(printf '%q' "$remote_repo"); exec python3 -c $(printf '%q' "$usage_script")"
+      # Use the caller's audit so diagnostics also work against an older slot.
+      # shellcheck disable=SC2029
+      ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$remote_script")"
+      exit
+    fi
     quoted_command=''
     if (( $# )); then printf -v quoted_command '%q ' "$@"; fi
     remote_script="set -e; cd $(printf '%q' "$remote_repo"); exec python3 scripts/remote-dev-storage.py $quoted_command"
