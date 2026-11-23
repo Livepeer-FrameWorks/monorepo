@@ -143,10 +143,13 @@ The control plane enforces a single minimum control-protocol version; there is n
   REJECTED at registration with `FailedPrecondition` — it never becomes a node owner. This is the single point that
   makes capability **session-owned**: past registration, every session is staged-capable and inventory-authoritative,
   so no handler ever trusts a payload field to decide authority.
+- **Processing result tenant binding.** Protocol 13 sidecars echo the request tenant on processing results.
+  Foghorn keeps processing jobs queued when the connected sidecar is older; it does not dispatch work whose
+  legacy result lacks that binding. The sidecar remains connected for its other supported operations.
 - **Capability seam.** `control.ControlFeatures`, derived once from the negotiated `control_protocol_version`, is where
-  protocol behavior lives (no scattered version comparisons). With the minimum enforced, every capability is always
-  true for a connected session; the struct is the extension point for a future supported protocol range (real N−1
-  support), whose design is tracked outside this document.
+  protocol behavior lives (no scattered version comparisons). Registration guarantees staged media and authoritative
+  inventory. Newer operations, including tenant-bound processing results, remain gated by their own capability;
+  lacking one keeps that operation queued or retryable without disconnecting the sidecar.
 - **Inventory.** A connected session is always inventory-authoritative. A versioned whole-node report (monotonic
   `report_seq`) is applied as an authoritative snapshot (an empty slice clears); an incomplete-scan report cordons the
   node; a `report_seq <= 0` report from an authoritative session is a protocol violation and is dropped (never
