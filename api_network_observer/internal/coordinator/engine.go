@@ -51,6 +51,12 @@ func (e Engine) endpoint(s *store.State, r obs.Resource, ip string, now time.Tim
 	if old, ok := s.Endpoints[p.ID]; ok {
 		if now.After(old.DNSSeen) {
 			old.DNSSeen = now
+			if e.Locate != nil {
+				location := e.Locate(ip)
+				if location.Valid() || !old.Location.Valid() {
+					old.Location = location
+				}
+			}
 		}
 		old.Resource = r
 		old.Referenced = true
