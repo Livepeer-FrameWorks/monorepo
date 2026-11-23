@@ -121,7 +121,7 @@ WHERE (status IN ('dispatched', 'processing') AND updated_at < sqlc.narg(updated
    OR (status IN ('dispatched', 'processing') AND progress_advanced_at < sqlc.narg(progress_advanced_at)::timestamp)
    OR (status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
    OR (status IN ('queued', 'dispatched', 'processing') AND COALESCE(
-       (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+       (SELECT CASE WHEN upload.artifact_type='vod' AND job.job_type='transcode' THEN upload.created_at ELSE job.created_at END
         FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),
        job.created_at) < sqlc.arg(upload_deadline)::timestamp);
 
@@ -130,9 +130,9 @@ WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'failed', wait_reason = NULL, wait_started_at = NULL,
         error_message = CASE
-            WHEN COALESCE((SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+            WHEN COALESCE((SELECT CASE WHEN upload.artifact_type='vod' AND job.job_type='transcode' THEN upload.created_at ELSE job.created_at END
                   FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<sqlc.arg(upload_deadline)::timestamp
-              THEN CASE WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod') THEN 'upload processing timed out after 24 hours' ELSE 'processing timed out after 24 hours' END
+              THEN CASE WHEN EXISTS (SELECT 1 FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id AND upload.artifact_type='vod' AND job.job_type='transcode') THEN 'upload processing timed out after 24 hours' ELSE 'processing timed out after 24 hours' END
             WHEN EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')) THEN 'source artifact is no longer available'
             WHEN job.updated_at < sqlc.narg(updated_at)::timestamp AND job.retry_count >= sqlc.narg(retry_count)::integer THEN 'max retries exceeded'
             ELSE 'no processing progress within the watchdog window' END,
@@ -142,7 +142,7 @@ WITH failed AS (
            OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < sqlc.narg(progress_advanced_at)::timestamp)
            OR (job.status='queued' AND EXISTS (SELECT 1 FROM foghorn.artifacts gone WHERE gone.artifact_hash=job.artifact_hash AND gone.tenant_id=job.tenant_id AND gone.status IN ('failed','deleted','expired','aborted')))
            OR (job.status IN ('queued', 'dispatched', 'processing') AND COALESCE(
-             (SELECT CASE WHEN upload.artifact_type='vod' THEN upload.created_at ELSE job.created_at END
+             (SELECT CASE WHEN upload.artifact_type='vod' AND job.job_type='transcode' THEN upload.created_at ELSE job.created_at END
               FROM foghorn.artifacts AS upload WHERE upload.artifact_hash=job.artifact_hash AND upload.tenant_id=job.tenant_id),job.created_at)<sqlc.arg(upload_deadline)::timestamp))
     RETURNING artifact_hash, tenant_id, error_message
 )

@@ -498,21 +498,28 @@ before measuring available memory.
 Helmsman distinguishes an undersized node from temporarily occupied memory and
 reports minimum required bytes with the intended policy. Its processing budget,
 after host/container limits and the system reserve, is authoritative for placement.
-Foghorn retains each registered node's last reported budget, including disconnected
-nodes, and excludes only decommissioned/deleted nodes. An unknown budget or a warming
+Foghorn retains each registered edge's last reported budget, including disconnected
+nodes. Known non-processing edges contribute no processing budget; retired and evicted
+nodes are excluded. An unknown budget or a warming
 inventory cannot establish permanent incapacity. A previously refused node becomes
 eligible when its reported budget grows enough to fit. Only a fully known cluster
 that cannot fit the ladder fails the job and asset with a capacity error.
 
 Deferred work stays queued with a reason: `memory`, `slots`,
 `fitting_node_unavailable`, or `cluster_unavailable`. Deferral has no separate timeout
-and spends no failure retries. An upload still has a whole-upload deadline of 24 hours.
+and spends no failure retries. Every processing job has a 24-hour deadline. The initial
+VOD transcode uses upload creation time; clips, DVR, chapters, thumbnails and other
+follow-up jobs use their own creation time. A new thumbnail job on an older ready VOD
+gets its own deadline. A live-source clip or DVR job pinned to a node known to be gone
+fails immediately with a "source unavailable" reason.
 Completion, memory release, node recovery/undrain and budget increases wake the queue;
 the periodic sweep recovers missed notifications. Busy-node replanning lowers threads
 while preserving the quality selected against that node's full budget.
 
 Placement is best-effort FIFO, with smaller jobs allowed to pass a blocked one.
 After one minute the oldest memory waiter protects room on its best-fitting node.
+Thumbnail jobs whose source is already ready retain the same reservation eligibility
+and ordering. A disconnected hold moves when a healthy fitting node is available.
 Other work must leave those bytes free. Protection survives dispatch until Helmsman
 acknowledges actual durable memory admission, including admission on another node.
 Versioned clears fence delayed updates, and persisted edge protection survives a
@@ -703,13 +710,14 @@ Transient memory-read or reservation-persistence errors remain retryable; a miss
 
 Processing results echo the dispatched tenant in their outputs. Foghorn checks that tenant
 against the assigned job before accepting a memory-policy update, capacity deferral or
-terminal result. During rolling upgrades, an older edge can omit the echo; its authenticated
-node identity must still match the job assignment, and the stored job supplies the tenant.
+terminal result. An empty or missing tenant is rejected; authenticated node identity
+also has to match the job assignment.
 Capacity-wait and stale-lease cutoffs use UTC when sent to the database timestamp columns.
 
 A confirmed processor OOM kill (SIGKILL/137 plus a new kernel `oom_kill` count)
 requeues the job as a memory wait rather than spending a tenant retry. Helmsman
-samples the resident memory of AV/Thumbs processes belonging to that exact source;
+samples RssAnon plus RssShmem for AV/Thumbs processes belonging to that exact source
+and reads each observed PID's own cgroup memory.events, including native systemd services;
 the next admission retains the larger of the observed peak and the admitted
 reservation, plus 25% and 64 MiB. The required floor survives dispatch, replanning
 and further deferrals. An ordinary SIGKILL still follows the normal retry policy.

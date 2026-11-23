@@ -126,8 +126,9 @@ JOIN foghorn.artifacts AS asset ON asset.artifact_hash=job.artifact_hash AND ass
 WHERE job.status IN ('queued','dispatched','processing') AND (job.wait_reason='memory' OR job.memory_wait_ms>0)
  AND job.memory_admitted_at IS NULL AND job.required_memory_bytes>0
  AND (make_interval(secs => job.memory_wait_ms/1000.0) + CASE WHEN job.wait_reason='memory' THEN GREATEST(INTERVAL '0 seconds',(NOW() AT TIME ZONE 'UTC')-COALESCE(job.memory_wait_started_at,job.wait_started_at,NOW() AT TIME ZONE 'UTC')) ELSE INTERVAL '0 seconds' END) > ((NOW() AT TIME ZONE 'UTC')-$1::timestamp)
- AND asset.status NOT IN ('ready','failed','deleted','expired','aborted')
- AND COALESCE(CASE WHEN asset.artifact_type='vod' THEN asset.created_at ELSE job.created_at END,job.created_at)>$2::timestamp
+ AND (asset.status NOT IN ('ready','failed','deleted','expired','aborted')
+      OR (job.job_type='thumbnail' AND asset.status='ready'))
+ AND COALESCE(CASE WHEN asset.artifact_type='vod' AND job.job_type='transcode' THEN asset.created_at ELSE job.created_at END,job.created_at)>$2::timestamp
 ORDER BY job.created_at,job.job_id
 `
 
@@ -188,10 +189,11 @@ WHERE job.job_id=$3 AND job.tenant_id::text=$4
   AND NOT EXISTS (
     SELECT 1 FROM foghorn.processing_jobs AS older
     JOIN foghorn.artifacts AS other ON other.artifact_hash=older.artifact_hash AND other.tenant_id=older.tenant_id
-    WHERE other.origin_cluster_id=asset.origin_cluster_id AND other.status NOT IN ('ready','failed','deleted','expired','aborted') AND (older.wait_reason='memory' OR older.memory_wait_ms>0)
+    WHERE other.origin_cluster_id=asset.origin_cluster_id
+      AND (other.status NOT IN ('ready','failed','deleted','expired','aborted') OR (older.job_type='thumbnail' AND other.status='ready')) AND (older.wait_reason='memory' OR older.memory_wait_ms>0)
       AND older.status IN ('queued','dispatched','processing') AND older.memory_admitted_at IS NULL
       AND (make_interval(secs => older.memory_wait_ms/1000.0) + CASE WHEN older.wait_reason='memory' THEN GREATEST(INTERVAL '0 seconds',(NOW() AT TIME ZONE 'UTC')-COALESCE(older.memory_wait_started_at,older.wait_started_at,NOW() AT TIME ZONE 'UTC')) ELSE INTERVAL '0 seconds' END) > ((NOW() AT TIME ZONE 'UTC')-$5::timestamp)
-      AND COALESCE(CASE WHEN other.artifact_type='vod' THEN other.created_at ELSE older.created_at END,older.created_at)>(NOW() AT TIME ZONE 'UTC')-INTERVAL '24 hours'
+      AND COALESCE(CASE WHEN other.artifact_type='vod' AND older.job_type='transcode' THEN other.created_at ELSE older.created_at END,older.created_at)>(NOW() AT TIME ZONE 'UTC')-INTERVAL '24 hours'
       AND older.required_memory_bytes<=$6::bigint
       AND NOT EXISTS (SELECT 1 FROM foghorn.processing_node_reservations AS held WHERE held.job_id=older.job_id AND held.node_id<>$1::text AND held.required_memory_bytes>0)
       AND (older.preferred_node_id IS NULL OR older.preferred_node_id=$1::text)

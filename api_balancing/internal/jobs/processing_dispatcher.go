@@ -361,7 +361,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 
 func processingJobDeadline(job *processingJob) time.Time {
 	start := job.CreatedAt
-	if job.ArtifactType.String == "vod" && job.UploadedAt.Valid {
+	if job.JobType == "transcode" && job.ArtifactType.String == "vod" && job.UploadedAt.Valid {
 		start = job.UploadedAt
 	}
 	if !start.Valid {
