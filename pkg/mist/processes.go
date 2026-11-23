@@ -238,6 +238,10 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			if inhibit := localRenditionInhibit(prof, p); inhibit != "" {
 				av["track_inhibit"] = inhibit
 			}
+			// An original track the rung's track_retain selects is the
+			// rendition; the process that runs masks the originals it replaces.
+			copyProcessOption(av, prof, "track_retain")
+			copyProcessOption(av, p, "mask_replaced_originals")
 			copyProcessOption(av, prof, "inconsequential")
 			copyProcessOption(av, prof, "exit_unmask")
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")
