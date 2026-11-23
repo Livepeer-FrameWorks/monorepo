@@ -69,7 +69,7 @@ func TestOOMMemoryFloorSurvivesReplanning(t *testing.T) {
 	}
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return 3 * 1024 * memoryMiB, 3 * 1024 * memoryMiB, nil }}
 	req := &ipcpb.ProcessingJobRequest{JobId: job, Params: map[string]string{mist.ProcessingRequiredMemoryBytes: strconv.FormatUint(4*1024*memoryMiB, 10)}}
-	_, err := h.admitProcessingPolicy(discardLog(), req, stream, `[{"process":"AV","codec":"H264","resolution":"x360"}]`, mist.SourceMediaInfo{Width: 640, Height: 360}, nil)
+	_, err := h.admitProcessingPolicy(discardLog(), req, stream, `[{"process":"AV","codec":"H264","resolution":"x360"}]`, mist.SourceMediaInfo{Width: 640, Height: 360}, nil, nil)
 	out := processingMemoryFailureOutputs(err)
 	if err == nil || out[mist.ProcessingRequiredMemoryBytes] != req.Params[mist.ProcessingRequiredMemoryBytes] || out[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryNodeTooSmall {
 		t.Fatalf("planner lowered OOM's measured floor: err=%v outputs=%v", err, out)

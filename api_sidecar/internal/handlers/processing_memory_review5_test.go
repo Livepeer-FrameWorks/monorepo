@@ -26,11 +26,11 @@ func TestLocalFallbackNeedsItsOwnMemoryAdmission(t *testing.T) {
 	source := mist.SourceMediaInfo{Width: 3840, Height: 2160}
 	policy := `[{"process":"Livepeer","target_profiles":[{"height":2160,"bitrate":16000000},{"height":1440,"bitrate":8000000},{"height":1080,"bitrate":5000000},{"height":720,"bitrate":3000000},{"height":480,"bitrate":1200000},{"height":360,"bitrate":800000}]}]`
 	send := func(*ipcpb.ControlMessage) {}
-	admitted, err := h.admitProcessingPolicy(discardLog(), req, stream, policy, source, send)
+	admitted, err := h.admitProcessingPolicy(discardLog(), req, stream, policy, source, nil, send)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.admitProcessingPolicy(discardLog(), req, stream, mist.ReplaceLivepeerWithLocal(admitted), source, send)
+	_, err = h.admitProcessingPolicy(discardLog(), req, stream, mist.ReplaceLivepeerWithLocal(admitted), source, nil, send)
 	var capacity *processingCapacityError
 	if !errors.As(err, &capacity) || !capacity.nodeTooSmall {
 		t.Fatalf("oversized fallback did not refuse: %v", err)
@@ -52,7 +52,7 @@ func TestZeroWorkAdmissionKeepsGlobalProcessesInhibited(t *testing.T) {
 	}
 	total := uint64(3072) * memoryMiB
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
-	policy, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, "[]", mist.SourceMediaInfo{Width: 320, Height: 180}, func(*ipcpb.ControlMessage) {})
+	policy, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, "[]", mist.SourceMediaInfo{Width: 320, Height: 180}, nil, func(*ipcpb.ControlMessage) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestProcessingFallbackAcquiresLocalMemoryBeforePublishingPolicy(t *testing.
 	var published []*ipcpb.ControlMessage
 	send := func(message *ipcpb.ControlMessage) { published = append(published, message) }
 	local := mist.ReplaceLivepeerWithLocal(remote)
-	_, err = h.admitProcessingPolicy(logrus.NewEntry(logrus.New()), request, stream, local, source, send)
+	_, err = h.admitProcessingPolicy(logrus.NewEntry(logrus.New()), request, stream, local, source, nil, send)
 	var capacity *processingCapacityError
 	if !errors.As(err, &capacity) || !capacity.nodeTooSmall || len(published) != 0 {
 		t.Fatalf("unreserved local policy: error=%v publications=%d", err, len(published))
@@ -126,7 +126,7 @@ func TestProcessingFallbackAcquiresLocalMemoryBeforePublishingPolicy(t *testing.
 		t.Fatalf("refused fallback changed its reservation: %+v", retained)
 	}
 	total = 8 * 1024 * memoryMiB
-	admitted, err := h.admitProcessingPolicy(logrus.NewEntry(logrus.New()), request, stream, local, source, send)
+	admitted, err := h.admitProcessingPolicy(logrus.NewEntry(logrus.New()), request, stream, local, source, nil, send)
 	if err != nil || mist.HasLivepeerProcesses(admitted) || len(published) != 1 {
 		t.Fatalf("admitted fallback: policy=%s error=%v publications=%d", admitted, err, len(published))
 	}

@@ -31,7 +31,7 @@ func TestFallbackStopsGenerationBeforeMeasuringMemory(t *testing.T) {
 		}
 		return total, total, nil
 	}}
-	_, err := h.admitLocalProcessingFallback(discardLog(), client, &ipcpb.ProcessingJobRequest{JobId: job}, stream, filepath.Join(t.TempDir(), "output.mkv"), 9, fourKLadder(t), mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
+	_, err := h.admitLocalProcessingFallback(discardLog(), client, &ipcpb.ProcessingJobRequest{JobId: job}, stream, filepath.Join(t.TempDir(), "output.mkv"), 9, fourKLadder(t), mist.SourceMediaInfo{Width: 3840, Height: 2160}, nil, func(*ipcpb.ControlMessage) {})
 	if err != nil {
 		t.Fatalf("retiring generation counted twice: %v", err)
 	}

@@ -36,7 +36,7 @@ func TestMemoryAdmissionReducesPlanToFreeReservationPool(t *testing.T) {
 	if reserveErr := setProcessingProcessOverride("processing+occupied", "[]", "occupied", time.Now().Add(time.Hour), processingMemoryBudget(total)-free); reserveErr != nil {
 		t.Fatal(reserveErr)
 	}
-	actual, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, source, func(*ipcpb.ControlMessage) {})
+	actual, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, source, nil, func(*ipcpb.ControlMessage) {})
 	if err != nil {
 		t.Fatalf("job that fits a reduced plan was queued: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestMemoryRefusalReportsEffectiveBudget(t *testing.T) {
 	}
 	total := uint64(1536) * memoryMiB
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
-	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, fourKLadder(t), mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
+	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, fourKLadder(t), mist.SourceMediaInfo{Width: 3840, Height: 2160}, nil, func(*ipcpb.ControlMessage) {})
 	if got := processingMemoryFailureOutputs(err)["processing_memory_budget_bytes"]; got != "1073741824" {
 		t.Fatalf("node refusal lost effective 1 GiB budget: %q (%v)", got, err)
 	}
@@ -69,7 +69,7 @@ func TestMissingActiveStreamsCannotReleaseGeneration(t *testing.T) {
 
 func TestMemorySnapshotFailureRemainsRetryable(t *testing.T) {
 	h := &ProcessingJobHandler{memorySnapshot: func() (uint64, uint64, error) { return 0, 0, fmt.Errorf("temporary cgroup read failure") }}
-	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{}, "processing+snapshot", "[]", mist.SourceMediaInfo{}, func(*ipcpb.ControlMessage) {})
+	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{}, "processing+snapshot", "[]", mist.SourceMediaInfo{}, nil, func(*ipcpb.ControlMessage) {})
 	if processingMemoryFailureStatus(err) != processingResultRetryable {
 		t.Fatalf("temporary memory read failed permanently: %v", err)
 	}
