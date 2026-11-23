@@ -126,6 +126,11 @@ prober, stays in the inventory and receives no invented map coordinates. Prober 
 IP comes from the connection; forwarded addresses are honored only through explicitly
 trusted ingress CIDRs. Optional configured locations can override lookup.
 
+Prober work polls refresh derived geography from the current source IP lookup.
+Newer endpoint observations refresh their derived geography as well. A lookup
+miss for an unchanged address preserves a previously known location; replaying
+an older endpoint observation does not replace current geography or history.
+
 Checks normally run every minute. Completed qualifying failure cycles back off through
 2, 4, 8 and 15 minutes; healthy success resets the cadence. Active, discoverable
 orchestrators keep receiving tests. Missing, unhealthy or unattributable reports do not
