@@ -1115,6 +1115,10 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 	)
 	resp, err := client.Relay().ForwardCommand(ctx, req)
 	if err != nil {
+		if req.GetProcessingJob() != nil && status.Code(err) == codes.FailedPrecondition {
+			incRelayForward(commandType, "peer_incompatible")
+			return fmt.Errorf("relay: peer %s cannot accept processing: %w", owner.InstanceID, err)
+		}
 		if status.Code(err) == codes.Unimplemented {
 			return fmt.Errorf("relay: peer %s does not implement ForwardCommand: %w", owner.InstanceID, err)
 		}
@@ -9489,10 +9493,14 @@ func sendProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
+	relayErr := commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: req},
-	}))
+	})
+	if status.Code(relayErr) == codes.FailedPrecondition {
+		return relayErr
+	}
+	return relayFailure(err, relayErr)
 }
 
 // GeneratePresignedGETForArtifact generates a presigned GET URL for an artifact's S3 object.

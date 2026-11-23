@@ -35,7 +35,7 @@ func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 func setupLocalRegistry(t *testing.T, nodeID string) *fakeControlStream {
 	t.Helper()
 	stream := &fakeControlStream{}
-	cleanup := control.SetupTestRegistry(nodeID, stream, control.ClaimedPublisherStopProtocolMin)
+	cleanup := control.SetupTestRegistry(nodeID, stream, max(control.ClaimedPublisherStopProtocolMin, control.ProcessingTenantEchoProtocolMin))
 	t.Cleanup(cleanup)
 	return stream
 }
@@ -154,4 +154,21 @@ func sortedKeys(m map[string]struct{}) []string {
 	keys := slices.Collect(maps.Keys(m))
 	slices.Sort(keys)
 	return keys
+}
+
+func TestForwardCommand_ProcessingRefusalPreservesStatus(t *testing.T) {
+	stream := &fakeControlStream{}
+	cleanup := control.SetupTestRegistry("legacy", stream, control.ProcessingTenantEchoProtocolMin-1)
+	t.Cleanup(cleanup)
+	srv := NewRelayServer(logging.NewLogger())
+	response, err := srv.ForwardCommand(t.Context(), &foghornrelaypb.ForwardCommandRequest{
+		TargetNodeId: "legacy",
+		Command:      &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &ipcpb.ProcessingJobRequest{JobId: "job", TenantId: "tenant"}},
+	})
+	if status.Code(err) != codes.FailedPrecondition || response != nil {
+		t.Fatalf("owning relay lost processing protocol refusal: response=%v error=%v", response, err)
+	}
+	if len(stream.sent) != 0 {
+		t.Fatal("legacy edge received processing")
+	}
 }

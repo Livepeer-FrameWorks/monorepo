@@ -321,8 +321,9 @@ Jobs live in `foghorn.processing_jobs`. The dispatcher is
   receives the output. A job whose artifact has no recorded origin stays queued.
   Processing requires Helmsman control protocol 13, which echoes the dispatched tenant in
   every result. Placement skips known older sessions, and the owning connection checks the
-  protocol again before sending work, including HA relays. Other control operations remain
-  available while an edge waits for its upgrade.
+  protocol again before sending work, including HA relays. A relayed protocol refusal
+  preserves the connection owner and returns the same refusal code, so dispatch defers the
+  job. Other control operations remain available while an edge waits for its upgrade.
 - **Request:** `ProcessingJobRequest{job_id, tenant_id, artifact_hash, source_url, job_type,
 internal_name, output_runtime_name, …}`. Crucially,
   **`output_runtime_name = "vod+" + internal_name`** (`processing_dispatcher.go`).

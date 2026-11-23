@@ -28,7 +28,7 @@ func SetupTestRegistryNodes(streams map[string]ipcpb.HelmsmanControl_ConnectServ
 	for nodeID, stream := range streams {
 		// Register the fake connection as a CURRENT-protocol sidecar so staged-freeze dispatch (gated at the
 		// final owning send) is delivered; tests exercising an old sidecar set protocolVersion explicitly.
-		registry.conns[nodeID] = &conn{stream: stream, rawNodeID: nodeID, protocolVersion: StopSessionsAckProtocolMin}
+		registry.conns[nodeID] = &conn{stream: stream, rawNodeID: nodeID, protocolVersion: max(ClaimedPublisherStopProtocolMin, ProcessingTenantEchoProtocolMin)}
 	}
 	return func() { registry = prev }
 }

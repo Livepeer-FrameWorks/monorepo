@@ -102,6 +102,10 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 	}
 
 	if err != nil {
+		// The dispatcher must distinguish a connected legacy sidecar from a lost owner.
+		if req.GetProcessingJob() != nil && status.Code(err) == codes.FailedPrecondition {
+			return nil, err
+		}
 		log.WithError(err).Warn("Relay local dispatch failed")
 		return &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: err.Error(), OwnerMissing: (req.GetStopSessions() != nil || req.GetStopClaimedSessions() != nil) && errors.Is(err, control.ErrNotConnected)}, nil
 	}
