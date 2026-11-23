@@ -11,6 +11,9 @@
 # patched libsrt 1.5.6 wraps against the bundled MbedTLS. Ubuntu's libsrtp2
 # (OpenSSL backend) fails its cipher self-test when statically linked here, so
 # every WebRTC session fails SRTP setup, and its libsrt lacks SRTS_SHUTDOWN.
+# On Linux the ffmpeg subproject requires the NVENC/CUDA headers (with clang
+# for its CUDA kernels), VAAPI with DRM, and oneVPL on x86_64, the same
+# packages the fork's build installs.
 #
 # The source tree, extracted subprojects and build directory live in BuildKit
 # cache mounts, so a rerun recompiles only what changed since the last build.
@@ -28,6 +31,8 @@ RUN apt-get update \
       build-essential ca-certificates cmake git nasm ninja-build pkg-config python3 python3-pip rsync yasm \
       libaom-dev libcjson-dev libdav1d-dev libjpeg-dev liblzma-dev libmp3lame-dev libnuma-dev libopus-dev libpng-dev libsvtav1enc-dev \
       libvpx-dev libx265-dev libxml2-dev zlib1g-dev \
+      clang llvm lld libffmpeg-nvenc-dev libva-dev libdrm-dev \
+ && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y --no-install-recommends libvpl-dev; fi \
  && python3 -m pip install --break-system-packages 'meson>=1.6.0' \
  && rm -rf /var/lib/apt/lists/*
 
