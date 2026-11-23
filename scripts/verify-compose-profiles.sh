@@ -158,4 +158,5 @@ while IFS= read -r profile; do
       ;;
   esac
 done <<<"$all_declared"
+python3 "$repo_root/scripts/test-compose-healthchecks.py" "$work/restream-49.json" || failed=1
 exit "$failed"
