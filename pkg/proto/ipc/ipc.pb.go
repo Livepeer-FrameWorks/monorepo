@@ -13841,10 +13841,10 @@ type StreamTrackListTrigger struct {
 	PrimaryWidth        *int32   `protobuf:"varint,7,opt,name=primary_width,json=primaryWidth,proto3,oneof" json:"primary_width,omitempty"`
 	PrimaryHeight       *int32   `protobuf:"varint,8,opt,name=primary_height,json=primaryHeight,proto3,oneof" json:"primary_height,omitempty"`
 	PrimaryFps          *float64 `protobuf:"fixed64,9,opt,name=primary_fps,json=primaryFps,proto3,oneof" json:"primary_fps,omitempty"`
-	PrimaryVideoBitrate *int32   `protobuf:"varint,10,opt,name=primary_video_bitrate,json=primaryVideoBitrate,proto3,oneof" json:"primary_video_bitrate,omitempty"`
+	PrimaryVideoBitrate *int32   `protobuf:"varint,10,opt,name=primary_video_bitrate,json=primaryVideoBitrate,proto3,oneof" json:"primary_video_bitrate,omitempty"` // kbit/s
 	PrimaryVideoCodec   *string  `protobuf:"bytes,11,opt,name=primary_video_codec,json=primaryVideoCodec,proto3,oneof" json:"primary_video_codec,omitempty"`
 	// Primary audio track info
-	PrimaryAudioBitrate    *int32  `protobuf:"varint,12,opt,name=primary_audio_bitrate,json=primaryAudioBitrate,proto3,oneof" json:"primary_audio_bitrate,omitempty"`
+	PrimaryAudioBitrate    *int32  `protobuf:"varint,12,opt,name=primary_audio_bitrate,json=primaryAudioBitrate,proto3,oneof" json:"primary_audio_bitrate,omitempty"` // kbit/s
 	PrimaryAudioCodec      *string `protobuf:"bytes,13,opt,name=primary_audio_codec,json=primaryAudioCodec,proto3,oneof" json:"primary_audio_codec,omitempty"`
 	PrimaryAudioChannels   *int32  `protobuf:"varint,14,opt,name=primary_audio_channels,json=primaryAudioChannels,proto3,oneof" json:"primary_audio_channels,omitempty"`
 	PrimaryAudioSampleRate *int32  `protobuf:"varint,15,opt,name=primary_audio_sample_rate,json=primaryAudioSampleRate,proto3,oneof" json:"primary_audio_sample_rate,omitempty"`
@@ -19369,11 +19369,11 @@ func (x *StreamData) GetAudienceViewers() uint32 {
 // Stream track information (replaces JSON parsing)
 type StreamTrack struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
-	TrackName   string                 `protobuf:"bytes,1,opt,name=track_name,json=trackName,proto3" json:"track_name,omitempty"` // e.g., "video_1", "audio_1", "meta_1"
-	TrackType   string                 `protobuf:"bytes,2,opt,name=track_type,json=trackType,proto3" json:"track_type,omitempty"` // "video", "audio", "meta", "unknown"
-	Codec       string                 `protobuf:"bytes,3,opt,name=codec,proto3" json:"codec,omitempty"`                          // H264, AAC, JSON, etc.
-	BitrateKbps *int32                 `protobuf:"varint,4,opt,name=bitrate_kbps,json=bitrateKbps,proto3,oneof" json:"bitrate_kbps,omitempty"`
-	BitrateBps  *int64                 `protobuf:"varint,5,opt,name=bitrate_bps,json=bitrateBps,proto3,oneof" json:"bitrate_bps,omitempty"`
+	TrackName   string                 `protobuf:"bytes,1,opt,name=track_name,json=trackName,proto3" json:"track_name,omitempty"`              // e.g., "video_1", "audio_1", "meta_1"
+	TrackType   string                 `protobuf:"bytes,2,opt,name=track_type,json=trackType,proto3" json:"track_type,omitempty"`              // "video", "audio", "meta", "unknown"
+	Codec       string                 `protobuf:"bytes,3,opt,name=codec,proto3" json:"codec,omitempty"`                                       // H264, AAC, JSON, etc.
+	BitrateKbps *int32                 `protobuf:"varint,4,opt,name=bitrate_kbps,json=bitrateKbps,proto3,oneof" json:"bitrate_kbps,omitempty"` // decimal kbit/s
+	BitrateBps  *int64                 `protobuf:"varint,5,opt,name=bitrate_bps,json=bitrateBps,proto3,oneof" json:"bitrate_bps,omitempty"`    // bits/s; Mist track bps is bytes/s, health kbits is Kibit/s
 	Buffer      *int32                 `protobuf:"varint,6,opt,name=buffer,proto3,oneof" json:"buffer,omitempty"`
 	Jitter      *int32                 `protobuf:"varint,7,opt,name=jitter,proto3,oneof" json:"jitter,omitempty"`
 	// Video-specific fields

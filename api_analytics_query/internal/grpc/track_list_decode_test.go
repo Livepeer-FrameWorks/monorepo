@@ -95,3 +95,24 @@ func TestDecodeStoredStreamTracksGeneratedOutputsStayUnknownType(t *testing.T) {
 		}
 	}
 }
+
+// Raw Mist track maps carry bps in bytes/s and health kbits as bps*8/1024;
+// decoded tracks report bits/s and decimal kbit/s like the stored keys do.
+func TestDecodeStoredStreamTracksConvertsMistBitrateUnits(t *testing.T) {
+	tracks := decodeStoredStreamTracks(`[
+		{"track_name": "video_bps", "type": "video", "codec": "H264", "bps": 500000},
+		{"track_name": "video_kbits", "type": "video", "codec": "H264", "kbits": 3906},
+		{"track_name": "stored", "type": "video", "codec": "H264", "bitrate_kbps": 4000, "bitrate_bps": 4000000}
+	]`)
+	want := map[string][2]int64{
+		"video_bps":   {4000000, 4000},
+		"video_kbits": {3999744, 3999},
+		"stored":      {4000000, 4000},
+	}
+	for _, track := range tracks {
+		w := want[track.GetTrackName()]
+		if track.GetBitrateBps() != w[0] || int64(track.GetBitrateKbps()) != w[1] {
+			t.Fatalf("%s: bitrate_bps=%d bitrate_kbps=%d, want %d / %d", track.GetTrackName(), track.GetBitrateBps(), track.GetBitrateKbps(), w[0], w[1])
+		}
+	}
+}

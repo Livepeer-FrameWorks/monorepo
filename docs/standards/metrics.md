@@ -147,6 +147,19 @@ labels.
 | `track_count`                              | count       | Gauge | Track count                                                                  |
 | `track_metadata`                           | JSON        | Gauge | Serialized typed tracks (includes per-track jitter/buffer/bitrate_bps, etc.) |
 
+**Track bitrate units**
+
+`StreamTrack.bitrate_bps` is bits/s and `bitrate_kbps` decimal kbit/s for every
+Mist payload. Mist's own fields differ: a track's `bps` (LIVE_TRACK_LIST,
+RECORDING_END summary, stream JSON) is bytes/s, and the health `kbits`
+(STREAM_BUFFER, poller health) is `bps * 8 / 1024`. `pkg/mist/track_bitrate.go`
+holds the conversions. Code that hands a bitrate back to Mist or compares it with
+Mist selectors (rendition retention `TrackInfo.Bps`) uses Mist bytes/s.
+Before v0.3.16, bitrates parsed from Mist `bps` were stored at one eighth of the
+bit rate: `track_list_events` (`track_list` JSON `bitrate_bps`/`bitrate_kbps`,
+`primary_video_bitrate`, `primary_audio_bitrate`, `quality_tier`) and the
+recording track summary on `foghorn.artifacts.tracks` (`bitrate_kbps`).
+
 **Where packet loss + jitter live**
 
 - Packet loss rate is derived from client QoE rollups (`client_qoe_5m.pkt_loss_rate`).

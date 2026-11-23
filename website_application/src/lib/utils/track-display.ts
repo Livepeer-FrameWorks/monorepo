@@ -72,12 +72,25 @@ export function trackFps(track: TrackLike | null | undefined): number | null {
 }
 
 export function trackBitrateKbps(track: TrackLike | null | undefined): number | null {
-  const kbps = firstNumber(track?.bitrateKbps, track?.bitrate_kbps, track?.kbits);
+  const kbps = firstNumber(track?.bitrateKbps, track?.bitrate_kbps);
   if (kbps !== null) return Math.round(kbps);
+  // Mist health kbits is bytes/s * 8 / 1024.
+  const mistKbits = firstNumber(track?.kbits);
+  if (mistKbits !== null) return Math.round((mistKbits * 1024) / 1000);
   const bitsPerSecond = firstNumber(track?.bitrateBps, track?.bitrate_bps);
   if (bitsPerSecond !== null) return Math.round(bitsPerSecond / 1000);
   const mistBytesPerSecond = firstNumber(track?.bps);
   return mistBytesPerSecond === null ? null : Math.round((mistBytesPerSecond * 8) / 1000);
+}
+
+export function trackBitrateFieldsFromKbps(kbps: number | null | undefined): {
+  bitrateKbps: number | null;
+  bitrateBps: number | null;
+} {
+  if (kbps === null || kbps === undefined || !Number.isFinite(kbps) || kbps <= 0) {
+    return { bitrateKbps: null, bitrateBps: null };
+  }
+  return { bitrateKbps: kbps, bitrateBps: kbps * 1000 };
 }
 
 export function trackResolution(track: TrackLike | null | undefined): string | null {
