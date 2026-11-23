@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,12 +29,15 @@ type Record struct {
 	Payload []byte
 }
 type Queue struct {
-	mu      sync.Mutex
-	cfg     Config
-	bytes   int64
-	records int
-	wake    chan struct{}
-	dropped atomic.Uint64
+	mu              sync.Mutex
+	cfg             Config
+	bytes           int64
+	records         int
+	wake            chan struct{}
+	dropped         atomic.Uint64
+	state           persistentState
+	reservedRecords int
+	reservedBytes   int64
 }
 
 func Open(cfg Config) (*Queue, error) {
@@ -57,10 +60,14 @@ func Open(cfg Config) (*Queue, error) {
 		return nil, err
 	}
 	q := &Queue{cfg: cfg, wake: make(chan struct{}, 1)}
+	if err := q.loadState(); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(cfg.Directory)
 	if err != nil {
 		return nil, err
 	}
+	active := map[string]bool{}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) != ".event" {
 			continue
@@ -70,6 +77,9 @@ func Open(cfg Config) (*Queue, error) {
 			return nil, err
 		}
 		if time.Since(info.ModTime()) > cfg.MaxAge {
+			if removeErr := q.removeRetry(e.Name()); removeErr != nil {
+				return nil, removeErr
+			}
 			if err := os.Remove(filepath.Join(cfg.Directory, e.Name())); err != nil {
 				return nil, err
 			}
@@ -77,12 +87,28 @@ func Open(cfg Config) (*Queue, error) {
 			continue
 		}
 		if info.Size() > cfg.MaxRecordBytes {
-			return nil, fmt.Errorf("spool record exceeds configured size bound")
+			return nil, errors.New("spool record exceeds configured size bound")
 		}
 		q.records++
 		q.bytes += info.Size()
+		active[e.Name()] = true
+		if retryErr := q.loadRetry(e.Name()); retryErr != nil {
+			return nil, retryErr
+		}
 	}
-	if err := syncDirectory(cfg.Directory); err != nil {
+	for name := range q.state.Retries {
+		if !active[name] {
+			delete(q.state.Retries, name)
+		}
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".event.retry") && !active[strings.TrimSuffix(entry.Name(), ".retry")] {
+			if removeErr := os.Remove(filepath.Join(cfg.Directory, entry.Name())); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return nil, removeErr
+			}
+		}
+	}
+	if err := q.persistLocked(); err != nil {
 		return nil, err
 	}
 	return q, nil
@@ -97,17 +123,26 @@ func (q *Queue) Enqueue(id string, payload []byte) error {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	return q.enqueueLocked(id, payload)
+}
+func (q *Queue) enqueueLocked(id string, payload []byte) error {
+	if id == "" || len(payload) == 0 {
+		return errors.New("record ID and payload are required")
+	}
 	path := filepath.Join(q.cfg.Directory, filename(id))
 	if old, err := os.ReadFile(path); err == nil {
 		if string(old) != string(payload) {
 			return errors.New("producer ID reused with another payload")
 		}
-		return nil
+		return syncDirectory(q.cfg.Directory)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if int64(len(payload)) > q.cfg.MaxRecordBytes || q.records >= q.cfg.MaxRecords || q.bytes+int64(len(payload)) > q.cfg.MaxBytes {
+	if int64(len(payload)) > q.cfg.MaxRecordBytes || q.records+q.reservedRecords >= q.cfg.MaxRecords || q.bytes+q.reservedBytes+int64(len(payload)) > q.cfg.MaxBytes {
 		q.dropped.Add(1)
+		if err := q.persistLocked(); err != nil {
+			return errors.Join(ErrFull, err)
+		}
 		return ErrFull
 	}
 	f, err := os.CreateTemp(q.cfg.Directory, ".pending-")
@@ -161,8 +196,10 @@ func (q *Queue) Pending(limit int) ([]Record, error) {
 	type entry struct {
 		name     string
 		modified time.Time
+		attempts int
 	}
 	var ordered []entry
+	expired := false
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) != ".event" {
 			continue
@@ -172,17 +209,33 @@ func (q *Queue) Pending(limit int) ([]Record, error) {
 			return nil, err
 		}
 		if time.Since(info.ModTime()) > q.cfg.MaxAge {
+			if removeErr := q.removeRetry(e.Name()); removeErr != nil {
+				return nil, removeErr
+			}
 			if err := os.Remove(filepath.Join(q.cfg.Directory, e.Name())); err != nil {
 				return nil, err
 			}
 			q.records--
 			q.bytes -= info.Size()
 			q.dropped.Add(1)
+			delete(q.state.Retries, e.Name())
+			expired = true
 			continue
 		}
-		ordered = append(ordered, entry{e.Name(), info.ModTime()})
+		if retry, ok := q.state.Retries[e.Name()]; ok && time.Now().Before(retry.After) {
+			continue
+		}
+		ordered = append(ordered, entry{e.Name(), info.ModTime(), q.state.Retries[e.Name()].Attempts})
+	}
+	if expired {
+		if err := q.persistLocked(); err != nil {
+			return nil, err
+		}
 	}
 	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].attempts != ordered[j].attempts {
+			return ordered[i].attempts < ordered[j].attempts
+		}
 		if ordered[i].modified.Equal(ordered[j].modified) {
 			return ordered[i].name < ordered[j].name
 		}
@@ -218,12 +271,17 @@ func (q *Queue) Ack(record Record) error {
 	if err != nil {
 		return err
 	}
+	if removeErr := q.removeRetry(record.Name); removeErr != nil {
+		return removeErr
+	}
 	if err = os.Remove(path); err != nil {
 		return err
 	}
 	q.records--
 	q.bytes -= info.Size()
-	return syncDirectory(q.cfg.Directory)
+	delete(q.state.Retries, record.Name)
+	q.state.LastUpload = time.Now().UTC()
+	return q.persistLocked()
 }
 func (q *Queue) Stats() (int, int64, uint64) {
 	q.mu.Lock()
@@ -233,48 +291,35 @@ func (q *Queue) Stats() (int, int64, uint64) {
 
 // Run retries committed records and never acknowledges a failed delivery.
 func (q *Queue) Run(ctx context.Context, send func(context.Context, []byte) error, onError func(error)) {
-	backoff := time.Second
+	q.RunWithPolicy(ctx, func(ctx context.Context, raw []byte) DeliveryOutcome {
+		err := send(ctx, raw)
+		return DeliveryOutcome{Delivered: err == nil, Err: err}
+	}, onError)
+}
+func (q *Queue) RunWithPolicy(ctx context.Context, send func(context.Context, []byte) DeliveryOutcome, onError func(error)) {
 	for ctx.Err() == nil {
 		rows, err := q.Pending(100)
 		if err == nil {
-			var deliveryErr error
 			for _, row := range rows {
 				if ctx.Err() != nil {
 					return
 				}
-				err = send(ctx, row.Payload)
-				if err == nil {
-					err = q.Ack(row)
-				}
-				if err != nil {
-					deliveryErr = err
-				}
+				q.finish(row, send(ctx, row.Payload), onError)
 			}
-			err = deliveryErr
+		} else if onError != nil {
+			onError(err)
 		}
-		if err != nil && onError != nil {
-			onError(fmt.Errorf("telemetry delivery: %w", err))
+		if len(rows) == 100 {
+			continue
 		}
-		delay := time.Second
-		if err != nil {
-			delay = backoff
-			if backoff < 30*time.Second {
-				backoff *= 2
-				if backoff > 30*time.Second {
-					backoff = 30 * time.Second
-				}
-			}
-		} else {
-			backoff = time.Second
-		}
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
-		case <-timer.C:
 		case <-q.wake:
 			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }

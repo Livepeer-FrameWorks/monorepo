@@ -27,11 +27,41 @@ func (l Location) Valid() bool {
 }
 
 type Observer struct {
-	Kind     string    `json:"kind,omitempty"`
-	ID       string    `json:"id"`
-	Region   string    `json:"region"`
-	Location Location  `json:"location"`
-	LastSeen time.Time `json:"last_seen"`
+	CollectionStatus  string          `json:"collection_status,omitempty"`
+	Kind              string          `json:"kind,omitempty"`
+	ID                string          `json:"id"`
+	Region            string          `json:"region"`
+	Location          Location        `json:"location"`
+	LastSeen          time.Time       `json:"last_seen"`
+	SourceIP          string          `json:"source_ip,omitempty"`
+	LocationUpdatedAt time.Time       `json:"location_updated_at,omitempty"`
+	Delivery          *DeliveryHealth `json:"delivery,omitempty"`
+}
+
+type DeliveryHealth struct {
+	QuarantinedRecords uint64    `json:"quarantined_records"`
+	CapacityAvailable  bool      `json:"capacity_available"`
+	Sequence           uint64    `json:"sequence"`
+	LastUpload         time.Time `json:"last_upload"`
+	OldestPending      time.Time `json:"oldest_pending"`
+	PendingRecords     int       `json:"pending_records"`
+	DroppedRecords     uint64    `json:"dropped_records"`
+	Assigned           uint64    `json:"assigned"`
+	Completed          uint64    `json:"completed"`
+	ClockSkewSeconds   float64   `json:"clock_skew_seconds"`
+}
+
+func (h *DeliveryHealth) Healthy(now time.Time) bool {
+	if h == nil {
+		return false
+	}
+	return h.CapacityAvailable && h.PendingRecords >= 0 && h.PendingRecords < 9000 && (h.OldestPending.IsZero() || (!h.OldestPending.After(now.Add(time.Minute)) && now.Sub(h.OldestPending) <= 5*time.Minute)) && math.Abs(h.ClockSkewSeconds) <= 1
+}
+
+type WorkRequest struct {
+	ObserverID string          `json:"observer_id"`
+	Region     string          `json:"region"`
+	Delivery   *DeliveryHealth `json:"delivery,omitempty"`
 }
 type Resource struct {
 	CatalogSource string    `json:"catalog_source,omitempty"`
@@ -133,6 +163,10 @@ type Work struct {
 	Catalog            []Resource   `json:"catalog"`
 	Assignments        []Assignment `json:"assignments"`
 	DNSIntervalSeconds int64        `json:"dns_interval_seconds"`
+	ServerTime         time.Time    `json:"server_time"`
+	ControlVersion     int          `json:"control_version"`
+	IngestBatchRecords int          `json:"ingest_batch_records"`
+	IngestBatchBytes   int          `json:"ingest_batch_bytes"`
 }
 type CandidateFeed struct {
 	Version     int        `json:"version"`

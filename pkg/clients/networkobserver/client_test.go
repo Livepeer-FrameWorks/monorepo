@@ -110,6 +110,7 @@ func TestRelayForwardsProberCredentialAndSourceAddress(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		gotBody = string(raw)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -122,7 +123,7 @@ func TestRelayForwardsProberCredentialAndSourceAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relayed.Status != http.StatusAccepted || string(relayed.Body) != `{"ok":true}` || relayed.ContentType != "application/json" {
+	if relayed.Status != http.StatusAccepted || string(relayed.Body) != `{"ok":true}` || relayed.ContentType != "application/json" || relayed.RetryAfter != "7" {
 		t.Fatalf("relayed response = %+v", relayed)
 	}
 	if got.URL.Path != "/v1/observations" || got.URL.RawQuery != "a=1" || gotBody != `{"id":"batch"}` {

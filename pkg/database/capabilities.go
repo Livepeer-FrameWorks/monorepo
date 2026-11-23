@@ -83,6 +83,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "tenant alias retirement queue", Engine: EnginePostgres, Probe: "SELECT tenant_id, subdomain, requested_at, attempts, last_error FROM navigator.tenant_alias_retirements LIMIT 0"},
 	},
 	"network-observer": {
+		{Name: "durable network observation inbox", Engine: EnginePostgres, Probe: "SELECT i.tenant_id,i.id,i.status,i.error_code,i.payload,l.pending_bytes,l.last_processed_at FROM network_observer.observation_inbox i,network_observer.inbox_limits l LIMIT 0", IntroducedIn: "v0.3.16"},
 		{Name: "network inventory and assignments", Engine: EnginePostgres, Probe: "SELECT r.tenant_id, r.id, r.document, e.document, o.document, a.document FROM network_observer.resources r, network_observer.endpoints e, network_observer.observers o, network_observer.assignments a LIMIT 0", IntroducedIn: "v0.3.13"},
 		{Name: "network observation receipt and outbox", Engine: EnginePostgres, Probe: "SELECT l.tenant_id, r.id, r.digest, r.received_at, o.payload, o.next_attempt_at, o.attempts FROM network_observer.scheduler_lock l, network_observer.ingest_receipts r, network_observer.telemetry_outbox o LIMIT 0", IntroducedIn: "v0.3.13"},
 	},

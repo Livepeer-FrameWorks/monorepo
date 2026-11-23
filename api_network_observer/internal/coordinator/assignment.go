@@ -24,18 +24,18 @@ func (a *API) resolveAssignments(s *store.State, b obs.Batch, now time.Time) err
 			continue
 		}
 		if v.Assignment == nil {
-			return fmt.Errorf("assignment snapshot required for delayed result")
+			return reject("ASSIGNMENT_SNAPSHOT_REQUIRED", "assignment snapshot required for delayed result")
 		}
 		snapshot := *v.Assignment
 		expected := assignmentSignature(a.Secret, snapshot)
 		if !hmac.Equal([]byte(snapshot.Signature), []byte(expected)) || snapshot.ID != v.AssignmentID || snapshot.ObserverID != b.ObserverID || snapshot.Endpoint.ID != v.EndpointID {
-			return fmt.Errorf("invalid signed assignment")
+			return reject("SIGNATURE_INVALID", "invalid signed assignment")
 		}
 		if snapshot.Deadline.Sub(snapshot.DueAt) > time.Minute || now.Sub(snapshot.DueAt) > 30*24*time.Hour || snapshot.DueAt.After(now) {
-			return fmt.Errorf("assignment outside retention")
+			return reject("OUTSIDE_RETENTION", "assignment outside retention")
 		}
 		if _, ok := s.Endpoints[v.EndpointID]; !ok {
-			return fmt.Errorf("endpoint outside retention")
+			return reject("OUTSIDE_RETENTION", "endpoint outside retention")
 		}
 		snapshot.Settled = true
 		s.Assignments[snapshot.ID] = snapshot

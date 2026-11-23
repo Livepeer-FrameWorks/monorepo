@@ -102,6 +102,7 @@ func (c *Client) Candidates(ctx context.Context) (*obs.CandidateFeed, error) {
 
 // RelayResponse is the observer's answer to a relayed request.
 type RelayResponse struct {
+	RetryAfter  string
 	Status      int
 	ContentType string
 	Body        []byte
@@ -137,5 +138,5 @@ func (c *Client) Relay(ctx context.Context, method, path, rawQuery, authorizatio
 	if len(raw) > MaxBodyBytes {
 		return nil, fmt.Errorf("observer response exceeds %d bytes", MaxBodyBytes)
 	}
-	return &RelayResponse{Status: response.StatusCode, ContentType: response.Header.Get("Content-Type"), Body: raw}, nil
+	return &RelayResponse{Status: response.StatusCode, ContentType: response.Header.Get("Content-Type"), RetryAfter: response.Header.Get("Retry-After"), Body: raw}, nil
 }

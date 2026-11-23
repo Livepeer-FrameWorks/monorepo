@@ -29,6 +29,51 @@ groups:
           summary: "Telemetry target {{ $labels.job }} at {{ $labels.instance }} lacks placement labels"
           description: "The managed scrape target is missing region, cluster, or node_id. Placement-aware dashboards and alerts cannot identify where this target runs; reconcile its vmagent configuration."
 
+      - alert: NetworkObservationDeliveryStuck
+        expr: network_observer_prober_oldest_pending_seconds > 300 or network_observer_inbox_oldest_pending_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network observations are not arriving promptly"
+          description: "Observer {{ $labels.observer }} has observations queued for over five minutes. Inspect intake, application and the prober spool separately; do not delete queued evidence."
+
+      - alert: NetworkObservationDataLoss
+        expr: increase(network_observer_prober_dropped_records_total[15m]) > 0 or increase(network_observer_prober_quarantined_records_total[15m]) > 0 or clamp_min(delta(network_observer_inbox_rejected_records[15m]), 0) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network observation loss or rejected evidence needs review"
+          description: "Observer {{ $labels.observer }} reports dropped measurements or retained rejected records. Preserve original records and inspect rejection codes before replaying."
+
+      - alert: NetworkProberClockUntrusted
+        expr: abs(network_observer_prober_clock_skew_seconds) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network prober clock differs from the coordinator"
+          description: "Observer {{ $labels.observer }} has an untrusted clock. Check synchronization before admitting more measurements; preserve original timestamps."
+
+      - alert: NetworkProberControlStale
+        expr: time() - network_observer_prober_last_work_timestamp_seconds > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network prober control heartbeat is stale"
+          description: "Observer {{ $labels.observer }} has not polled successfully for more than two minutes. Its measurement coverage is unknown."
+
+      - alert: NetworkObservationHealthUnavailable
+        expr: network_observer_health_read_success == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network observation delivery health cannot be read"
+          description: "The observer cannot read delivery health from its owned database. A successful process scrape does not establish collection health."
+
       # Media-authority and durable-trigger safety alerts
       - alert: MediaAuthorityDeliveryStuck
         expr: commodore_media_authority_oldest_pending_seconds > 300

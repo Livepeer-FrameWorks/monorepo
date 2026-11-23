@@ -46,6 +46,7 @@ func TestDNSReportingContinuesWhileRPCIsBlocked(t *testing.T) {
 		for _, result := range batch.DNS {
 			dns <- result
 		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"accepted": true, "event_id": batch.ID})
 	}))
 	defer server.Close()
 	queue, err := telemetryspool.Open(telemetryspool.Config{Directory: t.TempDir()})
@@ -123,6 +124,7 @@ func TestReadinessAndDiscoveryAdmissionAreSeparate(t *testing.T) {
 				if len(batch.Results) != 0 {
 					delivered <- struct{}{}
 				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"accepted": true, "event_id": batch.ID})
 			}))
 			defer server.Close()
 			queue, err := telemetryspool.Open(telemetryspool.Config{Directory: t.TempDir()})

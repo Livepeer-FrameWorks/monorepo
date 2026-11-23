@@ -486,7 +486,9 @@ func main() {
 	// and append the observer's own /v1 paths. A prober polls work every five
 	// seconds and posts one batch per check, so each route has its own bucket.
 	app.GET("/network-observer/v1/work", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverWork", 60, 30), networkHandlers.ProberRelay("/v1/work"))
+	app.POST("/network-observer/v1/work", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverWork", 60, 30), networkHandlers.ProberRelay("/v1/work"))
 	app.POST("/network-observer/v1/observations", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverObservations", 1200, 600), networkHandlers.ProberRelay("/v1/observations"))
+	app.POST("/network-observer/v1/observation-batches", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverBatches", 1200, 600), networkHandlers.ProberRelay("/v1/observation-batches"))
 
 	// Public infrastructure-node enrollment endpoint. Takes a bootstrap token
 	// (validated server-side by Quartermaster) and a locally-generated

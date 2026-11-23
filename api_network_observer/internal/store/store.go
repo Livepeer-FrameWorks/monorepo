@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/lib/pq"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
@@ -166,22 +167,30 @@ func (s *Store) Update(ctx context.Context, apply func(*State, *sql.Tx) error) e
 			return err
 		}
 		for table, values := range after {
+			var ids, raws, removed []string
 			for id, raw := range values {
-				if before[table][id] == raw {
-					continue
+				if before[table][id] != raw {
+					ids = append(ids, id)
+					raws = append(raws, raw)
 				}
-				if _, err := tx.ExecContext(ctx, "INSERT INTO network_observer."+table+" (tenant_id,id,document) VALUES ($1,$2,$3::jsonb) ON CONFLICT (tenant_id,id) DO UPDATE SET document=EXCLUDED.document", s.TenantID, id, raw); err != nil {
+			}
+			if len(ids) > 0 {
+				if _, err := tx.ExecContext(ctx, "INSERT INTO network_observer."+table+"(tenant_id,id,document) SELECT $1,d.id,d.raw::jsonb FROM unnest($2::text[],$3::text[]) d(id,raw) ON CONFLICT(tenant_id,id) DO UPDATE SET document=EXCLUDED.document", s.TenantID, pq.Array(ids), pq.Array(raws)); err != nil {
 					return err
 				}
 			}
 			for id := range before[table] {
 				if _, ok := values[id]; !ok {
-					if _, err := tx.ExecContext(ctx, "DELETE FROM network_observer."+table+" WHERE tenant_id=$1 AND id=$2", s.TenantID, id); err != nil {
-						return err
-					}
+					removed = append(removed, id)
+				}
+			}
+			if len(removed) > 0 {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM network_observer."+table+" WHERE tenant_id=$1 AND id=ANY($2::text[])", s.TenantID, pq.Array(removed)); err != nil {
+					return err
 				}
 			}
 		}
+
 		return nil
 	})
 }

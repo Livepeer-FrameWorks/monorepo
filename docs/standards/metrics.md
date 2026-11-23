@@ -729,3 +729,20 @@ fresh snapshot can still serve requests briefly through an event outage, but the
 outage is not reported as healthy. Known revocations survive degraded delivery;
 otherwise valid interactive requests return Unavailable when the projection is
 unhydrated or the authority bound expires.
+
+### Network observation delivery
+
+The network-observer `/metrics` endpoint reports `network_observer_health_read_success`
+(gauge), `network_observer_inbox_pending_records` and
+`network_observer_inbox_oldest_pending_seconds` (gauges by observer), and
+`network_observer_inbox_rejected_records` (retained evidence gauge by observer/code).
+Prober control health supplies `network_observer_prober_last_work_timestamp_seconds`,
+`network_observer_prober_pending_records`,
+`network_observer_prober_oldest_pending_seconds`,
+`network_observer_prober_clock_skew_seconds` (gauges; clock offset is the minimum
+proved by the control request interval, excluding transit uncertainty), and
+`network_observer_prober_dropped_records_total` and
+`network_observer_prober_quarantined_records_total` (durable counters). Observer identities
+are bounded by enrollment limits; no endpoint URI or customer identity is a label.
+Backlog does not disable intake readiness: reception must remain available to drain
+retained measurements. Collection health and intake readiness are distinct signals.

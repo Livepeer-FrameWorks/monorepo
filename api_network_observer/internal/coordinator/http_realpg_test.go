@@ -5,7 +5,9 @@ package coordinator
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,6 +101,11 @@ func verifyObserverReplayRollbackAndRestart(t *testing.T, db *sql.DB) {
 		if w.Code != want {
 			t.Fatalf("%s %s status = %d (%s), want %d", method, path, w.Code, w.Body, want)
 		}
+		if method == "POST" && w.Code == 200 {
+			if err := current.Process(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
 		return w.Body.Bytes()
 	}
 	marshal := func(batch obs.Batch) []byte {
@@ -111,6 +118,9 @@ func verifyObserverReplayRollbackAndRestart(t *testing.T, db *sql.DB) {
 	}
 	getWork := func(current *API) obs.Work {
 		t.Helper()
+		if err := current.Process(ctx); err != nil {
+			t.Fatal(err)
+		}
 		var work obs.Work
 		if err := json.Unmarshal(request(current, "GET", "/v1/work?observer_id=eu&region=eu-west", nil, 200), &work); err != nil {
 			t.Fatal(err)
@@ -163,8 +173,15 @@ func verifyObserverReplayRollbackAndRestart(t *testing.T, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, constraint); err != nil {
 		t.Fatal(err)
 	}
-	request(api, "POST", "/v1/observations", marshal(batch), 503)
-	if count("endpoints", tenant) != 2 || count("ingest_receipts", tenant) != 2 || count("telemetry_outbox", tenant) != 2 {
+	rawFailed := marshal(batch)
+	sum := sha256.Sum256(rawFailed)
+	if err := api.Store.Receive(ctx, batch.ID, hex.EncodeToString(sum[:]), batch.ObserverID, "prober", rawFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Process(ctx); err == nil {
+		t.Fatal("injected outbox failure was hidden")
+	}
+	if count("endpoints", tenant) != 2 || count("ingest_receipts", tenant) != 3 || count("telemetry_outbox", tenant) != 2 {
 		t.Fatal("failed outbox write committed partial inventory or a replay receipt")
 	}
 	if _, err := db.ExecContext(ctx, "ALTER TABLE network_observer.telemetry_outbox DROP CONSTRAINT injected_outbox_failure"); err != nil {

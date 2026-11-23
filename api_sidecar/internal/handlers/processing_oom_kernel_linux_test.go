@@ -63,7 +63,7 @@ while True:
 		}
 		t.Fatalf("timed out waiting for %s; container logs: %s", description, docker("logs", name))
 	}
-	wait("processor setup", func() bool { _, err := os.Stat(filepath.Join(root, "ready")); return err == nil })
+	wait("processor setup", func() bool { _, statErr := os.Stat(filepath.Join(root, "ready")); return statErr == nil })
 	_, pids := processingResidentSnapshot("/proc", stream)
 	if len(pids) != 1 {
 		t.Fatalf("owned processor identity: %v", pids)
@@ -75,8 +75,8 @@ while True:
 		t.Fatalf("test needs distinct processor and observer cgroups: child=%q self=%q", childPath, selfPath)
 	}
 	policy := `[{"process":"AV","codec":"H264","resolution":"x720"}]`
-	if err := setProcessingProcessOverride(stream, policy, "kernel-oom", time.Now().Add(time.Minute), 128*memoryMiB); err != nil {
-		t.Fatal(err)
+	if overrideErr := setProcessingProcessOverride(stream, policy, "kernel-oom", time.Now().Add(time.Minute), 128*memoryMiB); overrideErr != nil {
+		t.Fatal(overrideErr)
 	}
 	stop := observeProcessingMemory(stream)
 	t.Cleanup(stop)
@@ -95,10 +95,10 @@ while True:
 		initial = process.initialKills
 		return observation.peak > 0
 	})
-	if err := os.WriteFile(filepath.Join(root, "start"), nil, 0600); err != nil {
-		t.Fatal(err)
+	if startErr := os.WriteFile(filepath.Join(root, "start"), nil, 0600); startErr != nil {
+		t.Fatal(startErr)
 	}
-	wait("kernel OOM kill", func() bool { _, err := os.Stat(filepath.Join(root, "exit")); return err == nil })
+	wait("kernel OOM kill", func() bool { _, statErr := os.Stat(filepath.Join(root, "exit")); return statErr == nil })
 	exit, err := os.ReadFile(filepath.Join(root, "exit"))
 	if err != nil || strings.TrimSpace(string(exit)) != "137" {
 		t.Fatalf("processor was not SIGKILLed: exit=%q err=%v", exit, err)

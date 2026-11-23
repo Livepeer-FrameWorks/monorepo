@@ -231,6 +231,45 @@ result_batch() {
             capabilities:["h264"], hardware:"stack-gpu"} else {} end)]}' "$work_dir/work.json"
 }
 
+log "durable receipt isolates poisoned records and carries control health"
+# The batch envelope preserves original bytes; bad timestamps are terminal in
+# the inbox rather than a retryable error that obstructs the prober's queue.
+python3 - "$PROBER" "$work_dir" <<'POISON'
+import base64,datetime,json,pathlib,sys,uuid
+observer,directory=sys.argv[1:]
+now=datetime.datetime.now(datetime.timezone.utc)
+records=[]
+for i in range(102):
+    at=now+datetime.timedelta(hours=1) if i<101 else now
+    record={"id":str(uuid.uuid4()),"observer_id":observer,"report":{"kind":"heartbeat","observed_at":at.isoformat(),"healthy":True}}
+    records.append(json.dumps(record,separators=(",",":")).encode())
+root=pathlib.Path(directory)
+root.joinpath("poison-ids").write_text(",".join("'"+json.loads(raw)["id"]+"'" for raw in records[:101]))
+root.joinpath("healthy-id").write_text(json.loads(records[-1])["id"])
+for offset in (0,64):
+    root.joinpath(f"bulk-{offset}.json").write_text(json.dumps({"records":[base64.b64encode(raw).decode() for raw in records[offset:offset+64]]}))
+POISON
+for offset in 0 64; do
+  check "bulk records have separate durable receipts ($offset)" [ "$(observer POST /v1/observation-batches "$SECRET" "$work_dir/bulk-$offset.json")" = 200 ]
+  check "every bulk record received a committed acknowledgement" json_has "$(body)" '.results | length > 0 and all(.accepted == true)'
+done
+POISON_IDS=$(cat "$work_dir/poison-ids")
+HEALTHY_ID=$(cat "$work_dir/healthy-id")
+poison_isolated() {
+  [ "$(pg network_observer "SELECT count(*) FROM network_observer.observation_inbox WHERE tenant_id='$TENANT' AND id IN ($POISON_IDS) AND status='rejected' AND error_code='CLOCK_INVALID' AND payload IS NULL")" = 101 ] &&
+  [ "$(pg network_observer "SELECT status FROM network_observer.observation_inbox WHERE tenant_id='$TENANT' AND id='$HEALTHY_ID'")" = applied ]
+}
+eventually 60 "101 invalid clocks become terminal and the following healthy record applies" poison_isolated
+# Work health bypasses measurement delivery. Restore healthy state immediately
+# after observing degradation so subsequent discovery checks remain eligible.
+jq -cn --arg id "$PROBER" --arg region "$REGION" '{observer_id:$id,region:$region,delivery:{sequence:1,capacity_available:false,pending_records:9999}}' >"$work_dir/control.json"
+check "control health uses the independent POST work path" [ "$(observer POST /v1/work "$SECRET" "$work_dir/control.json")" = 200 ]
+check "the receiver advertises bounded bulk capability" json_has "$(body)" '.control_version == 2 and .ingest_batch_records == 64 and .ingest_batch_bytes > 0'
+check "current delivery degradation is visible immediately" [ "$(observer GET /v1/inventory "$SECRET")" = 200 ]
+check "recent work polling cannot hide delayed delivery" json_has "$(body)" "any(.observers[]; .id == \"$PROBER\" and .collection_status == \"delayed\")"
+jq -cn --arg id "$PROBER" --arg region "$REGION" --arg at "$(now_rfc3339)" '{observer_id:$id,region:$region,delivery:{sequence:2,capacity_available:true,last_upload:$at,pending_records:0}}' >"$work_dir/control.json"
+check "restored delivery health is accepted" [ "$(observer POST /v1/work "$SECRET" "$work_dir/control.json")" = 200 ]
+
 log "scripted prober results"
 BATCH_A=$(new_id) RESULT_A=$(new_id)
 result_batch "$BATCH_A" "$RESULT_A" "$IP_A" true 42 "" >"$work_dir/a.json"

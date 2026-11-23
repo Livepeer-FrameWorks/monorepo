@@ -3,7 +3,7 @@
 
 set -e
 
-REPORT_DIR="reports"
+REPORT_DIR="${REPORT_DIR:-reports}"
 REPORT_FILE="$REPORT_DIR/lint-report.txt"
 
 mkdir -p "$REPORT_DIR"
@@ -11,11 +11,15 @@ mkdir -p "$REPORT_DIR"
 
 echo "Running golangci-lint on all Go modules..."
 
-for dir in $(find . -name "go.mod" -exec dirname {} \; | sort); do
+for dir in ${GO_SERVICES:-$(git ls-files -- 'go.mod' '*/go.mod' | xargs -n1 dirname | sort -u | sed 's|^|./|')}; do
     module_name=$(basename "$dir")
     echo "==> $module_name"
     echo "=== MODULE: $module_name ===" >> "$REPORT_FILE"
-    (cd "$dir" && golangci-lint run --timeout=5m ./... 2>&1) >> "$REPORT_FILE" || true
+    lint_args=(run --timeout=5m)
+    if [[ -n ${GO_BUILD_TAGS-nomsgpack} ]]; then
+        lint_args+=("--build-tags=${GO_BUILD_TAGS-nomsgpack}")
+    fi
+    (cd "$dir" && golangci-lint "${lint_args[@]}" ./... 2>&1) >> "$REPORT_FILE" || true
     echo "" >> "$REPORT_FILE"
 done
 

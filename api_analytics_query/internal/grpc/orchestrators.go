@@ -616,7 +616,7 @@ func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantI
 
 func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
 	latestWhere := "tenant_id = ?"
-	geoWhere := "tenant_id = ? AND geo_source != 'unknown' AND (latitude != 0 OR longitude != 0)"
+	geoWhere := "tenant_id = ? AND geo_source NOT IN ('unknown','') AND isFinite(latitude) AND isFinite(longitude) AND abs(latitude)<=90 AND abs(longitude)<=180 AND (latitude != 0 OR longitude != 0)"
 	args := []any{tenantID, tenantID}
 	if orchAddr != "" {
 		latestWhere += " AND orch_addr = ?"
@@ -624,6 +624,7 @@ func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
 		args = []any{tenantID, orchAddr, tenantID, orchAddr}
 	}
 
+	preferHistorical := "ifNull(geo.geo_found,0)=1 AND (latest.geo_source IN ('unknown','') OR NOT isFinite(latest.latitude) OR NOT isFinite(latest.longitude) OR abs(latest.latitude)>90 OR abs(latest.longitude)>180 OR (latest.latitude=0 AND latest.longitude=0) OR geo.latest_geo_resolved_at>=latest.geo_resolved_at)"
 	query := fmt.Sprintf(`
 		WITH latest AS (
 			SELECT tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,
@@ -634,22 +635,20 @@ func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
 	),
 	geo AS (
 		SELECT tenant_id, gateway_id, orch_addr, resolved_ip,
-		       argMax(latitude, timestamp) AS geo_latitude,
-		       argMax(longitude, timestamp) AS geo_longitude,
-		       argMax(country_code, timestamp) AS geo_country_code,
-		       argMax(geo_source, timestamp) AS latest_geo_source,
+		       argMax(tuple(latitude,longitude,country_code,geo_source), timestamp) AS geo_position,
+		       toUInt8(1) AS geo_found,
 		       max(timestamp) AS latest_geo_resolved_at
 		FROM periscope.orchestrator_discovery_samples
 		WHERE %s
 		GROUP BY tenant_id, gateway_id, orch_addr, resolved_ip
 	)
 	SELECT latest.tenant_id, latest.gateway_id, latest.gateway_region, latest.orch_addr, latest.resolved_ip,
-	       coalesce(geo.geo_latitude, latest.latitude) AS latitude,
-	       coalesce(geo.geo_longitude, latest.longitude) AS longitude,
-	       latest.city,
-	       coalesce(geo.geo_country_code, latest.country_code) AS country_code,
-	       coalesce(geo.latest_geo_source, latest.geo_source) AS geo_source,
-	       coalesce(geo.latest_geo_resolved_at, latest.geo_resolved_at) AS geo_resolved_at,
+	       if(%[3]s,tupleElement(geo.geo_position,1),latest.latitude) AS latitude,
+	       if(%[3]s,tupleElement(geo.geo_position,2),latest.longitude) AS longitude,
+	       if(%[3]s,'',latest.city) AS city,
+	       if(%[3]s,tupleElement(geo.geo_position,3),latest.country_code) AS country_code,
+	       if(%[3]s,tupleElement(geo.geo_position,4),latest.geo_source) AS geo_source,
+	       if(%[3]s,geo.latest_geo_resolved_at,latest.geo_resolved_at) AS geo_resolved_at,
 	       latest.latest_latency_ms, latest.score, latest.dialed_recently, latest.last_seen
 		FROM latest
 		LEFT JOIN geo
@@ -660,6 +659,7 @@ func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
 		ORDER BY latest.orch_addr ASC, latest.gateway_id ASC, latest.resolved_ip ASC`,
 		latestWhere,
 		geoWhere,
+		preferHistorical,
 	)
 	return query, args
 }

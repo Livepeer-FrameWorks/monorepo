@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"frameworks/api_network_observer/internal/appconfig"
@@ -121,21 +120,17 @@ func main() {
 			}
 		}
 	}()
-	var definitions []obs.Observer
-	if err = json.Unmarshal([]byte(cfg.ObserverDefinitions), &definitions); err != nil {
+	api.Definitions, err = coordinator.ObserverDefinitions(cfg.ObserverDefinitions)
+	if err != nil {
 		logger.WithError(err).Fatal("Invalid observer definitions")
 	}
 	if err = api.Store.Update(ctx, func(s *store.State, _ *sql.Tx) error {
-		for _, o := range definitions {
-			if old, ok := s.Observers[o.ID]; ok {
-				o.LastSeen = old.LastSeen
-			}
-			s.Observers[o.ID] = o
-		}
+		coordinator.ReconcileObserverDefinitions(s, api.Definitions, time.Now().UTC())
 		return nil
 	}); err != nil {
 		logger.WithError(err).Fatal("Observer schema unavailable")
 	}
+
 	sender, err := decklog.NewBatchedClient(decklog.BatchedClientConfig{Target: cfg.DecklogGRPCAddr, ServiceToken: cfg.ServiceToken, Source: "network-observer", ClusterID: cfg.ClusterID, AllowInsecure: cfg.AllowInsecure, CACertFile: cfg.CAPath}, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Decklog connection configuration invalid")
@@ -185,23 +180,33 @@ func main() {
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
+		prune := time.NewTicker(time.Hour)
+		defer prune.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case now := <-ticker.C:
-				if scheduleErr := api.Store.Update(ctx, func(s *store.State, tx *sql.Tx) error {
-					engine.Schedule(s, now.UTC())
-					_, pruneErr := tx.ExecContext(ctx, "DELETE FROM network_observer.ingest_receipts WHERE tenant_id=$1 AND received_at<now()-interval '30 days'", cfg.TenantID)
-					return pruneErr
-				}); scheduleErr != nil {
-					logger.WithError(scheduleErr).Warn("Assignment scheduling failed")
+			case <-ticker.C:
+				for ctx.Err() == nil {
+					n, processErr := api.ProcessBatch(ctx)
+					if processErr != nil {
+						logger.WithError(processErr).Warn("Observation inbox processing failed")
+						break
+					}
+					if n < 64 {
+						break
+					}
+				}
+			case <-prune.C:
+				if pruneErr := api.Store.Update(ctx, func(_ *store.State, tx *sql.Tx) error { return api.Store.Prune(ctx, tx) }); pruneErr != nil {
+					logger.WithError(pruneErr).Warn("Observation evidence pruning failed")
 				}
 			}
 		}
 	}()
+
 	handler := api.Handler()
 	plainListener, err := server.ListenAddrs(cfg.BindAddrs, cfg.HTTPPort)
 	if err != nil {
@@ -235,12 +240,12 @@ func main() {
 	}
 }
 
-// probesOnly limits the plain listener to health and readiness once the
+// probesOnly limits the plain listener to probes and metrics once the
 // internal TLS listener carries the API, so the bearer secret never crosses the
 // mesh in plaintext.
 func probesOnly(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/ready") {
+		if r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics") {
 			handler.ServeHTTP(w, r)
 			return
 		}

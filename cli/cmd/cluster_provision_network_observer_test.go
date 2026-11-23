@@ -305,3 +305,12 @@ func TestNetworkObserverMeshURLUsesAggregatorRegionAlias(t *testing.T) {
 		t.Fatal("observer registration with Quartermaster is not a required dependency")
 	}
 }
+
+func TestNetworkObserverDeliveryMetricsAreScraped(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production", Hosts: map[string]inventory.Host{"core": {ExternalIP: "192.0.2.1"}}, Services: map[string]inventory.ServiceConfig{"observer": {Enabled: true, Deploy: "network-observer", Host: "core"}}}
+	targets := buildVMAgentScrapeTargets(manifest, "core")
+	target := findScrapeTarget(t, targets, "observer", "127.0.0.1:18024")
+	if target["path"] != "/metrics" {
+		t.Fatalf("observation delivery metrics are not scraped: %v", target)
+	}
+}

@@ -1,0 +1,39 @@
+rule_files:
+  - ../frameworks.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: network_observer_inbox_rejected_records{observer="site",code="CLOCK_INVALID"}
+        values: "0x2 101x35"
+    alert_rule_test:
+      - eval_time: 5m
+        groupname: frameworks.rules
+        alertname: NetworkObservationDataLoss
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              observer: site
+              code: CLOCK_INVALID
+            exp_annotations:
+              summary: Network observation loss or rejected evidence needs review
+              description: Observer site reports dropped measurements or retained rejected records. Preserve original records and inspect rejection codes before replaying.
+      - eval_time: 25m
+        groupname: frameworks.rules
+        alertname: NetworkObservationDataLoss
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: network_observer_health_read_success{instance="observer"}
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: NetworkObservationHealthUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: observer
+            exp_annotations:
+              summary: Network observation delivery health cannot be read
+              description: The observer cannot read delivery health from its owned database. A successful process scrape does not establish collection health.

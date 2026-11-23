@@ -1,7 +1,6 @@
 package coordinator
 
 import (
-	"fmt"
 	"frameworks/api_network_observer/internal/store"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	"github.com/google/uuid"
@@ -63,49 +62,65 @@ func (e Engine) endpoint(s *store.State, r obs.Resource, ip string, now time.Tim
 	}
 	s.Endpoints[p.ID] = p
 }
-func (e Engine) Apply(s *store.State, b obs.Batch, now time.Time) error {
+func (e Engine) Validate(s *store.State, b obs.Batch, now time.Time) error {
 	if _, err := uuid.Parse(b.ID); err != nil {
-		return fmt.Errorf("invalid batch ID")
+		return reject("BATCH_ID_INVALID", "invalid batch ID")
 	}
 	if _, ok := s.Observers[b.ObserverID]; !ok {
-		return fmt.Errorf("unregistered observer")
+		return reject("OBSERVER_UNKNOWN", "unregistered observer")
 	}
 	if len(b.DNS)+len(b.Results) > 1000 {
-		return fmt.Errorf("batch too large")
+		return reject("BATCH_TOO_LARGE", "batch too large")
 	}
-	if b.Report != nil && (b.Report.ObservedAt.IsZero() || b.Report.ObservedAt.After(now.Add(time.Minute)) || now.Sub(b.Report.ObservedAt) > 30*24*time.Hour || (b.Report.Kind != "heartbeat" && b.Report.Kind != "dns_cycle")) {
-		return fmt.Errorf("invalid observer report")
+	if b.Report != nil {
+		r := b.Report
+		if r.Kind != "heartbeat" && r.Kind != "dns_cycle" {
+			return reject("REPORT_KIND_INVALID", "invalid observer report kind")
+		}
+		if r.ObservedAt.IsZero() || r.ObservedAt.After(now.Add(time.Minute)) {
+			return reject("CLOCK_INVALID", "invalid observer report time")
+		}
+		if now.Sub(r.ObservedAt) > 30*24*time.Hour {
+			return reject("OUTSIDE_RETENTION", "observer report outside retention")
+		}
 	}
+
 	// Validate the entire batch before mutating any state.
 	for _, d := range b.DNS {
 		r, ok := s.Resources[d.Resource.Key()]
 		if !ok || r.URI != d.Resource.URI {
-			return fmt.Errorf("unknown catalog resource")
+			return reject("CATALOG_RESOURCE_UNKNOWN", "unknown catalog resource")
 		}
 		if d.ObservedAt.IsZero() || d.ObservedAt.After(now.Add(time.Minute)) || now.Sub(d.ObservedAt) > 30*24*time.Hour {
-			return fmt.Errorf("invalid DNS observation time")
+			return reject("CLOCK_INVALID", "invalid DNS observation time")
 		}
 		if len(d.IPs) > 256 {
-			return fmt.Errorf("too many DNS answers")
+			return reject("DNS_TOO_LARGE", "too many DNS answers")
 		}
 	}
 	for _, v := range b.Results {
 		if _, err := uuid.Parse(v.ID); err != nil {
-			return fmt.Errorf("invalid result ID")
+			return reject("RESULT_ID_INVALID", "invalid result ID")
 		}
 		a, ok := s.Assignments[v.AssignmentID]
 		if !ok || a.ObserverID != b.ObserverID || a.Endpoint.ID != v.EndpointID || v.Check.ObserverID != b.ObserverID {
-			return fmt.Errorf("unknown assignment")
+			return reject("ASSIGNMENT_UNKNOWN", "unknown assignment")
 		}
 		if v.Check.ObservedAt.Before(a.DueAt.Add(-time.Second)) || v.Check.ObservedAt.After(a.Deadline.Add(time.Minute)) {
-			return fmt.Errorf("invalid check time")
+			return reject("CLOCK_INVALID", "invalid check time")
 		}
 		if v.Check.Success && (!v.Check.Qualifying || v.Check.ActualIP != a.Endpoint.IP) {
-			return fmt.Errorf("unattributed success")
+			return reject("RESULT_UNATTRIBUTED", "unattributed success")
 		}
 		if len(v.Hardware) > 65536 || len(v.Capabilities) > 256 {
-			return fmt.Errorf("result too large")
+			return reject("RESULT_TOO_LARGE", "result too large")
 		}
+	}
+	return nil
+}
+func (e Engine) Apply(s *store.State, b obs.Batch, now time.Time) error {
+	if err := e.Validate(s, b, now); err != nil {
+		return err
 	}
 	for _, d := range b.DNS {
 		if d.ErrorKind == "" {
@@ -170,10 +185,10 @@ func (e Engine) Schedule(s *store.State, now time.Time) {
 	observers := []obs.Observer{}
 	healthy := map[string]bool{}
 	for _, o := range s.Observers {
-		if o.Kind != "gateway" {
+		if o.Kind != "gateway" && (o.Delivery == nil || o.Delivery.Healthy(now)) {
 			observers = append(observers, o)
 		}
-		healthy[o.ID] = now.Sub(o.LastSeen) <= 2*time.Minute && !o.LastSeen.IsZero()
+		healthy[o.ID] = now.Sub(o.LastSeen) <= 2*time.Minute && !o.LastSeen.IsZero() && (o.Delivery == nil || o.Delivery.Healthy(now))
 	}
 	pending := map[string][]obs.Assignment{}
 	for _, a := range s.Assignments {
