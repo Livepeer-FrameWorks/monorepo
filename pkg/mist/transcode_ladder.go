@@ -75,6 +75,11 @@ func lpmsProfiles(renditions []contract.RenditionSpec, shortSide bool) []Livepee
 			}
 			p["track_inhibit"] = inhibit
 		}
+		// A named height-only rung is satisfied by an original track that
+		// already matches it, so Mist produces no rendition for it.
+		if shortSide && w == 0 && h > 0 {
+			p["track_retain"] = RetainSelector(RetainRung{ShortSide: h, Bitrate: r.Bitrate})
+		}
 		out = append(out, p)
 	}
 	return out
