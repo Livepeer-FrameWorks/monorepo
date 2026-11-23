@@ -2162,6 +2162,9 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 				if rotation, ok := mapInt64(track, "rotation"); ok {
 					t.rotation = int(rotation)
 				}
+				if mirror, ok := track["mirror"].(bool); ok {
+					t.mirror = mirror
+				}
 				if v, ok := track["width"].(float64); ok {
 					t.width = int(v)
 				}
@@ -2226,6 +2229,7 @@ type processingMetaVideoTrack struct {
 	width         int
 	height        int
 	rotation      int
+	mirror        bool
 	bps           uint64 // Mist track bps: bytes per second
 	firstms       float64
 	lastms        float64
@@ -2465,6 +2469,9 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		}
 		if rotation, ok := mapInt64(track, "rotation"); ok {
 			t.rotation = int(rotation)
+		}
+		if mirror, ok := track["mirror"].(bool); ok {
+			t.mirror = mirror
 		}
 		if v, ok := track["lastms"].(float64); ok {
 			t.lastms = v
@@ -2776,6 +2783,12 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 			continue
 		}
 		t := processingMetaVideoTrack{codec: codec, name: names[i], source: stringField(track, "source"), bps: healthTrackBps(track)}
+		if rotation, ok := mapInt64(track, "rotation"); ok {
+			t.rotation = int(rotation)
+		}
+		if mirror, ok := track["mirror"].(bool); ok {
+			t.mirror = mirror
+		}
 		if v, ok := track["width"].(float64); ok {
 			t.width = int(v)
 		}

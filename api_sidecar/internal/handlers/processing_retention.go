@@ -47,6 +47,7 @@ func retentionTracks(videoTracks []processingMetaVideoTrack, sourceIDs map[int64
 		infos[rank] = mist.TrackInfo{
 			Index: rank, Codec: t.codec, Width: t.width, Height: t.height, Bps: t.bps,
 			Original: original[pos], Image: mist.IsImageVideoCodec(t.codec),
+			Rotation: t.rotation, Mirror: t.mirror,
 		}
 	}
 	return infos, positions
@@ -59,9 +60,23 @@ func readinessVideoTracks(outputs map[string]string) []mist.TrackInfo {
 	if raw == "" {
 		return nil
 	}
-	var tracks []mist.TrackInfo
-	if err := json.Unmarshal([]byte(raw), &tracks); err != nil {
+	var snapshot []struct {
+		mist.TrackInfo
+		Rotation *int  `json:"rotation"`
+		Mirror   *bool `json:"mirror"`
+	}
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
 		return nil
+	}
+	tracks := make([]mist.TrackInfo, len(snapshot))
+	for i, track := range snapshot {
+		// A cache without orientation cannot prove an upright original. Reserving
+		// its encoder until readiness refreshes the cache matches unknown tracks.
+		if track.Rotation == nil || track.Mirror == nil {
+			return nil
+		}
+		tracks[i] = track.TrackInfo
+		tracks[i].Rotation, tracks[i].Mirror = *track.Rotation, *track.Mirror
 	}
 	return tracks
 }

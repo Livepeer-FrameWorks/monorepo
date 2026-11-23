@@ -290,3 +290,34 @@ func TestExpectedVideoRenditionsRejectsUnknownRetainSelector(t *testing.T) {
 		t.Error("unknown track_retain selector accepted")
 	}
 }
+
+func TestRetainedRungRequiresUprightUnreflectedOriginal(t *testing.T) {
+	for _, rotation := range []int{0, 90, 180, 270, -90, 360, 450} {
+		for _, mirror := range []bool{false, true} {
+			t.Run(fmt.Sprintf("rotation%d_mirror%t", rotation, mirror), func(t *testing.T) {
+				var tracks []TrackInfo
+				encoded := fmt.Sprintf(`[{"Index":0,"Codec":"H264","Width":1920,"Height":1080,"Bps":975000,"Original":true,"rotation":%d,"mirror":%t}]`, rotation, mirror)
+				if err := json.Unmarshal([]byte(encoded), &tracks); err != nil {
+					t.Fatal(err)
+				}
+				plan := PlanRetention(tracks, []RetainRung{{ShortSide: 1080, Bitrate: 7800000}})
+				if plan.Source != 0 {
+					t.Fatal("orientation must not disqualify the original as the decode source")
+				}
+				wantRetained := rotation%360 == 0 && !mirror
+				if got := plan.Rungs[0].Track >= 0; got != wantRetained {
+					t.Fatalf("retained=%t want=%t: transformed originals must be rendered upright, as Mist does", got, wantRetained)
+				}
+				policy := `[{"process":"AV","codec":"H264","resolution":"x1080","bitrate":7800000,"track_retain":"` + RetainSelector(RetainRung{ShortSide: 1080, Bitrate: 7800000}) + `"}]`
+				source := SourceMediaInfo{VideoCodec: "H264", Width: 1920, Height: 1080, Rotation: rotation, Mirror: mirror}
+				bytes, err := EstimateProcessingMemory(policy, source, tracks...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (bytes == 0) != wantRetained {
+					t.Fatalf("memory=%d retained=%t: an upright encoder must be reserved for every transformed original", bytes, wantRetained)
+				}
+			})
+		}
+	}
+}

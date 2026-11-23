@@ -247,3 +247,59 @@ func TestCompletedResultDropsReadinessTrackList(t *testing.T) {
 		t.Fatal("Helmsman-internal readiness track list reached Foghorn")
 	}
 }
+
+func TestReadinessRetentionPreservesEveryOriginalOrientation(t *testing.T) {
+	for _, rotation := range []int{0, 90, 180, 270} {
+		for _, mirror := range []bool{false, true} {
+			health := map[string]interface{}{"video_H264_1920x1080_0": map[string]interface{}{
+				"codec": "H264", "width": float64(1920), "height": float64(1080),
+				"idx": float64(0), "id": float64(1), "kbits": float64(7617),
+				"rotation": float64(rotation), "mirror": mirror,
+			}}
+			outputs := extractActiveStreamMetadata(map[string]interface{}{"lastms": float64(30000), "health": health})
+			tracks := readinessVideoTracks(outputs)
+			if len(tracks) != 1 {
+				t.Fatalf("readiness lost the original track: %+v", outputs)
+			}
+			plan := mist.PlanRetention(tracks, []mist.RetainRung{{ShortSide: 1080, Bitrate: 7800000}})
+			wantRetained := rotation == 0 && !mirror
+			if got := plan.Rungs[0].Track >= 0; got != wantRetained {
+				t.Fatalf("rotation=%d mirror=%t retained=%t want=%t: readiness stripped the original orientation", rotation, mirror, got, wantRetained)
+			}
+		}
+	}
+}
+
+func TestReadinessRetentionRejectsCacheWithoutOrientation(t *testing.T) {
+	legacy := `[{"Index":0,"Codec":"H264","Width":1920,"Height":1080,"Bps":975000,"Original":true,"Image":false}]`
+	if tracks := readinessVideoTracks(map[string]string{processingSourceVideoTracksOutput: legacy}); len(tracks) != 0 {
+		t.Fatalf("cached tracks without orientation cannot prove an upright retained original: %+v", tracks)
+	}
+}
+
+func TestRecordingRetentionDoesNotReselectTransformedOriginal(t *testing.T) {
+	for _, rotation := range []int{0, 90, 180, 270} {
+		for _, mirror := range []bool{false, true} {
+			raw := map[string]interface{}{"video_H264_1920x1080_0": map[string]interface{}{
+				"type": "video", "codec": "H264", "width": float64(1920), "height": float64(1080),
+				"idx": float64(0), "id": float64(1), "bps": float64(bps1080InBand), "kbits": float64(7617),
+				"rotation": float64(rotation), "mirror": mirror,
+			}}
+			variants := [][]processingMetaVideoTrack{
+				parseProcessingMetaVideoTracks(map[string]interface{}{"tracks": raw}),
+				inspectProcessingActiveStream(map[string]interface{}{"health": raw}).videoTracks,
+			}
+			for _, tracks := range variants {
+				source := mist.SourceMediaInfo{VideoCodec: "H264", Width: 1920, Height: 1080, Rotation: rotation, Mirror: mirror}
+				got := processingRecordingVideoSelector(quietLog(), retentionLadder(t), tracks, source)
+				want := "all,!i1"
+				if rotation == 0 && !mirror {
+					want = "all"
+				}
+				if got != want {
+					t.Fatalf("rotation=%d mirror=%t selector=%q want=%q", rotation, mirror, got, want)
+				}
+			}
+		}
+	}
+}
