@@ -1764,12 +1764,21 @@ func hostFromBaseURL(baseURL string) string {
 // AliveNodeIDs returns IDs of nodes with a recent heartbeat within the given threshold.
 // Used by edge health sync to report alive nodes to Quartermaster.
 func (sm *StreamStateManager) AliveNodeIDs(staleThreshold time.Duration) []string {
+	return sm.recentNodeIDs(staleThreshold, true)
+}
+
+// ConnectedNodeIDs retains nodes whose control heartbeat is fresh even while Mist is unhealthy.
+func (sm *StreamStateManager) ConnectedNodeIDs(staleThreshold time.Duration) []string {
+	return sm.recentNodeIDs(staleThreshold, false)
+}
+
+func (sm *StreamStateManager) recentNodeIDs(staleThreshold time.Duration, requireHealthy bool) []string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	cutoff := time.Now().Add(-staleThreshold)
 	var ids []string
 	for id, n := range sm.nodes {
-		if n.LastHeartbeat.After(cutoff) && n.IsHealthy {
+		if n.LastHeartbeat.After(cutoff) && (!requireHealthy || n.IsHealthy) {
 			ids = append(ids, id)
 		}
 	}
