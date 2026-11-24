@@ -217,9 +217,13 @@ else
     "${live_ingest_url:-missing-mkv-ingest-url}" > "$work/live-publisher.log" 2>&1 &
   live_pub=$!
   live_rotation_routed() {
-    local quoted rows runtime
+    local quoted rows runtime='' database
     kill -0 "$live_pub" 2>/dev/null || return 2
-    runtime=$(pg "$FOGHORN_A_DB" "SELECT runtime_name FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name='$live_internal' AND ended_at IS NULL AND projection_state='active' ORDER BY started_at DESC LIMIT 1") || return 1
+    # The resolved MKV URL may place the publisher in either cell.
+    for database in "$FOGHORN_A_DB" "$FOGHORN_B_DB"; do
+      [ -z "$runtime" ] || break
+      runtime=$(pg "$database" "SELECT runtime_name FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name='$live_internal' AND ended_at IS NULL AND projection_state='active' ORDER BY started_at DESC LIMIT 1") || return 1
+    done
     [ -n "$runtime" ] || return 1
     quoted=$(jq -cn --arg stream "$runtime" '$stream') || return 1
     rows=$(log_json "$live_started" "select(.routing==\"source_rotated\" and (.stream_name // .stream // \"\")==$quoted)" edge edge-b) || return 1
