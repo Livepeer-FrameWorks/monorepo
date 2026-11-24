@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: unsafe, lowers an edge's logical capacity and restarts its Helmsman
-# An edge over its freeze threshold reclaims everything it may: the relay's
+# An edge over its freeze threshold reclaims eligible data: the relay's
 # block caches in every cache root (upload sources included) and sidecars whose
 # media is gone, and its cleanup pass evicts the lowest-priority durable
 # artifacts, a finished recording among them, until usage of the whole store
@@ -57,11 +57,19 @@ PUB=$(publish "$EDGE_A_RTMP" "$(echo "$S" | jq -r '.streamKey')" 640x360 15 40)
 render_mp4 "$STACK_STATE_DIR/pressure-vod.mp4" 854x480 15 20 || { fail "render VOD source"; finish; }
 V=$(upload_vod "$STACK_STATE_DIR/pressure-vod.mp4" "stack pressure vod")
 VID=$(echo "$V" | jq -r '.id // empty')
+VHASH=$(echo "$V" | jq -r '.artifactHash // empty')
+case "$VHASH" in ''|*[!a-zA-Z0-9_-]*) fail "invalid uploaded artifact hash"; finish ;; esac
 [ -n "$VID" ] || { fail "upload: $V"; finish; }
 vod_ready() { [ "$(vod_status "$VID")" = READY ]; }
 eventually 300 "uploaded VOD READY" vod_ready || finish
 upload_blocks() { edge_sh "find $STORE/upload -maxdepth 1 -type d -name '*.blocks' 2>/dev/null"; }
-[ -n "$(upload_blocks)" ] || { fail "arrange: processing the upload left no upload/*.blocks cache on $EDGE_SERVICE"; finish; }
+upload_cache_reclaimed() {
+  local left
+  left=$(edge_sh "find $STORE/upload -maxdepth 1 -type d -name '$VHASH.*.blocks' 2>/dev/null") || return 1
+  [ -z "$left" ]
+}
+[ -n "$(edge_sh "find $STORE/upload -maxdepth 1 -type d -name '$VHASH.*.blocks' 2>/dev/null")" ] ||
+  { fail "arrange: processing this upload left no upload/$VHASH.*.blocks cache on $EDGE_SERVICE"; finish; }
 
 wait_publisher "$PUB" 120 || fail "publisher still running 120s after it started"
 PUB=""
@@ -109,6 +117,11 @@ age_synced_pressure_fixture_cache || { fail "arrange: age durable completed fixt
 # Make this recording older than the shared cache fixtures so its durability
 # verdict is exercised before other cache candidates can satisfy the target.
 DVR_OLD=$((OLD - 31536000))
+# Place this upload first among ordinary block-cache candidates. A pass stops
+# once it reaches its target, so newer unrelated caches may correctly remain.
+UPLOAD_OLD=$((DVR_OLD - 1))
+as_helmsman "find '$STORE/upload' -maxdepth 1 -type d -name '$VHASH.*.blocks' -exec touch -d @$UPLOAD_OLD {} +" ||
+  { fail "arrange: prioritize the fixture's upload cache"; finish; }
 as_helmsman "find '$DVR_DIR' -type f -exec touch -d @$DVR_OLD {} +" || { fail "arrange: prioritize the recording's eviction"; finish; }
 
 # cap_at <percent>: a logical capacity that puts the edge's storage at that
@@ -145,7 +158,8 @@ eventually 420 "the cleanup monitor ran a cleanup pass" cleanup_pass
 
 log "invariants"
 blocks_left=$(upload_blocks)
-check "no upload block cache left after the pass (left: ${blocks_left:-none})" [ -z "$blocks_left" ]
+echo "    remaining upload block caches: ${blocks_left:-none}"
+check "the prioritized upload block cache is reclaimed before durable media" upload_cache_reclaimed
 orphan_gone() { edge_sh "[ ! -e $ORPHAN ]"; }
 check "the orphan sidecar is reclaimed" orphan_gone
 # The cleanup monitor frees the lowest-priority evictable artifacts until usage

@@ -72,3 +72,16 @@ if pressure_dvr_durability_verified since recording; then echo 'missing DVR verd
 EVENTS='{"asset_hash":"recording","msg":"Asset durable copy verified, safe to delete local copy"}'
 pressure_dvr_durability_verified since recording
 if pressure_dvr_durability_verified since "bad';hash"; then echo 'unsafe DVR hash accepted' >&2; exit 1; fi
+
+# The pressure pass stops at its target; another cache may correctly remain.
+eval "$(sed -n '/^upload_cache_reclaimed() {/,/^}/p' "$here/scenarios/43-storage-pressure-reclaim.sh")"
+edge_sh() { bash -c "$1"; }
+upload_blocks() { find "$STORE/upload" -maxdepth 1 -type d -name '*.blocks'; }
+VHASH=delivered
+mkdir -p "$STORE/upload/unrelated.mp4.blocks"
+if ! upload_cache_reclaimed; then echo 'another cache incorrectly fails the completed pressure fixture' >&2; exit 1; fi
+mkdir -p "$STORE/upload/delivered.mp4.blocks"
+if upload_cache_reclaimed; then echo 'the fixture cache remained but reclamation passed' >&2; exit 1; fi
+edge_sh() { return 1; }
+if upload_cache_reclaimed; then echo 'unreadable cache inventory falsely proved reclamation' >&2; exit 1; fi
+printf 'storage pressure target scope: ok\n'
