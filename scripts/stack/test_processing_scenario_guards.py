@@ -17,6 +17,44 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_local_recording_measures_increment_above_rtmp_ack_traffic(self):
+        # The real CBR trace has 0.83-0.88 Mb/s of outgoing TCP ACKs before S3.
+        baseline = [dict(lastHeartbeat=str(i), observedSource="OBSERVED_SOURCE_NIC",
+                         bandwidthDownMbps=4.73, bandwidthUpMbps=up)
+                    for i, up in enumerate((0.83, 0.87))]
+        recording = [dict(baseline[0], lastHeartbeat=str(i + 2), bandwidthUpMbps=up)
+                     for i, up in enumerate((0.863592, 0.858264, 0.886896, 0.864752))]
+        predicates = "\n".join(function("70-node-capacity.sh", name) for name in
+                               ("dvr_network_baseline", "local_recording_network_matches", "upload_network_matches"))
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "baseline.jsonl"
+            samples = Path(tmp) / "recording.jsonl"
+            def write(path, rows):
+                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            write(base, baseline)
+            cases = [("ack-only", recording, True),
+                     ("real-egress", [dict(row, bandwidthUpMbps=1.5) for row in recording], False),
+                     ("missing-rate", [dict(row, bandwidthUpMbps=None) for row in recording], False),
+                     ("missing-sample", recording[:3], False),
+                     ("repeated-heartbeat", [recording[0]] * 4, False),
+                     ("non-NIC", [dict(row, observedSource="UNKNOWN") for row in recording], False)]
+            for name, rows, expected in cases:
+                with self.subTest(case=name):
+                    write(samples, rows)
+                    script = 'set -euo pipefail\n' + predicates
+                    script += '\nbaseline_up=$(dvr_network_baseline ' + shlex.quote(str(base)) + ')\n'
+                    script += 'local_recording_network_matches ' + shlex.quote(str(samples))
+                    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+            for up, expected in ((0.87, False), (1.5, True)):
+                script = 'set -euo pipefail\n' + predicates + '\nbaseline_up=0.85\nupload_network_matches'
+                result = subprocess.run(["bash", "-c", script], input=json.dumps(dict(baseline[0], bandwidthUpMbps=up)), capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+            for bad in (baseline[:1], [dict(row, bandwidthUpMbps=None) for row in baseline], [baseline[0]] * 2):
+                write(base, bad)
+                result = subprocess.run(["bash", "-c", predicates + '\ndvr_network_baseline ' + shlex.quote(str(base))], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, "invalid baseline cannot prove disk-only recording")
+
     def test_local_ladders_may_run_concurrently_only_within_reserved_memory(self):
         predicate = function("66-transcode-ladders.sh", "local_jobs_have_reserved_capacity")
         row = {"artifact_hash": "first", "status": "processing", "retry_count": 0,
