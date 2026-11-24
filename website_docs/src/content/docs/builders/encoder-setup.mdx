@@ -140,8 +140,8 @@ URL for a protocol that cannot follow redirects:
 curl %PLAY_URL%/ingest/{stream-key}
 ```
 
-RTMP and SRT have no redirect mechanism, so those protocols use either the geo-DNS `%INGEST_HOSTNAME%`
-name above or the `rtmpUrl` / `srtUrl` from that JSON response.
+RTMP, SRT and HTTP MKV pushes do not follow this redirect, so those protocols use either the geo-DNS
+`%INGEST_HOSTNAME%` name above or the `rtmpUrl` / `srtUrl` / `mkvUrl` from that JSON response.
 
 ## HTTP Matroska (MKV)
 
@@ -163,9 +163,15 @@ ffmpeg -re -i input.mp4 \
 ```
 
 The request stays open for as long as the stream is live; closing it ends the session. Matroska
-keeps track metadata such as a rotation flag. A self-hosted proxy in front of the edge must stream request bodies to MistServer
-instead of buffering them. The `/ingest/{stream-key}` front door does not return an MKV URL; use
-`%INGEST_URL%` directly.
+keeps track metadata such as a rotation flag. A self-hosted proxy in front of the edge must stream
+request bodies to MistServer instead of buffering them.
+
+For a specific edge that runs MistServer's Matroska output, ask the front door with
+`?protocol=mkv` and use the `mkvUrl` from the JSON response:
+
+```bash
+curl '%PLAY_URL%/ingest/{stream-key}?protocol=mkv'
+```
 
 ## Choosing the Right Bitrate
 
