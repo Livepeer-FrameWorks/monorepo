@@ -165,3 +165,14 @@ func TestMKVIngestRequiresTheEBMLOutput(t *testing.T) {
 		t.Fatal("non-canonical protocol name accepted")
 	}
 }
+
+func TestResolveIngestURLsReturnsMKVOnlyForTheEBMLOutput(t *testing.T) {
+	outputs := map[string]any{"HTTP": "http://HOST:8080/$.html", "RTMP": "rtmp://HOST:1935/play/$"}
+	if urls := ResolveIngestURLs(outputs, "https://edge.example", "key"); urls.MKV != "" {
+		t.Fatalf("MKV inferred without the EBML output: %+v", urls)
+	}
+	outputs["EBML"] = "http://HOST:8080/$.webm"
+	if urls := ResolveIngestURLs(outputs, "https://edge.example/view", "secret/key"); urls.MKV != "https://edge.example/view/secret%2Fkey.mkv" {
+		t.Fatalf("MKV ingest URL=%q", urls.MKV)
+	}
+}

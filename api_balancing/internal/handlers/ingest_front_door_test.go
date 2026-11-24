@@ -278,6 +278,30 @@ func TestIngestFrontDoorGETRequestedProtocol(t *testing.T) {
 	}
 }
 
+func TestIngestFrontDoorGETServesMKVFromTheEBMLEdge(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedIngestTestNode(t, sm, "a-rtmp", "rtmp.example:18090")
+	seedIngestTestNode(t, sm, "z-mkv", "mkv.example:18090")
+	sm.SetNodeInfo("a-rtmp", "http://rtmp.example:18090", true, nil, nil, "", "", map[string]any{"RTMP": "rtmp://HOST:2935/play/$", "HTTP": "http://HOST:8080/$.html"})
+	sm.SetNodeInfo("z-mkv", "http://mkv.example:18090", true, nil, nil, "", "", map[string]any{"HTTP": "http://HOST:8080/$.html", "EBML": "http://HOST:8080/$.webm"})
+	fake := &ingestCommodoreFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return &commodorepb.ResolveStreamContextResponse{Admitted: true, StreamId: "stream", InternalName: "internal", TenantId: "tenant", IngestMode: "push", ClusterPeers: ingestTestPeers()}, nil
+	}}
+	startIngestCommodoreFake(t, fake)
+	router := newIngestTestRouter(t)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ingest/key?protocol=mkv", nil))
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, `"nodeId":"z-mkv"`) || !strings.Contains(body, `"mkvUrl":"http://mkv.example:18090/key.mkv"`) || strings.Contains(body, `"a-rtmp"`) {
+		t.Fatalf("MKV response %d: %s", response.Code, body)
+	}
+	post := httptest.NewRecorder()
+	router.ServeHTTP(post, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/ingest/key?protocol=mkv", nil))
+	if post.Code != http.StatusBadRequest || post.Header().Get("Location") != "" {
+		t.Fatalf("POST with mkv returned %d: %s", post.Code, post.Body.String())
+	}
+}
+
 func TestIngestFrontDoorRejectsAmbiguousOrConflictingProtocols(t *testing.T) {
 	fake := &ingestCommodoreFake{}
 	startIngestCommodoreFake(t, fake)

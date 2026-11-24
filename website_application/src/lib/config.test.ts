@@ -35,6 +35,7 @@ describe("streaming URL config", () => {
       rtmp: "rtmp://tenant-ingest.example.com:1935/live/stream-key",
       srt: "srt://tenant-ingest.example.com:8889?streamid=stream-key&latency=200&mode=caller",
       whip: "https://tenant-ingest.example.com/webrtc/stream-key",
+      mkv: "https://tenant-ingest.example.com/stream-key.mkv",
     });
     expect(getRtmpServerUrl()).toBe("rtmp://tenant-ingest.example.com:1935/live");
   });

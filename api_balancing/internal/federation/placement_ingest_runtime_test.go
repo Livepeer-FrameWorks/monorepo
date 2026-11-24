@@ -27,7 +27,7 @@ func ingestRuntimeFixture(t *testing.T, protocol string) (*PlacementDestination,
 	f.query.PolicyDigest = authority.PolicyDigest
 	f.discovery.Now = store.Now
 	for i := range f.snapshot.Nodes {
-		f.snapshot.Nodes[i].Outputs = map[string]any{"RTMP": "rtmps://HOST:2935/play/$", "TSSRT": "srt://HOST:9889?streamid=$", "WebRTC": "https://HOST:8443/webrtc/$"}
+		f.snapshot.Nodes[i].Outputs = map[string]any{"RTMP": "rtmps://HOST:2935/play/$", "TSSRT": "srt://HOST:9889?streamid=$", "WebRTC": "https://HOST:8443/webrtc/$", "EBML": "http://HOST:8080/$.webm"}
 	}
 	req.Query, req.NodeId = f.query, "node-00"
 	media := &LiveIngestPreparationRuntime{CellID: store.CellID, Authority: f.discovery.Authority, Snapshot: f.discovery.Snapshot, Now: store.Now}
@@ -41,7 +41,7 @@ func ingestRuntimeFixture(t *testing.T, protocol string) (*PlacementDestination,
 }
 
 func TestIngestPreparationConfirmsExactListenerWithoutClaimOrCredential(t *testing.T) {
-	for _, protocol := range []string{"rtmp", "srt", "whip"} {
+	for _, protocol := range []string{"rtmp", "srt", "whip", "mkv"} {
 		t.Run(protocol, func(t *testing.T) {
 			destination, media, _, req := ingestRuntimeFixture(t, protocol)
 			ctx := context.Background()

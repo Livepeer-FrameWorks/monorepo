@@ -96,6 +96,13 @@
       description: "WebRTC HTTP Ingest Protocol - browser-based streaming",
       setup: "Broadcast from this browser in Go Live, or embed the StreamCrafter SDK in your app",
     },
+    {
+      key: "mkv",
+      name: "HTTP MKV",
+      icon: "FileVideo",
+      description: "Matroska or WebM pushed over HTTP",
+      setup: "Send a chunked PUT or POST of a live Matroska stream to this URL",
+    },
   ];
 
   async function copyToClipboard(text: string, field: string) {

@@ -32,7 +32,7 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 		return balancer.PlacementPreparationResult{}, err
 	}
 	if !validPullIdentity(request.TenantID) || !validPullIdentity(request.StreamID) || !validPullIdentity(request.InternalName) ||
-		(request.Protocol != "whip" && request.Protocol != "rtmp" && request.Protocol != "srt") {
+		(request.Protocol != "whip" && request.Protocol != "rtmp" && request.Protocol != "srt" && request.Protocol != "mkv") {
 		return balancer.PlacementPreparationResult{}, errors.New("ingest placement requires exact publisher identity and protocol")
 	}
 	identity := PlacementIngestIdentity{TenantID: request.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID), InternalName: request.InternalName}

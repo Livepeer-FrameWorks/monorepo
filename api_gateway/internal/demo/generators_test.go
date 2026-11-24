@@ -213,3 +213,15 @@ func TestDemoStreamScopedGeneratorsUseDemoID(t *testing.T) {
 		}
 	}
 }
+
+func TestDemoIngestEndpointsOfferMKV(t *testing.T) {
+	response := GenerateIngestEndpointResponse("demo-key")
+	if got := response.GetPrimary().GetMkvUrl(); got != "https://edge-ingest.demo.frameworks.video/demo-key.mkv" {
+		t.Fatalf("primary mkv URL=%q", got)
+	}
+	for _, fallback := range response.GetFallbacks() {
+		if fallback.GetMkvUrl() == "" {
+			t.Fatalf("fallback %s has no mkv URL", fallback.GetNodeId())
+		}
+	}
+}

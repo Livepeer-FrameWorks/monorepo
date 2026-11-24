@@ -296,6 +296,22 @@ func TestBuildIngestEndpoint_ProtocolURLs(t *testing.T) {
 
 // A bare IPv6 host has to be bracketed for the URL authority, and SRT/RTMP
 // host:port joins must not produce "::1:1935".
+func TestBuildIngestEndpoint_MKVNeedsTheEBMLOutput(t *testing.T) {
+	address := ingestPublicAddress{scheme: "https", authority: "edge-1.example.com", hostname: "edge-1.example.com"}
+	outputs := ingestOutputs("edge-1.example.com")
+	if ep := buildIngestEndpoint("node-1", address, outputs, "sk-abc", "", "cluster-1", 1); ep == nil || ep.MkvUrl != nil {
+		t.Fatalf("mkv URL without an EBML output: %+v", ep)
+	}
+	outputs["EBML"] = "http://HOST:8080/$.webm"
+	ep := buildIngestEndpoint("node-1", address, outputs, "sk-abc", "", "cluster-1", 1)
+	if got, want := ep.GetMkvUrl(), "https://edge-1.example.com/sk-abc.mkv"; got != want {
+		t.Errorf("mkv: got %q want %q", got, want)
+	}
+	if ep := buildIngestEndpoint("node-1", address, map[string]any{"EBML": "http://HOST:8080/$.webm"}, "sk-abc", "", "cluster-1", 1); ep.GetMkvUrl() == "" || ep.WhipUrl != nil {
+		t.Fatalf("an MKV-only edge is not an ingest endpoint: %+v", ep)
+	}
+}
+
 func TestBuildIngestEndpoint_IPv6Authority(t *testing.T) {
 	ep := buildIngestEndpoint("node-1", ingestPublicAddress{
 		scheme: "http", authority: "[::1]:18090", hostname: "::1",

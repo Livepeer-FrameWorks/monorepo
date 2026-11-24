@@ -308,7 +308,7 @@ func buildIngestEndpoint(nodeID string, address ingestPublicAddress, outputs map
 	}
 	baseURL := address.scheme + "://" + address.authority
 	urls := mist.ResolveIngestURLs(outputs, baseURL+address.path, streamKey)
-	if urls.WHIP == "" && urls.RTMP == "" && urls.SRT == "" {
+	if urls.WHIP == "" && urls.RTMP == "" && urls.SRT == "" && urls.MKV == "" {
 		return nil
 	}
 
@@ -326,6 +326,9 @@ func buildIngestEndpoint(nodeID string, address ingestPublicAddress, outputs map
 	}
 	if urls.SRT != "" {
 		endpoint.SrtUrl = &urls.SRT
+	}
+	if urls.MKV != "" {
+		endpoint.MkvUrl = &urls.MKV
 	}
 	if region = strings.TrimSpace(region); region != "" {
 		endpoint.Region = &region
@@ -354,7 +357,7 @@ func ResolveIngestEndpoints(
 	if deps == nil {
 		return nil, fmt.Errorf("load balancer not available")
 	}
-	if deps.Protocol != "" && deps.Protocol != "whip" && deps.Protocol != "rtmp" && deps.Protocol != "srt" {
+	if deps.Protocol != "" && deps.Protocol != "whip" && deps.Protocol != "rtmp" && deps.Protocol != "srt" && deps.Protocol != "mkv" {
 		return nil, fmt.Errorf("unsupported ingest protocol")
 	}
 	if streamCtx == nil {

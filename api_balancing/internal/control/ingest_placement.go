@@ -42,7 +42,7 @@ func resolvePreparedIngestEndpoints(ctx context.Context, deps *IngestDependencie
 	if !math.IsNaN(deps.GeoLat) && !math.IsNaN(deps.GeoLon) && !math.IsInf(deps.GeoLat, 0) && !math.IsInf(deps.GeoLon, 0) && math.Abs(deps.GeoLat) <= 90 && math.Abs(deps.GeoLon) <= 180 {
 		request.Location = &placement.Coordinates{Latitude: deps.GeoLat, Longitude: deps.GeoLon}
 	}
-	protocols := []string{"whip", "rtmp", "srt"}
+	protocols := []string{"whip", "rtmp", "srt", "mkv"}
 	if deps.Protocol != "" {
 		protocols = []string{deps.Protocol}
 	}
@@ -119,6 +119,8 @@ func resolvePreparedIngestEndpoints(ctx context.Context, deps *IngestDependencie
 			endpoint.RtmpUrl = &bound
 		case "srt":
 			endpoint.SrtUrl = &bound
+		case "mkv":
+			endpoint.MkvUrl = &bound
 		}
 	}
 	if err := ctx.Err(); err != nil {

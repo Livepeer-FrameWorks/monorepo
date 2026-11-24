@@ -86,6 +86,7 @@ const (
 	IngestProtocol_INGEST_PROTOCOL_WHIP        IngestProtocol = 1
 	IngestProtocol_INGEST_PROTOCOL_RTMP        IngestProtocol = 2
 	IngestProtocol_INGEST_PROTOCOL_SRT         IngestProtocol = 3
+	IngestProtocol_INGEST_PROTOCOL_MKV         IngestProtocol = 4 // HTTP Matroska (MKV/WebM) push
 )
 
 // Enum value maps for IngestProtocol.
@@ -95,12 +96,14 @@ var (
 		1: "INGEST_PROTOCOL_WHIP",
 		2: "INGEST_PROTOCOL_RTMP",
 		3: "INGEST_PROTOCOL_SRT",
+		4: "INGEST_PROTOCOL_MKV",
 	}
 	IngestProtocol_value = map[string]int32{
 		"INGEST_PROTOCOL_UNSPECIFIED": 0,
 		"INGEST_PROTOCOL_WHIP":        1,
 		"INGEST_PROTOCOL_RTMP":        2,
 		"INGEST_PROTOCOL_SRT":         3,
+		"INGEST_PROTOCOL_MKV":         4,
 	}
 )
 
@@ -3009,6 +3012,7 @@ type IngestEndpoint struct {
 	LoadScore     *float64               `protobuf:"fixed64,7,opt,name=load_score,json=loadScore,proto3,oneof" json:"load_score,omitempty"`
 	Kind          IngestEndpointKind     `protobuf:"varint,8,opt,name=kind,proto3,enum=shared.IngestEndpointKind" json:"kind,omitempty"` // Endpoint surface kind classification
 	ClusterId     string                 `protobuf:"bytes,9,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`      // Cluster this endpoint resolves into (for pinning + observability)
+	MkvUrl        *string                `protobuf:"bytes,10,opt,name=mkv_url,json=mkvUrl,proto3,oneof" json:"mkv_url,omitempty"`        // HTTP Matroska (MKV) push URL
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3102,6 +3106,13 @@ func (x *IngestEndpoint) GetKind() IngestEndpointKind {
 func (x *IngestEndpoint) GetClusterId() string {
 	if x != nil {
 		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *IngestEndpoint) GetMkvUrl() string {
+	if x != nil && x.MkvUrl != nil {
+		return *x.MkvUrl
 	}
 	return ""
 }
@@ -5864,7 +5875,7 @@ const file_shared_proto_rawDesc = "" +
 	"\tviewer_ip\x18\x02 \x01(\tH\x00R\bviewerIp\x88\x01\x01\x122\n" +
 	"\bprotocol\x18\x03 \x01(\x0e2\x16.shared.IngestProtocolR\bprotocolB\f\n" +
 	"\n" +
-	"_viewer_ip\"\xf2\x02\n" +
+	"_viewer_ip\"\x9c\x03\n" +
 	"\x0eIngestEndpoint\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x1e\n" +
@@ -5876,13 +5887,17 @@ const file_shared_proto_rawDesc = "" +
 	"load_score\x18\a \x01(\x01H\x04R\tloadScore\x88\x01\x01\x12.\n" +
 	"\x04kind\x18\b \x01(\x0e2\x1a.shared.IngestEndpointKindR\x04kind\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\t \x01(\tR\tclusterIdB\v\n" +
+	"cluster_id\x18\t \x01(\tR\tclusterId\x12\x1c\n" +
+	"\amkv_url\x18\n" +
+	" \x01(\tH\x05R\x06mkvUrl\x88\x01\x01B\v\n" +
 	"\t_whip_urlB\v\n" +
 	"\t_rtmp_urlB\n" +
 	"\n" +
 	"\b_srt_urlB\t\n" +
 	"\a_regionB\r\n" +
-	"\v_load_score\"\xf2\x01\n" +
+	"\v_load_scoreB\n" +
+	"\n" +
+	"\b_mkv_url\"\xf2\x01\n" +
 	"\x0eIngestMetadata\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1d\n" +
 	"\n" +
@@ -6170,12 +6185,13 @@ const file_shared_proto_rawDesc = "" +
 	"\x12CLIP_MODE_ABSOLUTE\x10\x01\x12\x16\n" +
 	"\x12CLIP_MODE_RELATIVE\x10\x02\x12\x16\n" +
 	"\x12CLIP_MODE_DURATION\x10\x03\x12\x16\n" +
-	"\x12CLIP_MODE_CLIP_NOW\x10\x04*~\n" +
+	"\x12CLIP_MODE_CLIP_NOW\x10\x04*\x97\x01\n" +
 	"\x0eIngestProtocol\x12\x1f\n" +
 	"\x1bINGEST_PROTOCOL_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14INGEST_PROTOCOL_WHIP\x10\x01\x12\x18\n" +
 	"\x14INGEST_PROTOCOL_RTMP\x10\x02\x12\x17\n" +
-	"\x13INGEST_PROTOCOL_SRT\x10\x03*\xd4\x01\n" +
+	"\x13INGEST_PROTOCOL_SRT\x10\x03\x12\x17\n" +
+	"\x13INGEST_PROTOCOL_MKV\x10\x04*\xd4\x01\n" +
 	"\x12IngestEndpointKind\x12$\n" +
 	" INGEST_ENDPOINT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!INGEST_ENDPOINT_KIND_TENANT_ALIAS\x10\x01\x12\"\n" +

@@ -187,6 +187,7 @@ interface IngestUrls {
   rtmp: string;
   srt: string;
   whip: string;
+  mkv: string;
 }
 
 interface DeliveryUrls {
@@ -212,6 +213,7 @@ export function getIngestUrls(streamKey: string): Partial<IngestUrls> {
     rtmp: `rtmp://${ep.ingestHostname}:${ep.rtmpPort}${config.rtmpPath}/${streamKey}`,
     srt: `srt://${ep.ingestHostname}:${ep.srtPort}?streamid=${streamKey}&latency=200&mode=caller`,
     whip: `${httpProto}://${ep.ingestHostname}${whipPort}${config.webrtcPath}/${streamKey}`,
+    mkv: `${httpProto}://${ep.ingestHostname}${whipPort}/${streamKey}.mkv`,
   };
 }
 

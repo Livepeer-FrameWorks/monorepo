@@ -1836,6 +1836,7 @@ func GenerateIngestEndpointResponse(streamKey string) *sharedpb.IngestEndpointRe
 	whipURL := "https://edge-ingest.demo.frameworks.video/webrtc/" + streamKey
 	rtmpURL := "rtmp://edge-ingest.demo.frameworks.video:1935/live/" + streamKey
 	srtURL := "srt://edge-ingest.demo.frameworks.video:8889?streamid=" + streamKey
+	mkvURL := "https://edge-ingest.demo.frameworks.video/" + streamKey + ".mkv"
 	region := "US West"
 	loadScore := 0.25
 
@@ -1845,6 +1846,7 @@ func GenerateIngestEndpointResponse(streamKey string) *sharedpb.IngestEndpointRe
 		WhipUrl:   &whipURL,
 		RtmpUrl:   &rtmpURL,
 		SrtUrl:    &srtURL,
+		MkvUrl:    &mkvURL,
 		Region:    &region,
 		LoadScore: &loadScore,
 		Kind:      sharedpb.IngestEndpointKind_INGEST_ENDPOINT_KIND_NODE_SPECIFIC,
@@ -1855,6 +1857,7 @@ func GenerateIngestEndpointResponse(streamKey string) *sharedpb.IngestEndpointRe
 	fallbackWhipURL := "https://edge-ingest.eu.demo.frameworks.video/webrtc/" + streamKey
 	fallbackRtmpURL := "rtmp://edge-ingest.eu.demo.frameworks.video:1935/live/" + streamKey
 	fallbackSrtURL := "srt://edge-ingest.eu.demo.frameworks.video:8889?streamid=" + streamKey
+	fallbackMkvURL := "https://edge-ingest.eu.demo.frameworks.video/" + streamKey + ".mkv"
 	fallbackRegion := "EU West"
 	fallbackLoadScore := 0.42
 
@@ -1864,6 +1867,7 @@ func GenerateIngestEndpointResponse(streamKey string) *sharedpb.IngestEndpointRe
 		WhipUrl:   &fallbackWhipURL,
 		RtmpUrl:   &fallbackRtmpURL,
 		SrtUrl:    &fallbackSrtURL,
+		MkvUrl:    &fallbackMkvURL,
 		Region:    &fallbackRegion,
 		LoadScore: &fallbackLoadScore,
 		Kind:      sharedpb.IngestEndpointKind_INGEST_ENDPOINT_KIND_NODE_SPECIFIC,
