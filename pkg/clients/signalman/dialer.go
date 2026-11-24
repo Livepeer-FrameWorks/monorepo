@@ -206,6 +206,7 @@ func (d *Dialer) pool(addr string) (*connPool, error) {
 			addr,
 			d.transport,
 			grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+			grpc.WithKeepaliveParams(grpcutil.ControlStreamKeepalive()),
 			grpc.WithChainStreamInterceptor(clients.FailsafeStreamInterceptor("signalman", d.cfg.Logger)),
 		)
 		if err != nil {
