@@ -684,6 +684,21 @@ PY
 hls_poll_state() {
   awk -v since="$2" '$1 >= since { n++; last = $2; if ($2 != "ok") bad++ } END { if (n) print (last == "fail" ? "fail" : (bad ? "mixed" : "ok")) }' "$1" 2>/dev/null
 }
+# A deliberate sidecar restart may return retryable 503s. Every other failure
+# remains fatal, and recovery needs a fresh successful TS read after the outage.
+hls_restart_continuity_state() {
+  awk -v since="$2" -v start="$3" -v end="$4" -v now="$(date +%s)" '
+    $1 >= since {
+      n++; last=$2; at=$1
+      if ($2 != "ok" && !($2=="fail" && $3 ~ /^HTTPError:HTTP_Error_503:/ && $1>=start && $1<=end)) bad++
+      if ($2=="ok" && $1>end) recovered++
+    }
+    END {
+      if (!n || !recovered || now-at>10) print "pending"
+      else if (bad || last!="ok") print "fail"
+      else print "ok"
+    }' "$1" 2>/dev/null
+}
 master_variants() { # master_variants <master url>: "WxH bandwidth" per variant
   curl -s -m 10 "$1" | awk -F'RESOLUTION=' '/^#EXT-X-STREAM-INF/{split($2,a,","); print a[1]}'
 }

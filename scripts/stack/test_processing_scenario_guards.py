@@ -17,6 +17,31 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_hls_restart_accepts_only_scoped_503_and_fresh_media_recovery(self):
+        source = (ROOT / "lib.sh").read_text()
+        predicate = re.search(r"^hls_restart_continuity_state\(\) \{\n.*?^\}", source, re.M | re.S).group(0)
+        cases = [
+            ("scoped-503", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n106 ok\n108 ok\n", "ok"),
+            ("authoritative-denial", "100 ok\n102 fail HTTPError:HTTP_Error_404:_Error_opening_stream\n108 ok\n", "fail"),
+            ("unrelated-error", "100 ok\n102 fail HTTPError:HTTP_Error_500:_Server_Error\n108 ok\n", "fail"),
+            ("before-outage", "100 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n108 ok\n", "fail"),
+            ("after-outage", "106 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n108 ok\n", "fail"),
+            ("no-recovery", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n", "pending"),
+            ("stale-recovery", "106 ok\n", "pending"),
+            ("empty", "", "pending"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "viewer.log"
+            for name, rows, expected in cases:
+                with self.subTest(case=name):
+                    path.write_text(rows)
+                    now = 200 if name == "stale-recovery" else 110
+                    script = 'date() { printf "' + str(now) + '\\n"; }\n' + predicate
+                    script += '\nhls_restart_continuity_state ' + shlex.quote(str(path)) + ' 100 101 105\n'
+                    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
+
     def test_local_recording_measures_increment_above_rtmp_ack_traffic(self):
         # The real CBR trace has 0.83-0.88 Mb/s of outgoing TCP ACKs before S3.
         baseline = [dict(lastHeartbeat=str(i), observedSource="OBSERVED_SOURCE_NIC",
