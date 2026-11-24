@@ -179,6 +179,26 @@ eventually 30 'Mist follows the healed revision' mist_matches 375000000 || end_s
 eventually 60 'Foghorn follows the healed revision' health_matches 3000 2 || end_scenario
 check 'budget changes keep the original Mist controller process' test "$(controller_identity)" = "$controller_before"
 
+dvr_network_baseline() {
+  jq -se 'if length==2 and (map(.lastHeartbeat)|unique|length)==2 and
+    all(.[]; .observedSource=="OBSERVED_SOURCE_NIC" and (.activeViewers // 0)==0 and
+      (.bandwidthDownMbps|type)=="number" and .bandwidthDownMbps>2 and
+      (.bandwidthUpMbps|type)=="number" and .bandwidthUpMbps>=0)
+    then map(.bandwidthUpMbps)|add/length else error("incomplete ingest-only NIC baseline") end' "$1"
+}
+local_recording_network_matches() {
+  jq -se --argjson baseline "$baseline_up" 'length==4 and
+    (map(.lastHeartbeat)|unique|length)==4 and
+    all(.[]; .observedSource=="OBSERVED_SOURCE_NIC" and (.activeViewers // 0)==0 and
+      (.bandwidthDownMbps|type)=="number" and .bandwidthDownMbps>2 and
+      (.bandwidthUpMbps|type)=="number" and .bandwidthUpMbps>=0) and
+    (map(.bandwidthUpMbps)|add/length)-$baseline<0.5' "$1"
+}
+upload_network_matches() {
+  jq -e --argjson baseline "$baseline_up" '.observedSource=="OBSERVED_SOURCE_NIC" and
+    (.bandwidthUpMbps|type)=="number" and (.bandwidthUpMbps-$baseline)>0.5'
+}
+
 # Record without creating a viewer. Block S3 only in this disposable node's
 # namespace while measuring local writes, then restore it and prove uploads
 # count as real egress. Control traffic and the encoder remain reachable.
@@ -197,7 +217,7 @@ check 'other fixture storage is cordoned for the local recording proof' json_has
 next_session_refresh=$(($(date +%s) + 300))
 refresh_tenant_session || { fail 'refresh owner session before the DVR proof'; end_scenario; }
 # Keep Livepeer network transcoding out of the local-disk-only interval.
-s=$(create_stream "stack-$run-dvr" true OFF)
+s=$(create_stream "stack-$run-dvr" false OFF)
 stream=$(echo "$s" | jq -r '.id // empty')
 uuid=$(echo "$s" | jq -r '.streamId // empty')
 key=$(echo "$s" | jq -r '.streamKey // empty')
@@ -216,36 +236,48 @@ ffmpeg -hide_banner -loglevel error -re -f lavfi -i 'testsrc2=size=640x360:rate=
   >"$STACK_STATE_DIR/publisher.log" 2>&1 &
 publisher=$!
 eventually 90 'DVR publisher is active on the private node' stream_active "$FOGHORN_A_DB" "$node" "$cluster" || end_scenario
-eventually 90 'DVR starts without a viewer' tenant_dvr_started || end_scenario
+samples="$STACK_STATE_DIR/dvr-network.jsonl"
+: >"$samples"
+last_heartbeat=''
+capture_sample() {
+  local destination=$1 health heartbeat
+  health=$(node_health) || return 1
+  echo "$health" | jq -c '{lastHeartbeat,observedSource,observedValid,activeViewers,bandwidthDownMbps,bandwidthUpMbps}' >"$STACK_STATE_DIR/last-network-sample.json"
+  heartbeat=$(echo "$health" | jq -r '.lastHeartbeat // empty')
+  [ -n "$heartbeat" ] && [ "$heartbeat" != "$last_heartbeat" ] || return 1
+  echo "$health" | jq -e '.observedSource=="OBSERVED_SOURCE_NIC" and (.activeViewers // 0)==0 and .bandwidthDownMbps>2 and (.bandwidthUpMbps|type)=="number"' >/dev/null || return 1
+  echo "$health" | jq -c '.' >>"$destination"
+  last_heartbeat=$heartbeat
+}
+# The same publisher sends TCP ACK traffic even without recording. Compare
+# recording against that measured baseline; disk writes add no network bytes.
+baseline="$STACK_STATE_DIR/ingest-network.jsonl"
+: >"$baseline"
+for _ in 1 2; do
+  eventually 25 'fresh ingest-only NIC baseline without a viewer' capture_sample "$baseline" || { cat "$STACK_STATE_DIR/last-network-sample.json"; end_scenario; }
+done
+baseline_up=$(dvr_network_baseline "$baseline") || { fail 'valid ingest-only NIC baseline'; end_scenario; }
+started=$(gql 'mutation($id:ID!){startDVR(streamId:$id){__typename ... on DVRRequest{dvrHash} ... on ValidationError{message}}}' \
+  "$(jq -cn --arg id "$stream" '{id:$id}')")
+check 'start local DVR through the tenant API' json_has "$started" '.errors==null and .data.startDVR.__typename=="DVRRequest" and (.data.startDVR.dvrHash|length)>0'
+[ "$(echo "$started" | jq -r '.data.startDVR.__typename // empty')" = DVRRequest ] || end_scenario
+eventually 90 'manual DVR starts without a viewer' tenant_dvr_started || end_scenario
 local_recording() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.artifacts WHERE tenant_id='$tenant' AND artifact_hash='$dvr_hash' AND dvr_start_dispatch->>'node_id'='$node'")" = 1 ] &&
     docker exec "$edge" sh -c 'find /data/storage/dvr -type f -name "*.ts" -size +64k 2>/dev/null | grep -q .'
 }
 eventually 90 'DVR stores media on the measured node' local_recording || end_scenario
-samples="$STACK_STATE_DIR/dvr-network.jsonl"
-: >"$samples"
-last_heartbeat=''
-capture_sample() {
-  local health heartbeat
-  health=$(node_health) || return 1
-  echo "$health" | jq -c '{lastHeartbeat,observedSource,observedValid,activeViewers,bandwidthDownMbps,bandwidthUpMbps}' >"$STACK_STATE_DIR/last-network-sample.json"
-  heartbeat=$(echo "$health" | jq -r '.lastHeartbeat // empty')
-  [ -n "$heartbeat" ] && [ "$heartbeat" != "$last_heartbeat" ] || return 1
-  echo "$health" | jq -e '.observedSource=="OBSERVED_SOURCE_NIC" and .bandwidthDownMbps>2' >/dev/null || return 1
-  echo "$health" | jq -c '.' >>"$samples"
-  last_heartbeat=$heartbeat
-}
 for _ in 1 2 3 4; do
-  eventually 25 'fresh NIC sample sees ingest while recording locally' capture_sample || { cat "$STACK_STATE_DIR/last-network-sample.json"; end_scenario; }
+  eventually 25 'fresh NIC sample sees ingest while recording locally' capture_sample "$samples" || { cat "$STACK_STATE_DIR/last-network-sample.json"; end_scenario; }
 done
-check 'DVR local writes do not become network egress' jq -se 'length==4 and (map(.bandwidthUpMbps // 0)|add/length)<0.5' "$samples"
+check 'DVR local writes add no network egress above the publisher baseline' local_recording_network_matches "$samples"
 check 'DVR writes a nonempty local media file' docker exec "$edge" sh -c \
   'find /data/storage/dvr -type f -name "*.ts" -size +64k 2>/dev/null | grep -q .'
 netfault_stop "$run"
 fault_started=0
 upload_observed() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.dvr_segments s JOIN foghorn.artifacts a ON a.artifact_hash=s.artifact_hash WHERE a.tenant_id='$tenant' AND s.artifact_hash='$dvr_hash' AND s.status='uploaded'")" -gt 0 ] || return 1
-  node_health | jq -e '.observedSource=="OBSERVED_SOURCE_NIC" and .bandwidthUpMbps>0.5' >/dev/null
+  node_health | upload_network_matches >/dev/null
 }
 eventually 90 'restored S3 uploads count as real network egress' upload_observed
 kill "$publisher" 2>/dev/null || true
