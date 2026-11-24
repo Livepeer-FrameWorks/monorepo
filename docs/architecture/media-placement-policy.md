@@ -1650,7 +1650,7 @@ cannot prove admission or first-media behavior.
 Stream setup distinguishes the existing resolver's node-specific recommendation from generic
 manual entries. The recommendation query omits credential/tenant metadata echoes, validates the
 selected stream, masks credential-bearing URLs, and splits RTMP server/key only when the returned
-terminal path segment is exactly that key. A protocol selector can require WHIP, RTMP or SRT;
+terminal path segment is exactly that key. A protocol selector can require WHIP, RTMP, SRT or MKV;
 changing it cancels an in-flight lookup and clears the previous recommendation. Missing protocol
 URLs are not reconstructed.
 Hosted Go Live prepares a destination explicitly and refreshes it at connection time through an
@@ -1780,10 +1780,12 @@ retains manual discovery of any advertised ingest protocol.
 HTTP GET carries the same requirement as one lowercase `protocol` query parameter; WHIP POST
 rejects a conflicting parameter. Invalid/duplicate parameters fail before authority lookup.
 
-The GraphQL source adds optional `protocol: MediaIngestProtocol` (`WHIP`, `RTMP`, `SRT`). The
+The GraphQL source adds optional `protocol: MediaIngestProtocol` (`WHIP`, `RTMP`, `SRT`, `MKV`). The
 generated frontend operation carries it, hosted Go Live always requests WHIP, and the frontend
 also rejects a mismatched response. The generated GraphQL resolver forwards the requested protocol
-to the protocol-aware gateway helper; field-level WHIP/RTMP/SRT regressions cover that boundary.
+to the protocol-aware gateway helper; field-level WHIP/RTMP/SRT/MKV regressions cover that boundary.
+MKV is the HTTP Matroska push. A node offers it only when Mist reports the `EBML` output; its
+`mkvUrl` is the stream key's `.mkv` path on the node's public HTTP origin.
 The shared StreamCrafter `IngestClient` also requests WHIP, covering standalone React, Svelte
 and Web Components gateway resolution. It rejects an invalid primary WHIP URL, drops unusable
 fallbacks and clears prior endpoints before a new lookup. These clients require the matching

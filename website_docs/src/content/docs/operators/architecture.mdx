@@ -342,7 +342,8 @@ Node-specific ingest recommendations include only protocols currently advertised
 node. RTMP/SRT URLs retain its listener ports; changing a Foghorn-wide default port does not
 override them. A healthy node with no ingest protocol report is not a valid recommendation.
 WHIP redirects select a WHIP-capable node before limiting the candidate list.
-The ingest gRPC request can also require WHIP, RTMP or SRT. Unsupported enum values are
+The ingest gRPC request can also require WHIP, RTMP, SRT or MKV (HTTP Matroska push, offered only
+by nodes whose MistServer reports the EBML output). Unsupported enum values are
 rejected, and no available node for the requested protocol means unavailable—not a
 recommendation for a different protocol. Omitting the protocol lists any advertised ingest
 protocols.

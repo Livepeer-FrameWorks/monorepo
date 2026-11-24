@@ -131,7 +131,8 @@ for encoder setup scripts:
 curl https://foghorn.{base}/ingest/{streamKey}
 ```
 
-Require your encoder's protocol with `?protocol=whip`, `?protocol=rtmp`, or `?protocol=srt`:
+Require your encoder's protocol with `?protocol=whip`, `?protocol=rtmp`, `?protocol=srt`, or
+`?protocol=mkv` (HTTP Matroska push):
 
 ```bash
 curl 'https://foghorn.{base}/ingest/{streamKey}?protocol=srt'

@@ -623,7 +623,8 @@ stream key, so nothing about the listener, the hostname, or its own
 `CLUSTER_ID` bounds the candidate set. It names no cluster on the resolve.
 
 Resolved ingest URLs come from that node's current Mist listener report. RTMP/SRT
-keep the reported ports and public overrides; Foghorn's fleet-wide port settings
+keep the reported ports and public overrides; WHIP and MKV (the EBML output's
+`.mkv` push path) use the node's public HTTP origin; Foghorn's fleet-wide port settings
 do not manufacture node-specific endpoints. Missing protocols remain absent.
 WHIP POST filters for a usable WHIP endpoint before truncating candidates, so
 nearby RTMP-only nodes cannot hide an available WHIP node farther down the ranking.
