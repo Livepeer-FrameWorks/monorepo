@@ -74,8 +74,11 @@ revocation_log_failure_is_red() (
   sed -n '/^  .*calls=$(foghorn_calls/,/^  gone()/p' "$here/scenarios/18-playback-grant-revocation.sh" |
     sed '$d' >"$work/revocation-log-check.sh"
   [ -s "$work/revocation-log-check.sh" ] || return 1
-  . "$work/revocation-log-check.sh"
-  [ "$FAIL" = 1 ] && [ "$PASS" = 0 ]
+  # The fixture's own FAIL line goes to a file: on the runner's output it
+  # reads as a failed check although this one passed.
+  . "$work/revocation-log-check.sh" >"$work/revocation-log-check.out"
+  [ "$FAIL" = 1 ] && [ "$PASS" = 0 ] &&
+    grep -q 'could not read per-viewer trigger calls before the refusal' "$work/revocation-log-check.out"
 )
 expect "an unreadable revocation log never passes as zero Foghorn calls" revocation_log_failure_is_red
 
@@ -418,7 +421,8 @@ expired_start_is_refused() (
   ! within_bound_since "$started" 1 'already late at helper entry' true >"$work/late-start.log"
 )
 expect 'deadline includes work before the polling helper starts' expired_start_is_refused
-expect 'bounded wait accepts an immediate success' within_bound_since "$(monotonic_ms)" 1 'immediate success' true
+immediate_success_is_accepted() { within_bound_since "$(monotonic_ms)" 1 'immediate success' true >"$work/immediate-success.log"; }
+expect 'bounded wait accepts an immediate success' immediate_success_is_accepted
 
 revocation_publishers_outlive_observation() {
   python3 - "$here/scenarios/46-operator-grant-trial.sh" <<'PUBLISH'
