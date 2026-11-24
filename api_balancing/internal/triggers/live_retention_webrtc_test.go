@@ -21,7 +21,7 @@ func TestLivePlaybackRetainsOnlyCompatibleOriginals(t *testing.T) {
 		{"live H264 with reordering", "H264", mist.WorkloadLive, true, false},
 		{"live HEVC needs a compatible H264 rendition", "HEVC", mist.WorkloadLive, false, false},
 		{"VOD preserves H264 reordering", "H264", mist.WorkloadVOD, true, true},
-		{"VOD preserves HEVC", "HEVC", mist.WorkloadVOD, false, true},
+		{"VOD HEVC needs the requested H264 rendition", "HEVC", mist.WorkloadVOD, false, false},
 	} {
 		for _, local := range []bool{false, true} {
 			name := tc.name + "/gateway"
@@ -46,14 +46,14 @@ func TestLivePlaybackRetainsOnlyCompatibleOriginals(t *testing.T) {
 				t.Logf("bound policy: %s", bound)
 				repeated := p.ApplyLivepeerWorkload(bound, tc.workload)
 				if bound != repeated {
-					t.Fatal("binding live playback requirements must be idempotent")
+					t.Fatal("binding rendition compatibility requirements must be idempotent")
 				}
 				renditions, renditionErr := mist.ExpectedVideoRenditions(bound, mist.SourceMediaInfo{VideoCodec: tc.codec, Width: 640, Height: 360, FPS: 15}, tracks...)
 				if renditionErr != nil {
 					t.Fatalf("live rendition contract is invalid: %v", renditionErr)
 				}
 				if len(renditions) != 1 || renditions[0].Retained != tc.retained {
-					t.Fatalf("retained rendition=%+v, want retained=%v; live playback must have a decodable H264 track without B-frames; policy=%s", renditions, tc.retained, bound)
+					t.Fatalf("retained rendition=%+v, want retained=%v; the original must satisfy the requested codec and workload; policy=%s", renditions, tc.retained, bound)
 				}
 			})
 		}

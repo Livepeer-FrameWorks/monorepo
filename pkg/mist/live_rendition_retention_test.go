@@ -12,8 +12,10 @@ func TestLiveRetentionPreservesExplicitNonH264AndNonRetainingPolicies(t *testing
 		`[{"process":"AV","codec":"H264","track_retain":""}]`,
 		`not-json`,
 	} {
-		if got := ConstrainLiveRenditionRetention(policy); got != policy {
-			t.Fatalf("unrelated or non-retaining policy changed: %s", got)
+		for _, workload := range []string{WorkloadLive, WorkloadVOD} {
+			if got := ConstrainRenditionRetention(policy, workload); got != policy {
+				t.Fatalf("unrelated or non-retaining %s policy changed: %s", workload, got)
+			}
 		}
 	}
 }
