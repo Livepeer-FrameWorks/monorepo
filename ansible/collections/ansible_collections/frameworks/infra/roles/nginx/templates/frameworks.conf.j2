@@ -1,6 +1,6 @@
-{# Credential-bearing paths (/ingest/<streamKey>, /webrtc/<streamKey>) are
-   carved out of the site's normal locations so their error logging can be
-   suppressed. The access log is redacted via log_format, but nginx's error log
+{# Credential-bearing paths (nginx_credential_path_prefixes, such as
+   /ingest/<streamKey> and /whip/<streamKey>) are carved out of the site's
+   normal locations so their error logging can be suppressed. The access log is redacted via log_format, but nginx's error log
    has no configurable format and includes the full request line on upstream
    failures, which would write a publisher's stream key to disk. Severity
    filtering cannot guarantee that a request-bearing critical entry is absent,
@@ -8,7 +8,7 @@
    use the global log. #}
 {% macro credential_path_locations(site, profile) %}
 {% set site_prefixes = site.path_prefixes | default(['/']) %}
-{% for cred_prefix in ['/ingest/', '/webrtc/'] %}
+{% for cred_prefix in nginx_credential_path_prefixes %}
 {# Only decorate paths the site already routes: a log policy must not widen a
    site's routing surface. A broader declared prefix such as /ing already
    serves /ingest, while an exact /ingest[/] declaration owns its own error-log
@@ -172,7 +172,7 @@ server {
     ssl_certificate {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_bundle/tls.crt;
     ssl_certificate_key {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_bundle/tls.key;
 
-{% for cred_prefix in ['/ingest/', '/webrtc/'] %}
+{% for cred_prefix in nginx_credential_path_prefixes %}
     location ^~ {{ cred_prefix }} {
         error_log /dev/null crit;
         proxy_pass http://127.0.0.1:{{ tap.upstream_port | default(18008) }};
@@ -229,7 +229,7 @@ server {
 {% if profile_name == 'media_ingest' %}
         limit_except POST PUT { deny all; }
 {% endif %}
-{% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
+{% if path_prefix in nginx_credential_path_prefixes or (path_prefix ~ '/') in nginx_credential_path_prefixes %}
 {# Declared explicitly by the site: suppress error logging here rather
    than emitting a duplicate decorated location. #}
         error_log /dev/null crit;
@@ -336,7 +336,7 @@ server {
 {% if profile_name == 'media_ingest' %}
         limit_except POST PUT { deny all; }
 {% endif %}
-{% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
+{% if path_prefix in nginx_credential_path_prefixes or (path_prefix ~ '/') in nginx_credential_path_prefixes %}
 {# Declared explicitly by the site: suppress error logging here rather
    than emitting a duplicate decorated location. #}
         error_log /dev/null crit;
