@@ -130,3 +130,38 @@ func TestResolveIngestURLsRejectsMalformedOrAmbiguousTemplates(t *testing.T) {
 		})
 	}
 }
+
+func TestMKVIngestRequiresTheEBMLOutput(t *testing.T) {
+	outputs := map[string]any{"HTTP": "http://HOST:8080/$.html", "EBML": "http://HOST:8080/$.webm"}
+	if !SupportsIngestProtocol(outputs, "https://edge.example/view%2Ftenant", "mkv") {
+		t.Fatal("edge running the EBML output rejected for mkv ingest")
+	}
+	template := ResolveIngestEndpointTemplate(outputs, "https://edge.example/view%2Ftenant", "mkv")
+	if template != "https://edge.example/view%2Ftenant/$.mkv" || !ValidIngestEndpointTemplate(template, "mkv") {
+		t.Fatalf("mkv template=%q", template)
+	}
+	if got := BindIngestEndpointTemplate(template, "mkv", "secret/key"); got != "https://edge.example/view%2Ftenant/secret%2Fkey.mkv" {
+		t.Fatalf("mkv binding=%q", got)
+	}
+	public := map[string]any{"EBML": "https://ingest.example:8443/media/$.mkv"}
+	if got := ResolveIngestEndpointTemplate(public, "https://other.example", "mkv"); got != "https://ingest.example:8443/media/$.mkv" {
+		t.Fatalf("public EBML override changed: %q", got)
+	}
+	for name, outputs := range map[string]map[string]any{
+		"http_only":    {"HTTP": "http://HOST:8080/$.html"},
+		"hls_only":     {"HLS": "http://HOST:8080/hls/$/index.m3u8"},
+		"wrong_scheme": {"EBML": "rtmp://HOST:8080/$.webm"},
+		"wrong_path":   {"EBML": "http://HOST:8080/$.mp4"},
+		"query":        {"EBML": "http://HOST:8080/$.webm?x=1"},
+		"websocket":    {"EBML/WS": "ws://HOST:8080/$.webm"},
+		"credentials":  {"EBML": "http://user:secret@edge:8080/$.webm"},
+		"ambiguous":    {"EBML": []any{"http://a:8080/$.webm", "http://b:8080/$.webm"}},
+	} {
+		if SupportsIngestProtocol(outputs, "https://edge.example", "mkv") {
+			t.Fatalf("%s: mkv ingest inferred from %v", name, outputs)
+		}
+	}
+	if SupportsIngestProtocol(outputs, "https://edge.example", "MKV") {
+		t.Fatal("non-canonical protocol name accepted")
+	}
+}

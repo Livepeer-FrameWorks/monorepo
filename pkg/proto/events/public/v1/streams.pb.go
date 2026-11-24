@@ -30,6 +30,8 @@ const (
 	IngestProtocol_INGEST_PROTOCOL_SRT         IngestProtocol = 2
 	IngestProtocol_INGEST_PROTOCOL_WHIP        IngestProtocol = 3
 	IngestProtocol_INGEST_PROTOCOL_PULL        IngestProtocol = 4
+	// HTTP Matroska (MKV/WebM) push to an edge's HTTP endpoint.
+	IngestProtocol_INGEST_PROTOCOL_MKV IngestProtocol = 5
 )
 
 // Enum value maps for IngestProtocol.
@@ -40,6 +42,7 @@ var (
 		2: "INGEST_PROTOCOL_SRT",
 		3: "INGEST_PROTOCOL_WHIP",
 		4: "INGEST_PROTOCOL_PULL",
+		5: "INGEST_PROTOCOL_MKV",
 	}
 	IngestProtocol_value = map[string]int32{
 		"INGEST_PROTOCOL_UNSPECIFIED": 0,
@@ -47,6 +50,7 @@ var (
 		"INGEST_PROTOCOL_SRT":         2,
 		"INGEST_PROTOCOL_WHIP":        3,
 		"INGEST_PROTOCOL_PULL":        4,
+		"INGEST_PROTOCOL_MKV":         5,
 	}
 )
 
@@ -655,13 +659,14 @@ const file_events_public_v1_streams_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason:-\xc2\xf3\x18)\n" +
-	"\x1astream.ingest_disconnected\x10\x01\x18\x01\"\astreams*\x98\x01\n" +
+	"\x1astream.ingest_disconnected\x10\x01\x18\x01\"\astreams*\xb1\x01\n" +
 	"\x0eIngestProtocol\x12\x1f\n" +
 	"\x1bINGEST_PROTOCOL_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14INGEST_PROTOCOL_RTMP\x10\x01\x12\x17\n" +
 	"\x13INGEST_PROTOCOL_SRT\x10\x02\x12\x18\n" +
 	"\x14INGEST_PROTOCOL_WHIP\x10\x03\x12\x18\n" +
-	"\x14INGEST_PROTOCOL_PULL\x10\x04BMZKgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1b\x06proto3"
+	"\x14INGEST_PROTOCOL_PULL\x10\x04\x12\x17\n" +
+	"\x13INGEST_PROTOCOL_MKV\x10\x05BMZKgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1b\x06proto3"
 
 var (
 	file_events_public_v1_streams_proto_rawDescOnce sync.Once
