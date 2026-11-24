@@ -30,6 +30,7 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 		"nginx_ingress_reader_group":      ingress.ReaderGroup,
 		"nginx_tenant_alias_applied_path": ingress.TenantAliasAppliedPath,
 		"nginx_ingress_reload_trigger":    ingress.ReloadTrigger,
+		"nginx_credential_uri_map":        nginxCredentialURIMapVar(),
 	}
 	if tap, ok := config.Metadata["tenant_alias_playback"].(map[string]any); ok && len(tap) > 0 {
 		enabled := map[string]any{"enabled": true}
@@ -37,4 +38,15 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 		vars["nginx_tenant_alias_playback"] = enabled
 	}
 	return vars, nil
+}
+
+// nginxCredentialURIMapVar renders the pkg/ingress log redaction map entries
+// as the nginx role's nginx_credential_uri_map.
+func nginxCredentialURIMapVar() []map[string]any {
+	entries := ingress.NginxCredentialURIMap()
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, map[string]any{"regex": e.Regex, "value": e.Value})
+	}
+	return out
 }

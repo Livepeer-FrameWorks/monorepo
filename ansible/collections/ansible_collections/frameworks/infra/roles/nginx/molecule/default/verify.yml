@@ -17,6 +17,31 @@
           - "'*:18090' not in nginx_verify_sockets.stdout"
         fail_msg: "nginx still listens on {{ nginx_verify_sockets.stdout }}"
 
+    - name: Request WHIP and Matroska publish paths
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:18090{{ item }}"
+        status_code: [200, 204, 301, 308, 404, 502]
+      loop:
+        - /whip/sk_molecule_key
+        - /sk_molecule_key.mkv
+        - /view/sk_molecule_key.webm
+
+    - name: Read the access log
+      ansible.builtin.slurp:
+        src: /var/log/nginx/access.log
+      register: nginx_verify_access_log
+
+    - name: Assert the access log redacts the stream keys
+      vars:
+        nginx_verify_access: "{{ nginx_verify_access_log.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'GET /whip/REDACTED ' in nginx_verify_access"
+          - "'GET /REDACTED.mkv ' in nginx_verify_access"
+          - "'GET /view/REDACTED.webm ' in nginx_verify_access"
+          - "'sk_molecule_key' not in nginx_verify_access"
+        fail_msg: "access log carries a stream key: {{ nginx_verify_access }}"
+
     # The release precheck runs the role under --check; it must see a
     # configured listener without a socket.
     - name: Stop nginx so its configured listener has no socket

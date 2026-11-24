@@ -272,20 +272,17 @@ http {
     send_timeout 60s;
 
     # Publishing credentials travel in the path (/ingest/<streamKey> on Foghorn,
-    # /webrtc/<streamKey> for WHIP). The default combined format would write them
-    # to disk on every request, so the logged URI is redacted instead.
-    map $request_uri $frameworks_logged_uri {
-        "~^(?<fw_prefix>/(?:ingest|webrtc)/)[^/?]+(?<fw_rest>.*)$" "${fw_prefix}REDACTED${fw_rest}";
-        default $request_uri;
-    }
-    log_format frameworks_redacted '$remote_addr - $remote_user [$time_local] '
+    # /webrtc/<streamKey> for WHIP, /<streamKey>.mkv for Matroska pushes). The
+    # default combined format would write them to disk on every request, so the
+    # logged URI is redacted instead.
+%s    log_format frameworks_redacted '$remote_addr - $remote_user [$time_local] '
                                    '"$request_method $frameworks_logged_uri $server_protocol" '
                                    '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
     access_log /var/log/nginx/access.log frameworks_redacted;
 
     include %s;
 }
-`, includePath)
+`, ingress.NginxCredentialURIMapBlock("    "), includePath)
 }
 
 // caddyCredentialLogBlock redacts credential-bearing request URIs in Caddy's

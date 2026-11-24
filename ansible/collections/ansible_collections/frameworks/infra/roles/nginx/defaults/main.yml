@@ -52,6 +52,15 @@ nginx_keepalive_requests: 10000
 nginx_send_timeout: 60s
 nginx_server_tokens: false
 nginx_backup_dir: /var/backups/frameworks/nginx
+# Regex entries of the map that redacts the stream key from logged request
+# URIs, first match wins. The CLI passes the pkg/ingress definition
+# (NginxCredentialURIMap); this default is kept identical for standalone and
+# molecule runs.
+nginx_credential_uri_map:
+  - regex: "^(?<fw_prefix>.*?/(?:webrtc|whip|ingest)/)[^/?]+(?<fw_rest>.*)$"
+    value: "${fw_prefix}REDACTED${fw_rest}"
+  - regex: "^(?<fw_prefix>.*?/)[^/?]+(?<fw_rest>[.](?:mkv|webm).*)$"
+    value: "${fw_prefix}REDACTED${fw_rest}"
 nginx_server_names_hash_bucket_size: 128
 # A full SNI hostname can be 253 bytes; map buckets also hold hash metadata.
 nginx_map_hash_bucket_size: 512

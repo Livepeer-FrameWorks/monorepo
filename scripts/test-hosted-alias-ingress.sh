@@ -24,3 +24,4 @@ run_required_test() {
 }
 run_required_test test-privateer ./internal/agent TestTenantAliasPrivateerDockerIngressLifecycle
 run_required_test test-cli ./pkg/provisioner TestNginxRootConfigAcceptsMaximumLengthAlias
+run_required_test test-cli ./pkg/provisioner TestNginxAccessLogRedactsPublishingCredentials
