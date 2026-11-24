@@ -22,6 +22,20 @@
         url: "http://localhost:2019/config/"
         status_code: 200
 
+    - name: Read the global log filter fields
+      ansible.builtin.uri:
+        url: "http://localhost:2019/config/logging/logs/default/encoder/fields"
+        return_content: true
+      register: caddy_log_fields
+
+    - name: Assert logged request URIs drop WHIP and Matroska stream keys
+      ansible.builtin.assert:
+        that:
+          - caddy_log_fields.json['request>uri'].filter == 'regexp'
+          - "'webrtc' in caddy_log_fields.json['request>uri'].regexp"
+          - "'mkv' in caddy_log_fields.json['request>uri'].regexp"
+          - "caddy_log_fields.json['request>uri'].value == '/${1}REDACTED${2}'"
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.caddy

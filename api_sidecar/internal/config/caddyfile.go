@@ -5,6 +5,8 @@ import (
 	"path"
 	"strings"
 	"text/template"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 )
 
 // CaddyfileBundle describes one TLS site block to render. Each bundle gets
@@ -58,14 +60,14 @@ const caddyfileTmpl = `{
 {{- end}}
 	# Runtime/error logging is configured globally: a site-level log directive
 	# only covers access logs, while upstream failures are emitted by the
-	# default logger and carry the full request URI — which for WHIP publishes
-	# (/webrtc/<streamKey>) and the ingest front door is a credential.
+	# default logger and carry the full request URI — which for WHIP and
+	# Matroska publishes and the ingest front door carries the stream key.
 	log {
 		output stdout
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+				{{.CredentialURILogField}}
 			}
 		}
 	}
@@ -184,12 +186,12 @@ const caddyfileTmpl = `{
 
 	log {
 		output stdout
-		# WHIP publishes to /webrtc/<streamKey>, so the raw URI carries a
-		# publishing credential; redact it rather than shipping it to logs.
+		# WHIP (/webrtc/<streamKey>) and Matroska (/<streamKey>.mkv) publishes
+		# carry the publishing credential in the URI; it is redacted here.
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+				{{.CredentialURILogField}}
 			}
 		}
 	}
@@ -224,6 +226,9 @@ type caddyfileTemplateData struct {
 	// ManagedNoSNIName is the site address of the managed (ACME) bundle that
 	// serves EdgeDomain; it renders the global default_sni.
 	ManagedNoSNIName string
+	// CredentialURILogField is the log filter that redacts publishing
+	// credentials from logged request URIs.
+	CredentialURILogField string
 }
 
 // RenderCaddyfile renders a production Caddyfile from the given parameters.
@@ -242,7 +247,7 @@ func RenderCaddyfile(params CaddyfileParams) (string, error) {
 			return "", fmt.Errorf("bundle[%d]: SiteAddress is required", i)
 		}
 	}
-	data := caddyfileTemplateData{CaddyfileParams: params}
+	data := caddyfileTemplateData{CaddyfileParams: params, CredentialURILogField: ingress.CaddyCredentialURILogField()}
 	if bundle, address, ok := bundleServingHost(params.Bundles, params.EdgeDomain); ok {
 		if bundle.TLSCertPath != "" && bundle.TLSKeyPath != "" {
 			data.LoadedNoSNIBundle = &bundle

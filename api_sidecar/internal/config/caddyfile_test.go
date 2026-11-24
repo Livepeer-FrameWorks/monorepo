@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -90,12 +91,27 @@ func TestRenderCaddyfile_RedactsPublishingCredentialsFromAllLogs(t *testing.T) {
 		t.Fatalf("RenderCaddyfile: %v", err)
 	}
 
-	const filter = `request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"`
 	// The global logger covers runtime and upstream-error events. The site logger covers access
 	// events. Both must apply the same filter because either event class can carry the publishing
 	// credential in its request URI.
-	if got := strings.Count(out, filter); got != 2 {
-		t.Fatalf("publishing credential filter count = %d, want 2; rendered:\n%s", got, out)
+	filters := caddyURIRegexpFilters(t, out)
+	if len(filters) != 2 {
+		t.Fatalf("publishing credential filter count = %d, want 2; rendered:\n%s", len(filters), out)
+	}
+	for _, f := range filters {
+		for uri, want := range map[string]string{
+			"/webrtc/sk_live":          "/webrtc/REDACTED",
+			"/ingest/sk_live?proto=1":  "/ingest/REDACTED?proto=1",
+			"/sk_live.mkv":             "/REDACTED.mkv",
+			"/view/sk_live.mkv":        "/view/REDACTED.mkv",
+			"/sk_live.webm":            "/REDACTED.webm",
+			"/view/hls/pb/index.m3u8":  "/view/hls/pb/index.m3u8",
+			"/hls/playback/index.m3u8": "/hls/playback/index.m3u8",
+		} {
+			if got := f.re.ReplaceAllString(uri, f.replacement); got != want {
+				t.Errorf("filter %q %q: %s logged as %s, want %s", f.re, f.replacement, uri, got, want)
+			}
+		}
 	}
 	if strings.Contains(out, "format json") {
 		t.Fatalf("unfiltered JSON logger can expose publishing credentials; rendered:\n%s", out)
@@ -523,4 +539,21 @@ func TestRenderCaddyfile_NoRedundantForwardedHeaders(t *testing.T) {
 	if strings.Contains(out, "trusted_proxies") {
 		t.Fatal("trusted_proxies changes the forwarded-header defaults this route relies on")
 	}
+}
+
+type caddyURIFilter struct {
+	re          *regexp.Regexp
+	replacement string
+}
+
+// caddyURIRegexpFilters extracts every request>uri regexp log filter from a
+// rendered Caddyfile, so the test applies exactly what Caddy would apply.
+func caddyURIRegexpFilters(t *testing.T, caddyfile string) []caddyURIFilter {
+	t.Helper()
+	line := regexp.MustCompile(`request>uri regexp "([^"]+)" "([^"]+)"`)
+	var filters []caddyURIFilter
+	for _, m := range line.FindAllStringSubmatch(caddyfile, -1) {
+		filters = append(filters, caddyURIFilter{re: regexp.MustCompile(m[1]), replacement: m[2]})
+	}
+	return filters
 }

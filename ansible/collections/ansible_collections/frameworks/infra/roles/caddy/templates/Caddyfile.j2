@@ -7,13 +7,13 @@
     skip_install_trust
 {# Global, not per-site: a site log directive covers access logs only, while
    upstream failures come from the default logger and carry the full request
-   URI — which for /webrtc/<streamKey> and /ingest/<streamKey> is a publishing
-   credential. #}
+   URI, which for WHIP, Matroska and ingest front-door publishes carries the
+   stream key. The CLI passes the pattern from pkg/ingress. #}
     log {
         format filter {
             wrap json
             fields {
-                request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+                request>uri regexp "{{ caddy_credential_uri_redaction.regexp }}" "{{ caddy_credential_uri_redaction.replacement }}"
             }
         }
     }

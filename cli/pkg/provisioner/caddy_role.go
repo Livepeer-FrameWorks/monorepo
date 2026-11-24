@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"frameworks/cli/pkg/inventory"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 )
 
 func caddyRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
@@ -14,6 +16,10 @@ func caddyRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 
 	vars := map[string]any{
 		"caddy_version": version,
+		"caddy_credential_uri_redaction": map[string]any{
+			"regexp":      ingress.CredentialURIRegexp,
+			"replacement": ingress.CredentialURIReplacement,
+		},
 	}
 
 	if sites := proxySiteMapsForMode(config.Metadata, "native"); len(sites) > 0 {

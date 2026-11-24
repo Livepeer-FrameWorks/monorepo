@@ -57,7 +57,7 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 			{SiteAddress: realCaddyTenantHost + " *." + realCaddyTenantHost, TLSCertPath: "/fw/tenant.crt", TLSKeyPath: "/fw/tenant.key"},
 			{SiteAddress: "*.media-test.frameworks.test", TLSCertPath: "/fw/cluster.crt", TLSKeyPath: "/fw/cluster.key"},
 		})
-		addr := startRealCaddy(t, image, dir, params, "")
+		addr, _ := startRealCaddy(t, image, dir, params, "")
 
 		leaf, status, body := noSNIGet(t, addr, realCaddyEdgeDomain, "/health")
 		if !bytes.Equal(leaf.Raw, edgeCert.Raw) {
@@ -82,6 +82,49 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 		}
 	})
 
+	// Caddy writes the request URI into both access logs and upstream-error
+	// logs; neither may carry the stream key of a WHIP or Matroska publish.
+	t.Run("logs redact publishing credentials", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSelfSignedPair(t, dir, "cluster", "*.media-test.frameworks.test")
+		params := realCaddyParams(helmsman, []CaddyfileBundle{
+			{SiteAddress: "*.media-test.frameworks.test", TLSCertPath: "/fw/cluster.crt", TLSKeyPath: "/fw/cluster.key"},
+		})
+		addr, name := startRealCaddy(t, image, dir, params, "")
+
+		const key = "sk_live_realcaddy"
+		paths := map[string]string{
+			"/webrtc/" + key:        "/webrtc/REDACTED",
+			"/" + key + ".mkv":      "/REDACTED.mkv",
+			"/view/" + key + ".mkv": "/view/REDACTED.mkv",
+			"/" + key + ".webm":     "/REDACTED.webm",
+		}
+		for path := range paths {
+			noSNIGet(t, addr, realCaddyEdgeDomain, path)
+		}
+		var logs string
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			logs, _ = dockerpg.CLI("logs", name)
+			missing := ""
+			for _, want := range paths {
+				if !strings.Contains(logs, `"uri":"`+want+`"`) {
+					missing = want
+				}
+			}
+			if missing == "" || time.Now().After(deadline) {
+				if missing != "" {
+					t.Fatalf("caddy logs never recorded %s:\n%s", missing, logs)
+				}
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if strings.Contains(logs, key) {
+			t.Fatalf("caddy logs carry the stream key:\n%s", logs)
+		}
+	})
+
 	// The ACME issuer cannot be reached from a test, so the edge domain's
 	// managed certificate comes from Caddy's internal issuer instead; both
 	// store it under the site address it was obtained for.
@@ -92,7 +135,7 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 			{SiteAddress: realCaddyTenantHost + " *." + realCaddyTenantHost, TLSCertPath: "/fw/tenant.crt", TLSKeyPath: "/fw/tenant.key"},
 			{SiteAddress: realCaddyEdgeDomain},
 		})
-		addr := startRealCaddy(t, image, dir, params, "local_certs")
+		addr, _ := startRealCaddy(t, image, dir, params, "local_certs")
 
 		leaf, status, body := noSNIGet(t, addr, realCaddyEdgeDomain, "/health")
 		if err := leaf.VerifyHostname(realCaddyEdgeDomain); err != nil {
@@ -109,7 +152,7 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 	t.Run("managed wildcard certificate", func(t *testing.T) {
 		dir := t.TempDir()
 		params := realCaddyParams(helmsman, []CaddyfileBundle{{SiteAddress: "*.media-test.frameworks.test"}})
-		addr := startRealCaddy(t, image, dir, params, "local_certs")
+		addr, _ := startRealCaddy(t, image, dir, params, "local_certs")
 
 		leaf, status, body := noSNIGet(t, addr, realCaddyEdgeDomain, "/health")
 		if err := leaf.VerifyHostname(realCaddyEdgeDomain); err != nil {
@@ -248,9 +291,10 @@ func writeSelfSignedPair(t *testing.T, dir, name string, dnsNames ...string) *x5
 }
 
 // startRealCaddy runs Caddy on the Caddyfile RenderCaddyfile produces for
-// params, with dir mounted at /fw, and returns the published HTTPS address.
+// params, with dir mounted at /fw, and returns the published HTTPS address and
+// the container name.
 // globalOption, when set, is added to the rendered global options block.
-func startRealCaddy(t *testing.T, image, dir string, params CaddyfileParams, globalOption string) string {
+func startRealCaddy(t *testing.T, image, dir string, params CaddyfileParams, globalOption string) (string, string) {
 	t.Helper()
 	rendered, err := RenderCaddyfile(params)
 	if err != nil {
@@ -299,7 +343,7 @@ func startRealCaddy(t *testing.T, image, dir string, params CaddyfileParams, glo
 			if logs, _ := dockerpg.CLI("logs", name); strings.Contains(logs, "input is not formatted") {
 				t.Fatalf("rendered Caddyfile is not caddy fmt clean:\n%s", logs)
 			}
-			return addr
+			return addr, name
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("caddy never completed a TLS handshake for %s: %v", realCaddyEdgeDomain, dialErr)

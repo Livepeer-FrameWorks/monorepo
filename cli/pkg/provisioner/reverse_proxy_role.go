@@ -292,11 +292,11 @@ http {
 // global logger. It must be global, not per-site: a site-level log directive
 // covers access logs only, while upstream failures are emitted by the default
 // logger and carry the full request URI.
-const caddyCredentialLogBlock = `    log {
+var caddyCredentialLogBlock = `    log {
         format filter {
             wrap json
             fields {
-                request>uri regexp "/(webrtc|ingest)/[^/?]+" "/${1}/REDACTED"
+                ` + ingress.CaddyCredentialURILogField() + `
             }
         }
     }
