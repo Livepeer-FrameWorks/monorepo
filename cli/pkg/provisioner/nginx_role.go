@@ -31,6 +31,7 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 		"nginx_tenant_alias_applied_path": ingress.TenantAliasAppliedPath,
 		"nginx_ingress_reload_trigger":    ingress.ReloadTrigger,
 		"nginx_credential_uri_map":        nginxCredentialURIMapVar(),
+		"nginx_credential_path_prefixes":  ingress.CredentialPathPrefixes(),
 	}
 	if tap, ok := config.Metadata["tenant_alias_playback"].(map[string]any); ok && len(tap) > 0 {
 		enabled := map[string]any{"enabled": true}

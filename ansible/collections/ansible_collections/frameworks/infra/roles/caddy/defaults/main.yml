@@ -18,7 +18,7 @@ caddy_admin_listen: "localhost:2019"
 # pkg/ingress definition (CredentialURIRegexp, CredentialURIReplacement); this
 # default is kept identical for standalone and molecule runs.
 caddy_credential_uri_redaction:
-  regexp: "/(?:((?:webrtc|whip|ingest)/)[^/?]+|[^/?]+([.](?:mkv|webm)))"
+  regexp: "/(?:((?:ingest|webrtc|whip)/)[^/?]+|[^/?]+([.](?:mkv|webm)))"
   replacement: "/${1}REDACTED${2}"
 caddy_default_port_http: 80
 caddy_default_port_https: 443

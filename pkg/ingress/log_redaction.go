@@ -19,8 +19,11 @@ const CredentialURIRegexp = `/(?:(` + credentialPathPrefix + `)` + credentialKey
 
 // The parts every rendered redaction is built from.
 const (
-	// credentialPathPrefix is the path segment a stream key follows.
-	credentialPathPrefix = `(?:webrtc|whip|ingest)/`
+	// credentialPathSegments are the path segments a stream key follows:
+	// the Foghorn ingest front door and WHIP's two publish paths.
+	credentialPathSegments = `ingest|webrtc|whip`
+	// credentialPathPrefix matches one credential path segment and its slash.
+	credentialPathPrefix = `(?:` + credentialPathSegments + `)/`
 	// credentialKey is the stream-key path segment itself.
 	credentialKey = `[^/?]+`
 	// matroskaSuffix is the extension a Matroska push appends to the key.
@@ -75,4 +78,15 @@ func NginxCredentialURIMapBlock(indent string) string {
 	}
 	b.WriteString(indent + "    default $request_uri;\n" + indent + "}\n")
 	return b.String()
+}
+
+// CredentialPathPrefixes returns the request path prefixes whose next segment
+// is a publishing credential, in the order renderers emit them.
+func CredentialPathPrefixes() []string {
+	segments := strings.Split(credentialPathSegments, "|")
+	prefixes := make([]string, len(segments))
+	for i, segment := range segments {
+		prefixes[i] = "/" + segment + "/"
+	}
+	return prefixes
 }

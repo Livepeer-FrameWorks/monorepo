@@ -647,7 +647,7 @@ func writeNginxRuntimeConfigLocation(b *strings.Builder, site proxySite) {
 
 // credentialPathPrefixes are request paths whose first segment is a publishing
 // credential rather than an identifier.
-var credentialPathPrefixes = []string{"/ingest/", "/webrtc/"}
+var credentialPathPrefixes = ingress.CredentialPathPrefixes()
 
 // writeNginxCredentialPathLocation carves the credential-bearing paths a site
 // already serves out into their own locations so their error logging can be
