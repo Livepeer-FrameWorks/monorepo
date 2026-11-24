@@ -48,6 +48,14 @@ livepeer_produced() {
   rows=$(log_json "$2" "select(.trigger_type==\"LIVEPEER_SEGMENT_COMPLETE\" and .stream_name==$quoted and (.rendition_count|tonumber)>0)" edge edge-b) || return 1
   [ -n "$rows" ]
 }
+native_worker_budget() {
+  local service visible
+  for service in "$ORCHESTRATOR" "$ORCHESTRATOR_B"; do
+    visible=$(stack_exec "$service" nproc) || return 1
+    echo "    $service native CPU visibility: $visible (budget 2)"
+    [[ "$visible" =~ ^[0-9]+$ ]] && [ "$visible" -gt 0 ] && [ "$visible" -le 2 ] || return 1
+  done
+}
 local_first_running() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='${local_hashes[0]}' AND status='processing' AND memory_reserved_bytes>0")" = 1 ]
 }
@@ -62,6 +70,7 @@ local_job_waited_for_memory() {
       AND running.status IN ('dispatched','processing') AND running.memory_reserved_bytes>0)")" = t ]
 }
 before_media=$(media_runtime_state all) || { fail 'read media service state before Livepeer ladders'; finish; }
+check 'native encoder worker pools see at most their two-CPU budget' native_worker_budget
 printf '%s\n' "$before_media" >"$STACK_STATE_DIR/media-runtime-livepeer-before.tsv"
 if printf '%s\n' "$before_media" | grep -v ' running ' >/dev/null; then fail 'media services are not running before Livepeer ladders'; finish; fi
 for entry in '2560x1440 qhd 1440' '3840x2160 uhd 2160' '3840x2160 inherit 1080'; do
