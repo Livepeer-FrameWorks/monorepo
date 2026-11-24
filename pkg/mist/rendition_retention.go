@@ -21,6 +21,7 @@ type TrackInfo struct {
 	Image         bool
 	Rotation      int  `json:"rotation"`
 	Mirror        bool `json:"mirror"`
+	HasBframes    bool `json:"has_bframes"`
 }
 
 // RetainRung is one ladder rung: its short side in pixels and its target
@@ -173,7 +174,8 @@ func sortedTracks(tracks []TrackInfo) []TrackInfo {
 
 // selectRetainTracks mirrors Util::pickTracks for the video selectors a
 // track_retain uses: a comma list whose plain items add to the selection and
-// whose "|" items narrow it, over codec names, "source", "all", short-side
+// whose "|" items narrow it and "!" items remove from it, over codec names,
+// "source", "all", "bframes", short-side
 // (">0xN") and area (">WxH") thresholds and bitrate thresholds in bps, kbps
 // (1024) or mbps (1024*1024). Size and bitrate thresholds skip image tracks.
 func selectRetainTracks(selector string, tracks []TrackInfo) ([]TrackInfo, error) {
@@ -181,11 +183,15 @@ func selectRetainTracks(selector string, tracks []TrackInfo) ([]TrackInfo, error
 	if !ok || value == "" || strings.Contains(value, "&") {
 		return nil, fmt.Errorf("track_retain %q is not a single video selector", selector)
 	}
+	if strings.HasPrefix(value, "!") {
+		value = "all," + value
+	}
 	var result []TrackInfo
 	for _, item := range strings.Split(value, ",") {
 		narrow := strings.HasPrefix(item, "|")
+		remove := strings.HasPrefix(item, "!")
 		pool := tracks
-		if narrow {
+		if narrow || remove {
 			item, pool = item[1:], result
 		}
 		match, err := retainTokenMatcher(strings.ToLower(item))
@@ -194,11 +200,11 @@ func selectRetainTracks(selector string, tracks []TrackInfo) ([]TrackInfo, error
 		}
 		var picked []TrackInfo
 		for _, track := range pool {
-			if match(track) {
+			if match(track) != remove {
 				picked = append(picked, track)
 			}
 		}
-		if narrow {
+		if narrow || remove {
 			result = picked
 			continue
 		}
@@ -228,6 +234,8 @@ func retainTokenMatcher(token string) (func(TrackInfo) bool, error) {
 		return func(TrackInfo) bool { return true }, nil
 	case token == "source":
 		return func(t TrackInfo) bool { return t.Original }, nil
+	case token == "bframes":
+		return func(t TrackInfo) bool { return t.HasBframes }, nil
 	case strings.HasPrefix(token, ">") || strings.HasPrefix(token, "<"):
 		greater := token[0] == '>'
 		compare := func(v, threshold uint64) bool {

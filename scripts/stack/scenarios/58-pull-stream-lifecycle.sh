@@ -55,7 +55,7 @@ PLAYER=$!
 playing() { [ "$(hls_poll_state "$STACK_STATE_DIR/pull-lifecycle-player.log" 0)" = ok ]; }
 eventually 45 'pull receives transport-stream media' playing || finish
 session_live() {
-  ROW=$(pg "$FOGHORN_B_DB" "SELECT id::text||'|'||buffer_pid::text FROM foghorn.pull_ingest_sessions
+  ROW=$(pg "$FOGHORN_B_DB" "SELECT cell_session_id::text||'|'||buffer_pid::text FROM foghorn.pull_ingest_sessions
     WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' AND ended_at IS NULL AND admission_state='active'") || return 1
   [[ "$ROW" =~ ^[a-f0-9-]+\|[0-9]+$ ]]
 }

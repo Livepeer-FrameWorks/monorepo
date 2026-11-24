@@ -909,7 +909,7 @@ func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
 				fps := fpks / 1000 // fpks is frames per kilosecond
 				track.Fps = &fps
 			}
-			if bframes, ok := trackMap["bframes"].(bool); ok {
+			if bframes, ok := ParseTrackBFrames(trackMap["bframes"]); ok {
 				track.HasBframes = &bframes
 			}
 
@@ -1019,6 +1019,22 @@ func parseRecordingTrackSummary(summary map[string]any) []*ipcpb.StreamTrack {
 		tracksData[name] = trackMap
 	}
 	return parseTracksFromJSON(tracksData)
+}
+
+// ParseTrackBFrames accepts the boolean health-map flag and the numeric 0/1
+// emitted by Mist's track metadata. Other values leave the flag unknown.
+func ParseTrackBFrames(value any) (bool, bool) {
+	switch flag := value.(type) {
+	case bool:
+		return flag, true
+	case float64:
+		return flag == 1, flag == 0 || flag == 1
+	case json.Number:
+		number, err := flag.Float64()
+		return number == 1, err == nil && (number == 0 || number == 1)
+	default:
+		return false, false
+	}
 }
 
 func int64FromAny(v any) (int64, bool) {

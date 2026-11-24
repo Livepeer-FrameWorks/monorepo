@@ -2159,6 +2159,9 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 				p.videoCodecs[codec] = true
 				p.sourceMedia = true
 				t := processingMetaVideoTrack{codec: codec, name: name}
+				if bframes, ok := mist.ParseTrackBFrames(track["bframes"]); ok {
+					t.hasBframes = bframes
+				}
 				if rotation, ok := mapInt64(track, "rotation"); ok {
 					t.rotation = int(rotation)
 				}
@@ -2230,6 +2233,7 @@ type processingMetaVideoTrack struct {
 	height        int
 	rotation      int
 	mirror        bool
+	hasBframes    bool
 	bps           uint64 // Mist track bps: bytes per second
 	firstms       float64
 	lastms        float64
@@ -2455,6 +2459,9 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 			continue
 		}
 		t := processingMetaVideoTrack{codec: codec, name: name}
+		if bframes, ok := mist.ParseTrackBFrames(track["bframes"]); ok {
+			t.hasBframes = bframes
+		}
 		if v, ok := track["width"].(float64); ok {
 			t.width = int(v)
 		}
@@ -2545,6 +2552,7 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 			width:         int(track.GetWidth()),
 			height:        int(track.GetHeight()),
 			bps:           uint64(max(track.GetBitrateBps(), 0) / 8),
+			hasBframes:    track.GetHasBframes(),
 			firstms:       float64(firstMs),
 			lastms:        float64(lastMs),
 			source:        track.GetSourceTrack(),
@@ -2783,6 +2791,9 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 			continue
 		}
 		t := processingMetaVideoTrack{codec: codec, name: names[i], source: stringField(track, "source"), bps: healthTrackBps(track)}
+		if bframes, ok := mist.ParseTrackBFrames(track["bframes"]); ok {
+			t.hasBframes = bframes
+		}
 		if rotation, ok := mapInt64(track, "rotation"); ok {
 			t.rotation = int(rotation)
 		}
