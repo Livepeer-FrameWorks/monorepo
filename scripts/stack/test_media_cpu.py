@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the native media entrypoint's quota, affinity and argument contract."""
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tempfile
@@ -11,6 +12,20 @@ FUNCTIONS = (ROOT / "media-cpu.sh").read_text().rsplit('\nmedia_cpu_main "$@"', 
 
 
 class MediaCpuBudget(unittest.TestCase):
+    def test_budget_reads_the_native_process_affinity(self):
+        source = (ROOT / "scenarios/66-transcode-ladders.sh").read_text()
+        function = re.search(r"^native_worker_budget\(\) \{\n.*?^\}", source, re.M | re.S).group(0)
+        for native, readable in ((2, True), (4, True), (2, False)):
+            with self.subTest(native=native, readable=readable):
+                script = 'set -uo pipefail\nORCHESTRATOR=one ORCHESTRATOR_B=two\n'
+                script += 'stack_exec() { case "$*" in *"/proc/1/status"*) '
+                script += (f'printf "{native}\\n"' if readable else 'return 1')
+                script += ' ;; *) printf "24\\n" ;; esac; }\n'
+                result = subprocess.run(["bash", "-c", script + function + '\nnative_worker_budget'],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, readable and native <= 2,
+                                 "docker exec creates an observer with its own affinity; inspect the native PID 1")
+
     def test_native_workers_use_only_the_available_cpu_budget(self):
         for allowed, quota, period, wanted in (
             ("0-23", "200000", "100000", "0,1"),

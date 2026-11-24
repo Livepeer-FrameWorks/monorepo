@@ -17,6 +17,28 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_local_ladders_may_run_concurrently_only_within_reserved_memory(self):
+        predicate = function("66-transcode-ladders.sh", "local_jobs_have_reserved_capacity")
+        row = {"artifact_hash": "first", "status": "processing", "retry_count": 0,
+               "processing_node_id": "edge", "memory_reserved_bytes": 1187428044}
+        second = dict(row, artifact_hash="second")
+        for mode, budget, expected in (("running", 2684354560, True), ("queued", 2684354560, True),
+                                       ("running", 2000000000, False), ("retry", 2684354560, False),
+                                       ("unreserved", 2684354560, False), ("missing", 2684354560, False)):
+            with self.subTest(mode=mode):
+                current = dict(second)
+                if mode == "queued":
+                    current.update(status="queued", wait_reason="memory", memory_reserved_bytes=0)
+                if mode == "retry": current["retry_count"] = 1
+                if mode == "unreserved": current["memory_reserved_bytes"] = 0
+                rows = [row] if mode == "missing" else [row, current]
+                script = 'set -uo pipefail\nFOGHORN_A_DB=cell STACK_TENANT_ID=tenant CELL_A_CLUSTER=cell\nlocal_hashes=(first second)\n'
+                script += 'pg() { case "$2" in *jsonb_agg*) printf "%s\\n" ' + shlex.quote(json.dumps(rows)) + ' ;; *) printf "f\\n" ;; esac; }\n'
+                script += 'stack_exec() { printf "%s\\n" ' + shlex.quote(json.dumps({"processing_memory_budget_bytes": budget})) + '; }\n'
+                result = subprocess.run(["bash", "-c", script + predicate + '\nlocal_jobs_have_reserved_capacity'],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+
     def test_pull_public_session_uses_the_cell_identity(self):
         session = function("58-pull-stream-lifecycle.sh", "session_live")
         script = 'set -uo pipefail\nFOGHORN_B_DB=cell STACK_TENANT_ID=tenant UUID=stream\n'
