@@ -4,7 +4,7 @@
 # staging: unsafe, stops the Livepeer gateway
 # An uploaded original video track that already fits a ladder rung is that
 # rung: no process produces it, nothing bills it, it stays visible. Fit means
-# H264 or HEVC, short side within max(32, rung/20) of the rung and bitrate
+# H264 for the requested H264 ladder, short side within max(32, rung/20) of the rung and bitrate
 # within 0.5x-2x of the rung target (360p 900k, 480p 1600k, 720p 4500k, 1080p
 # 7800k). A non-fitting original is masked and its rung transcoded from the
 # highest-bitrate original. Every rung appears exactly once in HLS.
@@ -56,14 +56,14 @@ artifact_tracks() {
   done
   return 1
 }
-# recorded_ladder <hash> <retained rungs> <transcoded rungs> [retained hevc rung]:
+# recorded_ladder <hash> <retained rungs> <transcoded rungs>:
 # the stored VOD has one video track per rung; the retained rungs are original
 # tracks (no source_track lineage), the others are process outputs.
 recorded_ladder() {
   local tracks
   tracks=$(artifact_tracks "$1") || return 1
   echo "    video tracks: $(echo "$tracks" | jq -c '[.[] | select((.track_type // .trackType // .type)=="video") | {codec, w:.width, h:.height, kbps:(.bitrate_kbps // .bitrateKbps), src:(.source_track // .sourceTrack // "")}]')"
-  echo "$tracks" | jq -e --arg retained "$2" --arg transcoded "$3" --arg hevc "${4:-}" '
+  echo "$tracks" | jq -e --arg retained "$2" --arg transcoded "$3" '
     def rung($size): [360,480,720,1080][] as $r | select(($size - $r | fabs) <= ([32, $r/20] | max)) | $r;
     def rungs($list): $list | split(",") | map(select(. != "") | tonumber) | sort;
     [.[] | select((.track_type // .trackType // .type)=="video" and (.codec|ascii_downcase)!="jpeg")
@@ -71,15 +71,15 @@ recorded_ladder() {
     ($videos | length) == (rungs($retained) + rungs($transcoded) | length) and
     ([$videos[] | select(.derived | not) | [rung(.short)][0]] | sort) == rungs($retained) and
     ([$videos[] | select(.derived) | [rung(.short)][0]] | sort) == rungs($transcoded) and
-    (if $hevc == "" then true else any($videos[]; (.derived | not) and .codec=="hevc" and rung(.short)==($hevc|tonumber)) end)' >/dev/null
+    all($videos[]; .codec=="h264")' >/dev/null
 }
-# hls_ladder <want hevc rung or ""> <foghorn> <playback id>: the master playlist
+# hls_ladder <foghorn> <playback id>: the master playlist
 # lists each rung exactly once and nothing else.
 hls_ladder() {
   local url
-  url=$(location_at "$2" "$3")
+  url=$(location_at "$1" "$2")
   [ -n "$url" ] || return 1
-  python3 - "$url" "$1" <<'PY'
+  python3 - "$url" <<'PY'
 import re,sys,urllib.request
 with urllib.request.urlopen(sys.argv[1],timeout=20) as response:
     master=response.read().decode()
@@ -95,10 +95,8 @@ def rung(short):
 rungs=sorted(rung(short) for short,_ in variants)
 if rungs!=[360,480,720,1080]:
     raise SystemExit(f'expected exactly one variant per rung 360/480/720/1080, got {variants}')
-if sys.argv[2]:
-    codecs=next(c for short,c in variants if rung(short)==int(sys.argv[2]))
-    if not re.search(r'\b(hvc1|hev1)',codecs):
-        raise SystemExit(f'rung {sys.argv[2]} is not the retained HEVC original: {codecs}')
+if not all(re.search(r'\bavc[13]',codecs) for _,codecs in variants):
+    raise SystemExit(f'a requested H264 rung has the wrong codec: {variants}')
 PY
 }
 # billed_rungs <hash>: the rungs Livepeer billed for the artifact ("480,720,"),
@@ -127,13 +125,13 @@ gateway_present() { [ "$(gateway_state)" = healthy ]; }
 
 work="$STACK_STATE_DIR/rendition-retention"
 mkdir -p "$work"
-# name | renditions | retained rungs | transcoded rungs | retained HEVC rung
+# name | renditions | retained rungs | transcoded rungs
 cases=(
-  'in-band|1920x1080:h264:7800 1280x720:h264:4500 640x360:h264:900|360,720,1080|480|'
-  'whack-720|1920x1080:h264:7800 1280x720:h264:15000 640x360:h264:900|360,1080|480,720|'
-  'hevc-720|1920x1080:h264:7800 1280x720:hevc:4500|720,1080|360,480|720'
-  'single-in-band|1920x1080:h264:7800|1080|360,480,720|'
-  'single-out-of-band|1920x1080:h264:24000||360,480,720,1080|'
+  'in-band|1920x1080:h264:7800 1280x720:h264:4500 640x360:h264:900|360,720,1080|480'
+  'whack-720|1920x1080:h264:7800 1280x720:h264:15000 640x360:h264:900|360,1080|480,720'
+  'hevc-720|1920x1080:h264:7800 1280x720:hevc:4500|1080|360,480,720'
+  'single-in-band|1920x1080:h264:7800|1080|360,480,720'
+  'single-out-of-band|1920x1080:h264:24000||360,480,720,1080'
 )
 for entry in "${cases[@]}"; do
   IFS='|' read -r name specs _ _ _ <<<"$entry"
@@ -143,8 +141,8 @@ done
 
 eventually 90 'cell A Livepeer gateway discoverable' gateway_discoverable stack-livepeer-gateway-a || finish
 run_case() { # run_case <path> <case entry>
-  local path=$1 name specs retained transcoded hevc result id hash playback processes
-  IFS='|' read -r name specs retained transcoded hevc <<<"$2"
+  local path=$1 name specs retained transcoded result id hash playback processes
+  IFS='|' read -r name specs retained transcoded <<<"$2"
   log "$path: $name ($specs)"
   result=$(upload_vod "$work/$name.mp4" "stack rendition retention $path $name" '{"keepOriginal":false}')
   id=$(echo "$result" | jq -r '.id // empty')
@@ -158,8 +156,8 @@ run_case() { # run_case <path> <case entry>
   else
     check "$path/$name processed by local AV" json_has "$processes" 'any(.[]; .process=="AV") and all(.[]; .process!="Livepeer")'
   fi
-  check "$path/$name stores originals {$retained} and transcodes {$transcoded}" recorded_ladder "$hash" "$retained" "$transcoded" "$hevc"
-  every_replica "$path/$name HLS has each rung exactly once" "$playback" hls_ladder "$hevc"
+  check "$path/$name stores originals {$retained} and transcodes {$transcoded}" recorded_ladder "$hash" "$retained" "$transcoded"
+  every_replica "$path/$name HLS has each rung exactly once" "$playback" hls_ladder
   every_replica "$path/$name spans the full source" "$playback" full_length_upload
   # Local AV samples carry no output geometry; Livepeer's name each rendition.
   if [ "$path" = livepeer ]; then

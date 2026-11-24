@@ -5,14 +5,15 @@ import (
 	"strings"
 )
 
-const liveH264RetentionFilter = ",|h264,!bframes"
+const (
+	h264RetentionFilter     = ",|h264"
+	liveH264RetentionFilter = h264RetentionFilter + ",!bframes"
+)
 
-// ConstrainLiveRenditionRetention keeps an original in place of a live H264
-// rendition only when Mist's WebRTC output can select it. An incompatible
-// original still feeds the encoder; retaining it would remove the stream's
-// compatible video output.
-// Offline processing keeps its own retention contract.
-func ConstrainLiveRenditionRetention(processesJSON string) string {
+// ConstrainRenditionRetention keeps an original only when it supplies the
+// requested H264 codec. Live playback also requires no frame reordering;
+// offline H264 retention can preserve B-frames.
+func ConstrainRenditionRetention(processesJSON, workload string) string {
 	var processes []map[string]any
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
 		return processesJSON
@@ -23,7 +24,16 @@ func ConstrainLiveRenditionRetention(processesJSON string) string {
 		if !ok || strings.TrimSpace(selector) == "" || strings.HasSuffix(selector, liveH264RetentionFilter) {
 			return
 		}
-		profile["track_retain"] = selector + liveH264RetentionFilter
+		if workload == WorkloadVOD {
+			if strings.HasSuffix(selector, h264RetentionFilter) {
+				return
+			}
+			profile["track_retain"] = selector + h264RetentionFilter
+		} else if strings.HasSuffix(selector, h264RetentionFilter) {
+			profile["track_retain"] = selector + ",!bframes"
+		} else {
+			profile["track_retain"] = selector + liveH264RetentionFilter
+		}
 		changed = true
 	}
 	for _, process := range processes {

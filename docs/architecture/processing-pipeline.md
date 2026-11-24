@@ -116,13 +116,17 @@ rendered. Helmsman carries both orientation fields through readiness, memory pla
 recording selection. Cached readiness without either field is not used to reduce the memory
 reservation; the source must be inspected again.
 
-For live H264 rungs, retention also requires H264 without B-frames. Mist's
-WebRTC output excludes reordered video, so a B-frame or HEVC original feeds
-the H264 encoder instead of replacing its rendition. Foghorn applies this constraint
+For every H264 rung, live or VOD, retention requires an H264 original. A HEVC
+original remains a decode source and cannot replace the requested H264 rendition.
+Mist's TS-HLS path excludes HEVC; [Apple's HLS authoring specification](https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices/)
+requires fMP4 for HEVC delivery.
+
+Live retention additionally excludes B-frames because Mist's WebRTC output cannot
+select reordered video. VOD can retain H264 with B-frames. Foghorn applies these constraints
 before the ingest-session snapshot and execution-policy binding, including
 local AV fallback. Helmsman carries frame reordering through readiness and
 memory admission; cached readiness without that fact cannot waive an encoder
-reservation. VOD keeps its separate retention policy.
+reservation.
 
 `mist.ExpectedVideoRenditions` models both local MistProcAV and Livepeer/LPMS output sizes.
 Height-only ladder profiles name the short side for portrait video. Named ladders use
