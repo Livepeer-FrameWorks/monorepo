@@ -12,6 +12,7 @@ type IngestURLs struct {
 	WHIP string
 	RTMP string
 	SRT  string
+	MKV  string
 }
 
 // IngestPublicOrigin keeps the destination's advertised HTTP scheme and port.
@@ -36,6 +37,7 @@ func ResolveIngestURLs(outputs map[string]any, publicBase, streamKey string) Ing
 		WHIP: resolveIngestTemplate(whipIngestTemplate(outputs), publicBase, streamKey, "whip"),
 		RTMP: resolveIngestTemplate(ingestTemplate(outputs, "RTMP"), publicBase, streamKey, "rtmp"),
 		SRT:  resolveIngestTemplate(ingestTemplate(outputs, "TSSRT", "SRT"), publicBase, streamKey, "srt"),
+		MKV:  resolveIngestTemplate(ingestTemplate(outputs, "EBML"), publicBase, streamKey, "mkv"),
 	}
 }
 

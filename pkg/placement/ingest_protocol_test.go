@@ -17,7 +17,8 @@ func TestIngestProtocolName(t *testing.T) {
 		{sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP, "rtmp", false},
 		{sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT, "srt", false},
 		{sharedpb.IngestProtocol(-1), "", true},
-		{sharedpb.IngestProtocol(4), "", true},
+		{sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV, "mkv", false},
+		{sharedpb.IngestProtocol(5), "", true},
 	} {
 		got, err := IngestProtocolName(tc.protocol)
 		if got != tc.want || (err != nil) != tc.invalid {

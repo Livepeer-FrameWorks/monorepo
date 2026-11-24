@@ -30,14 +30,14 @@ func preparedIngestFixture(t *testing.T, request IngestPlacementRequest) balance
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint := map[string]string{"whip": "https://publish.example/webrtc/$", "rtmp": "rtmps://publish.example:2935/live/$", "srt": "srt://publish.example:9889?streamid=$"}[request.Protocol]
+	endpoint := map[string]string{"whip": "https://publish.example/webrtc/$", "rtmp": "rtmps://publish.example:2935/live/$", "srt": "srt://publish.example:9889?streamid=$", "mkv": "https://publish.example/$.mkv"}[request.Protocol]
 	return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: request.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID),
 		ClusterID: "selected-cluster", NodeID: "selected-node", Protocol: request.Protocol, Endpoint: endpoint, PublicBaseURL: "https://display.example:8443",
 		AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
 }
 
 func TestPreparedIngestEndpointsBindOnlyConfirmedProtocols(t *testing.T) {
-	for _, protocol := range []string{"", "whip", "rtmp", "srt"} {
+	for _, protocol := range []string{"", "whip", "rtmp", "srt", "mkv"} {
 		t.Run(protocol, func(t *testing.T) {
 			var seen []string
 			var seenMu sync.Mutex
@@ -60,13 +60,13 @@ func TestPreparedIngestEndpointsBindOnlyConfirmedProtocols(t *testing.T) {
 			}
 			want := protocol
 			if protocol == "" {
-				want = "rtmp,srt,whip"
+				want = "mkv,rtmp,srt,whip"
 			}
 			slices.Sort(seen)
 			if strings.Join(seen, ",") != want {
 				t.Fatalf("prepared protocols %v, want %s", seen, want)
 			}
-			for p, value := range map[string]string{"whip": response.Primary.GetWhipUrl(), "rtmp": response.Primary.GetRtmpUrl(), "srt": response.Primary.GetSrtUrl()} {
+			for p, value := range map[string]string{"whip": response.Primary.GetWhipUrl(), "rtmp": response.Primary.GetRtmpUrl(), "srt": response.Primary.GetSrtUrl(), "mkv": response.Primary.GetMkvUrl()} {
 				if (protocol == "" || protocol == p) != strings.Contains(value, "private-key") {
 					t.Fatalf("unconfirmed or unbound %s URL: %s", p, value)
 				}
@@ -190,7 +190,7 @@ func TestPreparedIngestEndpointsDoNotBroadenAmbiguousProtocolResults(t *testing.
 			if err == nil || response != nil {
 				t.Fatalf("ambiguous preparation returned a recommendation: %v, %v", response, err)
 			}
-		} else if err != nil || len(response.Fallbacks) != 1 || response.Primary.GetRtmpUrl() != "" || response.Fallbacks[0].GetSrtUrl() == "" || calls.Load() != 3 {
+		} else if err != nil || len(response.Fallbacks) != 2 || response.Primary.GetRtmpUrl() != "" || response.Fallbacks[0].GetSrtUrl() == "" || response.Fallbacks[1].GetMkvUrl() == "" || calls.Load() != 4 {
 			t.Fatalf("independent protocol destinations changed: %v, %v, %d", response, err, calls.Load())
 		}
 	}

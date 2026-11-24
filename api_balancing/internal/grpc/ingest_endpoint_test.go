@@ -260,8 +260,10 @@ func TestResolveIngestEndpoint_RequestedProtocolFiltersBeforeSelection(t *testin
 	sm := state.ResetDefaultManagerForTests()
 	seedGRPCIngestNode(t, sm, "a-rtmp", "rtmp.example:18090")
 	seedGRPCIngestNode(t, sm, "z-whip", "whip.example:18090")
+	seedGRPCIngestNode(t, sm, "m-mkv", "mkv.example:18090")
 	sm.SetNodeInfo("a-rtmp", "http://rtmp.example:18090", true, nil, nil, "", "", map[string]any{"RTMP": "rtmp://HOST:2935/play/$"})
 	sm.SetNodeInfo("z-whip", "http://whip.example:18090", true, nil, nil, "", "", map[string]any{"WebRTC": "http://HOST:18090/webrtc/$"})
+	sm.SetNodeInfo("m-mkv", "http://mkv.example:18090", true, nil, nil, "", "", map[string]any{"EBML": "http://HOST:8080/$.webm"})
 	fake := &commodoreIngestFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 		return &commodorepb.ResolveStreamContextResponse{Admitted: true, StreamId: "stream", InternalName: "internal", TenantId: "tenant", IngestMode: "push", ClusterPeers: ingestTestPeers()}, nil
 	}}
@@ -273,10 +275,14 @@ func TestResolveIngestEndpoint_RequestedProtocolFiltersBeforeSelection(t *testin
 	}{
 		{sharedpb.IngestProtocol_INGEST_PROTOCOL_WHIP, "z-whip"},
 		{sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP, "a-rtmp"},
+		{sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV, "m-mkv"},
 	} {
 		resp, err := srv.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: tc.protocol})
 		if err != nil || resp.GetPrimary().GetNodeId() != tc.node || len(resp.GetFallbacks()) != 0 {
 			t.Fatalf("protocol %v: response=%+v err=%v", tc.protocol, resp, err)
+		}
+		if tc.protocol == sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV && resp.GetPrimary().GetMkvUrl() != "http://mkv.example:18090/key.mkv" {
+			t.Fatalf("mkv URL=%q", resp.GetPrimary().GetMkvUrl())
 		}
 	}
 	_, err := srv.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT})

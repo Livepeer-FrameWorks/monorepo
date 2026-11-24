@@ -17,6 +17,8 @@ func IngestProtocolName(protocol sharedpb.IngestProtocol) (string, error) {
 		return "rtmp", nil
 	case sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT:
 		return "srt", nil
+	case sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV:
+		return "mkv", nil
 	default:
 		return "", fmt.Errorf("unsupported ingest protocol")
 	}

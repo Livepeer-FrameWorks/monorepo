@@ -442,6 +442,7 @@ enum IngestProtocol {
   INGEST_PROTOCOL_WHIP = 1;
   INGEST_PROTOCOL_RTMP = 2;
   INGEST_PROTOCOL_SRT = 3;
+  INGEST_PROTOCOL_MKV = 4; // HTTP Matroska (MKV/WebM) push
 }
 
 // IngestEndpointKind classifies the surface a resolved endpoint exposes,
@@ -471,6 +472,7 @@ message IngestEndpoint {
   optional double load_score = 7;
   IngestEndpointKind kind = 8;     // Endpoint surface kind classification
   string cluster_id = 9;           // Cluster this endpoint resolves into (for pinning + observability)
+  optional string mkv_url = 10;    // HTTP Matroska (MKV) push URL
 }
 
 // IngestMetadata - metadata about the stream for ingest

@@ -50,7 +50,7 @@ func TestIngestRoutingAcrossAuthenticatedCellsIsCoordinatorIndependent(t *testin
 	for _, scenario := range []string{"near-us", "near-us-west", "near-eu", "us-full", "us-unknown", "eu-owner", "owner-unknown", "official-denied",
 		"selfhost-preferred", "selfhost-full", "selfhost-unknown", "selfhost-geo-hole", "selfhost-never-full"} {
 		t.Run(scenario, func(t *testing.T) {
-			for _, protocol := range []string{"whip", "rtmp", "srt"} {
+			for _, protocol := range []string{"whip", "rtmp", "srt", "mkv"} {
 				t.Run(protocol, func(t *testing.T) {
 					routers, route, ownershipReads, _ := ingestRoutingCells(t, scenario, protocol)
 					want := "us"
@@ -171,7 +171,7 @@ func ingestRoutingCells(t *testing.T, scenario, protocol string) (map[string]bal
 			NodeID: cluster + "-node", ClusterID: cluster, Host: "https://" + cluster + ".example", IsActive: true, CapIngest: true,
 			CPU: 10, RAMMax: 100, RAMCurrent: 10, BWLimit: 1000, MetricsObservedAt: now, LastHeartbeat: now, OutputsObservedAt: now,
 			HasCoordinates: true, GeoLatitude: latitude, GeoLongitude: longitude,
-			Outputs: map[string]any{"RTMP": "rtmps://HOST:2935/play/$", "TSSRT": "srt://HOST:9889?streamid=$", "WebRTC": "https://HOST:8443/webrtc/$"},
+			Outputs: map[string]any{"RTMP": "rtmps://HOST:2935/play/$", "TSSRT": "srt://HOST:9889?streamid=$", "WebRTC": "https://HOST:8443/webrtc/$", "EBML": "http://HOST:8080/$.webm"},
 		}}}
 		if cluster == "us" {
 			west := snapshot.Nodes[0]
@@ -275,7 +275,7 @@ func TestPreparedIngestFrontDoorUsesAuthenticatedCells(t *testing.T) {
 				if err != nil || response.Primary.ClusterId != want || response.Primary.NodeId != want+"-node" || response.Primary.BaseUrl != "https://"+want+".example" || len(response.Fallbacks) != 0 {
 					t.Fatalf("front door changed exact destination: %v, %v", response, err)
 				}
-				for _, endpoint := range []string{response.Primary.GetWhipUrl(), response.Primary.GetRtmpUrl(), response.Primary.GetSrtUrl()} {
+				for _, endpoint := range []string{response.Primary.GetWhipUrl(), response.Primary.GetRtmpUrl(), response.Primary.GetSrtUrl(), response.Primary.GetMkvUrl()} {
 					if !strings.Contains(endpoint, "owner-key") {
 						t.Fatalf("unbound or absent confirmed protocol: %s", endpoint)
 					}

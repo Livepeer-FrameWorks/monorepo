@@ -95,8 +95,8 @@ func HandleIngestFrontDoor(c *gin.Context) {
 		return
 	}
 	if values, present := query["protocol"]; present {
-		if len(values) != 1 || (values[0] != "whip" && values[0] != "rtmp" && values[0] != "srt") {
-			respondPlaybackError(c, http.StatusBadRequest, "INVALID_INGEST_PROTOCOL", "Use one protocol: whip, rtmp or srt", nil)
+		if len(values) != 1 || (values[0] != "whip" && values[0] != "rtmp" && values[0] != "srt" && values[0] != "mkv") {
+			respondPlaybackError(c, http.StatusBadRequest, "INVALID_INGEST_PROTOCOL", "Use one protocol: whip, rtmp, srt or mkv", nil)
 			return
 		}
 		requiredProtocol = values[0]

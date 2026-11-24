@@ -312,6 +312,8 @@ func (r *Resolver) DoResolveIngestEndpointForProtocol(ctx context.Context, strea
 		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP
 	case "SRT":
 		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT
+	case "MKV":
+		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV
 	default:
 		return nil, fmt.Errorf("unsupported ingest protocol")
 	}

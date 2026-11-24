@@ -17,6 +17,7 @@ func TestIngestProtocolForwarding(t *testing.T) {
 		{"WHIP", sharedpb.IngestProtocol_INGEST_PROTOCOL_WHIP},
 		{"RTMP", sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP},
 		{"SRT", sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT},
+		{"MKV", sharedpb.IngestProtocol_INGEST_PROTOCOL_MKV},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			calls := 0
