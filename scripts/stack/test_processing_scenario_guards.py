@@ -17,6 +17,27 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_network_segments_follow_the_admitted_runtime(self):
+        source = (ROOT / "scenarios" / "35-network-observations.sh").read_text()
+        start = source.index('INTERNAL=$(internal_name_of "$UUID")')
+        end = source.index('\nwait_publisher', start)
+        setup = source[start:end]
+        for runtime in ("live+logical_fw1p_generation", "live+logical", ""):
+            with self.subTest(runtime=runtime):
+                script = 'set -uo pipefail\nUUID=stream FOGHORN_A_DB=cell STACK_TENANT_ID=tenant\n'
+                script += 'internal_name_of() { printf "logical\\n"; }\n'
+                script += 'video_heights() { printf "360\\n"; }; eventually() { shift 2; "$@"; }\n'
+                script += 'pg() { printf "%s\\n" ' + shlex.quote(runtime) + '; }\n'
+                script += 'fail() { printf "%s\\n" "$*" >&2; }; finish() { exit 1; }\n'
+                script += setup + '\nprintf "%s\\n" "$DELIVERY_PREFIX"\n'
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+                if not runtime:
+                    self.assertNotEqual(result.returncode, 0, "missing admission cannot prove gateway settlement")
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), runtime + "-",
+                                 "gateway observations must follow the admitted fenced runtime, not the logical stream")
+
     def test_producer_swap_preserves_pipes_in_job_json(self):
         source = (ROOT / "scenarios" / "12-producer-swap.sh").read_text()
         row_function = re.search(r"^job_row\(\) \{[^\n]*\n.*?^\}", source, re.M | re.S).group(0)

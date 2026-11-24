@@ -319,11 +319,19 @@ KEY=$(echo "$S" | jq -r '.streamKey // empty')
 eventually 90 "cell A's Livepeer gateway is discoverable" gateway_discoverable stack-livepeer-gateway-a
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
 INTERNAL=$(internal_name_of "$UUID")
-# The gateway's manifest ID, recorded as the segment's delivery session, is the
-# Mist runtime name plus the Livepeer process's 8-character suffix.
-DELIVERY_PREFIX="live+$INTERNAL-"
+# The gateway manifest includes the admitted publisher's runtime generation,
+# followed by the Livepeer process's suffix.
+gateway_delivery_prefix() {
+  local runtime
+  runtime=$(pg "$FOGHORN_A_DB" "SELECT COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name)
+    FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$1', 'live+$1') ORDER BY started_at DESC LIMIT 1") || return 1
+  [ -n "$runtime" ] || return 1
+  printf '%s-\n' "$runtime"
+}
 transcoded() { video_heights "$UUID" | grep -qx 360; }
 eventually 90 "the stream carries the transcoded 360p rendition" transcoded
+DELIVERY_PREFIX=$(gateway_delivery_prefix "$INTERNAL") || { fail 'read the admitted gateway runtime'; finish; }
 wait_publisher "$PUB" 120
 PUB=""
 

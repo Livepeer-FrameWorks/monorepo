@@ -29,6 +29,14 @@ Gateway routes GraphQL subscriptions to its own region's Signalman replicas. It 
 
 Delivery to subscribers is at-least-once. Signalman suppresses most duplicates from the bare and mirrored topic copies with a bounded event-ID window, which does not survive a restart.
 
+Pooled Bridge-to-Signalman connections use the shared control-stream keepalive:
+an idle active stream sends an HTTP/2 ping after 20 seconds and closes the
+transport if no acknowledgement arrives within 10 seconds. A silently broken
+connection therefore ends the subscription, allowing its existing reconnect
+loop to open a replacement and recover missed session revocations from
+Commodore. The shared server policy accepts these pings; unused pooled
+connections send none.
+
 Signalman's broadcast consumers intentionally start at Kafka's latest offset
 when their consumer group has no committed offset. Lag accounting uses the end
 offset as that missing-commit baseline, so a new latest-reset consumer reports
