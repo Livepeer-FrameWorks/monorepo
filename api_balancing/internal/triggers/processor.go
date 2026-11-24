@@ -618,9 +618,12 @@ func (p *Processor) ApplyLivepeerBroadcastersContext(ctx context.Context, proces
 // retry policy. vod carries a generous per-segment response budget and tolerates
 // sub-realtime throughput (warmup-friendly, fail-late); live carries only the
 // workload tag and leaves the gateway's existing live timeout untouched
-// (fail-fast). Configs with no Livepeer process — e.g. a local-AV fallback —
-// pass through unchanged.
+// (fail-fast). Live retention also requires playback-compatible originals,
+// including when gateway discovery already selected local AV encoders.
 func (p *Processor) ApplyLivepeerWorkload(processesJSON, workload string) string {
+	if workload == mist.WorkloadLive {
+		processesJSON = mist.ConstrainLiveRenditionRetention(processesJSON)
+	}
 	if !mist.HasLivepeerProcesses(processesJSON) {
 		return processesJSON
 	}

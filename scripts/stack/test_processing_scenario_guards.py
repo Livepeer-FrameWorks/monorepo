@@ -17,6 +17,22 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_pull_public_session_uses_the_cell_identity(self):
+        session = function("58-pull-stream-lifecycle.sh", "session_live")
+        script = 'set -uo pipefail\nFOGHORN_B_DB=cell STACK_TENANT_ID=tenant UUID=stream\n'
+        script += '''pg() {
+          case "$2" in
+            *"SELECT cell_session_id::text"*) printf '3585365d-90ef-4bbb-ba17-5bc3709c9685|4222\\n' ;;
+            *) printf 'c0c57492-3bbf-495f-8546-7bded75d6603|4222\\n' ;;
+          esac
+        }
+        '''
+        script += session + '\nsession_live && printf "%s\\n" "$ROW"\n'
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "3585365d-90ef-4bbb-ba17-5bc3709c9685|4222",
+                         "the public pull session identifies the cell lifecycle, not an individual buffer row")
+
     def test_network_segments_follow_the_admitted_runtime(self):
         source = (ROOT / "scenarios" / "35-network-observations.sh").read_text()
         start = source.index('INTERNAL=$(internal_name_of "$UUID")')
