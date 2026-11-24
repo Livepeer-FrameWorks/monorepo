@@ -118,17 +118,17 @@ Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_F
 
 Subject: `streams/<stream id>`.
 
-| Type                         | Fires when                                                        | Payload                                                                                              |
-| ---------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `stream.created`             | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                                     |
-| `stream.updated`             | Stream settings, the primary key, or multistream targets change.  | `streamId`, `changedFields` (snake_case field identifiers)                                           |
-| `stream.deleted`             | A stream is deleted.                                              | `streamId`                                                                                           |
-| `stream.key_rotated`         | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                                           |
-| `stream.connected`           | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `sessionId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
-| `stream.live`                | The stream becomes playable.                                      | `streamId`, `playbackId`, `sessionId`                                                                |
-| `stream.idle`                | The ingest session ends.                                          | `streamId`, `playbackId`, `sessionId`                                                                |
-| `stream.ended`               | The origin unloads the latest ingest buffer.                      | `streamId`, `playbackId`, `sessionId`                                                                |
-| `stream.ingest_disconnected` | An explicit publisher disconnect finishes.                        | `streamId`, `sessionId`, `reason` (`requested` or `key_rotated`)                                     |
+| Type                         | Fires when                                                        | Payload                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `stream.created`             | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                                             |
+| `stream.updated`             | Stream settings, the primary key, or multistream targets change.  | `streamId`, `changedFields` (snake_case field identifiers)                                                   |
+| `stream.deleted`             | A stream is deleted.                                              | `streamId`                                                                                                   |
+| `stream.key_rotated`         | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                                                   |
+| `stream.connected`           | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `sessionId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_MKV`, `_PULL`) |
+| `stream.live`                | The stream becomes playable.                                      | `streamId`, `playbackId`, `sessionId`                                                                        |
+| `stream.idle`                | The ingest session ends.                                          | `streamId`, `playbackId`, `sessionId`                                                                        |
+| `stream.ended`               | The origin unloads the latest ingest buffer.                      | `streamId`, `playbackId`, `sessionId`                                                                        |
+| `stream.ingest_disconnected` | An explicit publisher disconnect finishes.                        | `streamId`, `sessionId`, `reason` (`requested` or `key_rotated`)                                             |
 
 `changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
 `description`, `is_recording_enabled`, `live_video_abr`, `pull_source`, `source_location`,

@@ -109,7 +109,7 @@ triggers that Helmsman answers through Foghorn and that fail closed when Foghorn
 unreachable (`onfail: deny`): `USER_NEW` admits every viewer connection on every output,
 DTSC included (a peer's accepted origin pull is admitted as that pull, everything else as a
 viewer under the stream's playback policy), and `PUSH_REWRITE` admits an incoming push only
-with a valid stream key over an ingest protocol (RTMP, SRT, WHIP). The HTTP
+with a valid stream key over an ingest protocol (RTMP, SRT, WHIP, HTTP Matroska). The HTTP
 connector binds loopback because every HTTP caller goes through Caddy's TLS; a plain-HTTP
 listener on the public interface would bypass it. Helmsman sets the HTTP connector's
 `interface` when it reconciles Mist's protocols, on native and container edges alike, so an

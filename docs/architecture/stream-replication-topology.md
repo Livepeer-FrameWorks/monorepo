@@ -7,7 +7,7 @@ How live streams and artifacts replicate from origin to edges, both within a sin
 ```
 Producer                            Cluster A                                Cluster B (peer)
    │
-   │ RTMP/E-RTMP/SRT/WHIP push
+   │ RTMP/E-RTMP/SRT/WHIP/MKV push
    ▼
 ┌──────────┐
 │ Edge A1  │ ← origin (Inputs > 0, Replicated = false)
