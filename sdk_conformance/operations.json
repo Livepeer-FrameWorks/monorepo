@@ -11527,8 +11527,8 @@
     },
     {
       "name": "ResolveIngestEndpoint",
-      "document": "query ResolveIngestEndpoint ($streamKey: String!, $protocol: MediaIngestProtocol) {\n  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {\n    primary {\n      ... IngestEndpointFields\n    }\n    fallbacks {\n      ... IngestEndpointFields\n    }\n    metadata {\n      streamId\n      streamKey\n      tenantId\n      recordingEnabled\n    }\n  }\n}\nfragment IngestEndpointFields on IngestEndpoint {\n  nodeId\n  baseUrl\n  whipUrl\n  rtmpUrl\n  srtUrl\n  region\n  loadScore\n  kind\n  clusterId\n}\n",
-      "identity": "sha256:3034266278ae6a30911693c36cf61d8b9b899828138fb684c0afc14e42060dc0",
+      "document": "query ResolveIngestEndpoint ($streamKey: String!, $protocol: MediaIngestProtocol) {\n  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {\n    primary {\n      ... IngestEndpointFields\n    }\n    fallbacks {\n      ... IngestEndpointFields\n    }\n    metadata {\n      streamId\n      streamKey\n      tenantId\n      recordingEnabled\n    }\n  }\n}\nfragment IngestEndpointFields on IngestEndpoint {\n  nodeId\n  baseUrl\n  whipUrl\n  rtmpUrl\n  srtUrl\n  mkvUrl\n  region\n  loadScore\n  kind\n  clusterId\n}\n",
+      "identity": "sha256:1b6dfec5121a4bccce325af0e201512f5c04cfcc80cf1c6509623edba915d369",
       "kind": "query",
       "variables": {
         "streamKey": "text"
@@ -11542,6 +11542,7 @@
                 "clusterId": "text",
                 "kind": "INGEST_ENDPOINT_KIND_UNSPECIFIED",
                 "loadScore": 1.5,
+                "mkvUrl": "text",
                 "nodeId": "text",
                 "region": "text",
                 "rtmpUrl": "text",
@@ -11560,6 +11561,7 @@
               "clusterId": "text",
               "kind": "INGEST_ENDPOINT_KIND_UNSPECIFIED",
               "loadScore": 1.5,
+              "mkvUrl": "text",
               "nodeId": "text",
               "region": "text",
               "rtmpUrl": "text",

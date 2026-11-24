@@ -3375,9 +3375,9 @@ class ClipInNodeDefault(BaseModel):
     "Processing status (queued, processing, ready, failed)."
     processing_wait_reason: Optional[str] = Field(
         alias="processingWaitReason",
-        description="Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.",
+        description="Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.",
     )
-    "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+    "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
     error_message: Optional[str] = Field(
         alias="errorMessage",
         description="Processing failure detail from the artifact catalog.",
@@ -6626,6 +6626,7 @@ class IngestEndpoint(BaseModel):
     whip_url: Optional[str] = Field(alias="whipUrl")
     rtmp_url: Optional[str] = Field(alias="rtmpUrl")
     srt_url: Optional[str] = Field(alias="srtUrl")
+    mkv_url: Optional[str] = Field(alias="mkvUrl")
     region: Optional[str]
     load_score: Optional[float] = Field(alias="loadScore")
     kind: IngestEndpointKind
@@ -19565,9 +19566,9 @@ class VodAssetInNodeDefault(BaseModel):
     "Current processing/storage status of the asset."
     processing_wait_reason: Optional[str] = Field(
         alias="processingWaitReason",
-        description="Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.",
+        description="Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.",
     )
-    "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+    "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
     vod_asset_storage_location: str = Field(
         alias="vodAssetStorageLocation",
         description="Where the asset is stored (s3, local, freezing).",

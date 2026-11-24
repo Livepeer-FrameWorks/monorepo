@@ -17,6 +17,7 @@ function destination(): IngestDestination {
     rtmpUrl: "rtmp://edge.example:1935/live/key%2Fwith%20space",
     srtUrl: "srt://edge.example:8890?streamid=secret",
     whipUrl: "https://edge.example:8443/webrtc/secret",
+    mkvUrl: "https://edge.example:8443/secret.mkv",
   };
 }
 
@@ -36,6 +37,11 @@ describe("resolved ingest presentation", () => {
       destinationHost({ ...destination(), baseUrl: "https://user:secret@edge.example" })
     ).toBeNull();
     expect(ingestProtocolUrl(destination(), "srt")).toBe("srt://edge.example:8890?streamid=secret");
+    expect(ingestProtocolUrl(destination(), "mkv")).toBe("https://edge.example:8443/secret.mkv");
+    expect(
+      ingestProtocolUrl({ ...destination(), mkvUrl: "srt://edge.example:8890/secret.mkv" }, "mkv")
+    ).toBeNull();
+    expect(ingestProtocolUrl({ ...destination(), mkvUrl: null }, "mkv")).toBeNull();
   });
 
   it("separates OBS server/key only for an exact terminal credential segment", () => {

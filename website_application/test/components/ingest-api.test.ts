@@ -17,6 +17,7 @@ const primary = {
   whipUrl: "https://node.example/webrtc/key",
   rtmpUrl: "rtmp://node.example:2935/live/key",
   srtUrl: "srt://node.example:18889/?streamid=key",
+  mkvUrl: "https://node.example/key.mkv",
 };
 
 beforeEach(() => {
@@ -27,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("protocol-specific ingest requests", () => {
-  it.each(["WHIP", "RTMP", "SRT"] as const)(
+  it.each(["WHIP", "RTMP", "SRT", "MKV"] as const)(
     "requests %s before node selection",
     async (protocol) => {
       await resolveIngestDestination(streamId, "key", undefined, protocol);
@@ -51,6 +52,20 @@ describe("protocol-specific ingest requests", () => {
     });
     await expect(resolveIngestDestination(streamId, "key", undefined, "WHIP")).rejects.toThrow(
       "No generic address has been substituted"
+    );
+  });
+
+  it("rejects an MKV request whose destination offers only other protocols", async () => {
+    fetchDestination.mockResolvedValue({
+      data: {
+        resolveIngestEndpoint: {
+          primary: { ...primary, mkvUrl: null },
+          metadata: { streamId },
+        },
+      },
+    });
+    await expect(resolveIngestDestination(streamId, "key", undefined, "MKV")).rejects.toMatchObject(
+      { code: "PROTOCOL_UNAVAILABLE" }
     );
   });
 

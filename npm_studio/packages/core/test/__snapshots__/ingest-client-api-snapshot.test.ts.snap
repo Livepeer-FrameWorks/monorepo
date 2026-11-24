@@ -8,6 +8,7 @@ exports[`IngestClient public API > keeps its declarations 1`] = `
     getWhipUrl(): string | null;
     getRtmpUrl(): string | null;
     getSrtUrl(): string | null;
+    getMkvUrl(): string | null;
     destroy(): void;
 }"
 `;
@@ -25,6 +26,7 @@ exports[`IngestClient public API > keeps the configuration, event, and endpoint 
     whipUrl?: string;
     rtmpUrl?: string;
     srtUrl?: string;
+    mkvUrl?: string;
     region?: string;
     loadScore?: number;
 }

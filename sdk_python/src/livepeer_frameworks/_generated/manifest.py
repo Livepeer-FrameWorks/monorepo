@@ -224,7 +224,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "RequestClusterSubscription": {"kind": "mutation", "since": "v0.3.16", "identity": "sha256:3459ac334403c6aa94f22fa92ae3bdbab5144c912a68b6dc01b4e17ecc655001"},
     "ResetMediaRetentionOverride": {"kind": "mutation", "since": "v0.3.16", "identity": "sha256:40436a31bd4ed0557903c7a5717bdc0ab372dd89eceb2ea9ef15ad418b646c85"},
     "ResolveIncident": {"kind": "mutation", "since": "v0.3.16", "identity": "sha256:2e0da0e14cae781d52d9249c95a28428b3a179e80c087c1fe6d7b64081c66a19"},
-    "ResolveIngestEndpoint": {"kind": "query", "since": "v0.3.16", "identity": "sha256:3034266278ae6a30911693c36cf61d8b9b899828138fb684c0afc14e42060dc0"},
+    "ResolveIngestEndpoint": {"kind": "query", "since": "v0.3.16", "identity": "sha256:1b6dfec5121a4bccce325af0e201512f5c04cfcc80cf1c6509623edba915d369"},
     "ResolveViewerEndpoint": {"kind": "query", "since": "v0.3.16", "identity": "sha256:9128f4fac2ff70fab9f83ce120213cd5cf88196c4fb13ddfea489ff8b4d698fb"},
     "RevokeAuthSession": {"kind": "mutation", "since": "v0.3.16", "identity": "sha256:3256a3e3827e836daffb19243b896571485a037ed5d732d7243419b3d51663e5"},
     "RevokeClusterInvite": {"kind": "mutation", "since": "v0.3.16", "identity": "sha256:0cc364ac453bc4c6e753b14f5eb46fb4a1383306c2748485bf50e1a22c3b650a"},

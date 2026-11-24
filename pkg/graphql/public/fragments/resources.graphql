@@ -207,6 +207,7 @@ fragment IngestEndpointFields on IngestEndpoint {
   whipUrl
   rtmpUrl
   srtUrl
+  mkvUrl
   region
   loadScore
   kind

@@ -4843,6 +4843,9 @@ const types: CompressedTypeMap<number> = {
             "srtUrl": [
                 1
             ],
+            "mkvUrl": [
+                1
+            ],
             "region": [
                 1
             ],

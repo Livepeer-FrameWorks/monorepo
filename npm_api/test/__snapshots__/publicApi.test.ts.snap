@@ -1279,8 +1279,8 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.16",
     },
     "ResolveIngestEndpoint": {
-      "hash": "sha256:135dae72fff9905e070e0956aed6bbbc1ce050e282bb318b296d37af083e6a5b",
-      "identity": "sha256:3034266278ae6a30911693c36cf61d8b9b899828138fb684c0afc14e42060dc0",
+      "hash": "sha256:0f2be20fb4bed6ec1967aa299e0daa4e0f831730332006e22e6a885ed2c29c2e",
+      "identity": "sha256:1b6dfec5121a4bccce325af0e201512f5c04cfcc80cf1c6509623edba915d369",
       "kind": "query",
       "since": "v0.3.16",
     },

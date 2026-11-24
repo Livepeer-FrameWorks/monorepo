@@ -38,6 +38,8 @@ export interface UseIngestEndpointsResult {
   rtmpUrl: string | null;
   /** Primary SRT URL */
   srtUrl: string | null;
+  /** Primary HTTP Matroska (MKV) push URL */
+  mkvUrl: string | null;
   /** Manually trigger resolution */
   resolve: () => Promise<IngestEndpoints | null>;
   /** Reset state and clear endpoints */
@@ -162,6 +164,7 @@ export function useIngestEndpoints(
     whipUrl: endpoints?.primary?.whipUrl || null,
     rtmpUrl: endpoints?.primary?.rtmpUrl || null,
     srtUrl: endpoints?.primary?.srtUrl || null,
+    mkvUrl: endpoints?.primary?.mkvUrl || null,
     resolve,
     reset,
   };

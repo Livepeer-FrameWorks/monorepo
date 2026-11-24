@@ -12,6 +12,8 @@ export enum IngestProtocol {
   INGEST_PROTOCOL_SRT = "INGEST_PROTOCOL_SRT",
   INGEST_PROTOCOL_WHIP = "INGEST_PROTOCOL_WHIP",
   INGEST_PROTOCOL_PULL = "INGEST_PROTOCOL_PULL",
+  /** INGEST_PROTOCOL_MKV - HTTP Matroska (MKV/WebM) push to an edge's HTTP endpoint. */
+  INGEST_PROTOCOL_MKV = "INGEST_PROTOCOL_MKV",
   UNRECOGNIZED = "UNRECOGNIZED",
 }
 
@@ -32,6 +34,9 @@ export function ingestProtocolFromJSON(object: any): IngestProtocol {
     case 4:
     case "INGEST_PROTOCOL_PULL":
       return IngestProtocol.INGEST_PROTOCOL_PULL;
+    case 5:
+    case "INGEST_PROTOCOL_MKV":
+      return IngestProtocol.INGEST_PROTOCOL_MKV;
     case -1:
     case "UNRECOGNIZED":
     default:

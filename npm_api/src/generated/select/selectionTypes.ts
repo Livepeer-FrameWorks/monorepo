@@ -1318,6 +1318,7 @@ export const scalarFields = {
         "whipUrl",
         "rtmpUrl",
         "srtUrl",
+        "mkvUrl",
         "region",
         "loadScore",
         "kind",

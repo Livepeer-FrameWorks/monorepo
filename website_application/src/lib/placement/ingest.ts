@@ -22,21 +22,31 @@ export function isSpecificIngest(destination: IngestDestination): boolean {
   );
 }
 
+export type IngestProtocol = "rtmp" | "srt" | "whip" | "mkv";
+
+const ingestUrlField = {
+  rtmp: "rtmpUrl",
+  srt: "srtUrl",
+  whip: "whipUrl",
+  mkv: "mkvUrl",
+} as const satisfies Record<IngestProtocol, keyof IngestDestination>;
+
+const ingestUrlSchemes: Record<IngestProtocol, string[]> = {
+  rtmp: ["rtmp:", "rtmps:"],
+  srt: ["srt:"],
+  whip: ["http:", "https:"],
+  mkv: ["http:", "https:"],
+};
+
 export function ingestProtocolUrl(
   destination: IngestDestination,
-  protocol: "rtmp" | "srt" | "whip"
+  protocol: IngestProtocol
 ): string | null {
-  const value =
-    destination[protocol === "rtmp" ? "rtmpUrl" : protocol === "srt" ? "srtUrl" : "whipUrl"];
+  const value = destination[ingestUrlField[protocol]];
   if (!value) return null;
   try {
     const url = new URL(value);
-    const allowed =
-      protocol === "whip"
-        ? ["http:", "https:"]
-        : protocol === "rtmp"
-          ? ["rtmp:", "rtmps:"]
-          : ["srt:"];
+    const allowed = ingestUrlSchemes[protocol];
     if (
       !allowed.includes(url.protocol) ||
       !url.hostname ||

@@ -1445,6 +1445,7 @@ type ComplexityRoot struct {
 		ClusterId func(childComplexity int) int
 		Kind      func(childComplexity int) int
 		LoadScore func(childComplexity int) int
+		MkvUrl    func(childComplexity int) int
 		NodeId    func(childComplexity int) int
 		Region    func(childComplexity int) int
 		RtmpUrl   func(childComplexity int) int
@@ -11386,6 +11387,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.IngestEndpoint.LoadScore(childComplexity), true
+	case "IngestEndpoint.mkvUrl":
+		if e.ComplexityRoot.IngestEndpoint.MkvUrl == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngestEndpoint.MkvUrl(childComplexity), true
 	case "IngestEndpoint.nodeId":
 		if e.ComplexityRoot.IngestEndpoint.NodeId == nil {
 			break
@@ -29171,7 +29178,7 @@ type VodAsset implements Node {
   filename: String
   "Current processing/storage status of the asset."
   status: VodAssetStatus!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   "Where the asset is stored (s3, local, freezing)."
   storageLocation: String!
@@ -29288,7 +29295,7 @@ type StorageArtifact {
   errorMessage: String
   sizeBytes: Float
   status: String!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   storageLocation: String
   "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
@@ -32460,7 +32467,7 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   "Processing failure detail from the artifact catalog."
   errorMessage: String
@@ -33705,6 +33712,7 @@ enum MediaIngestProtocol {
   WHIP
   RTMP
   SRT
+  MKV
 }
 
 # Individual ingest endpoint with node and protocol info
@@ -33722,6 +33730,7 @@ type IngestEndpoint {
   whipUrl: String # WHIP ingest URL
   rtmpUrl: String # RTMP/E-RTMP ingest URL
   srtUrl: String # SRT ingest URL
+  mkvUrl: String # HTTP Matroska (MKV) push URL
   region: String
   loadScore: Float
   kind: IngestEndpointKind!
@@ -35850,6 +35859,7 @@ enum EventIngestProtocol {
   INGEST_PROTOCOL_SRT
   INGEST_PROTOCOL_WHIP
   INGEST_PROTOCOL_PULL
+  INGEST_PROTOCOL_MKV
 }
 
 "Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON."
@@ -69339,6 +69349,35 @@ func (ec *executionContext) fieldContext_IngestEndpoint_srtUrl(_ context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _IngestEndpoint_mkvUrl(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IngestEndpoint_mkvUrl,
+		func(ctx context.Context) (any, error) {
+			return obj.MkvUrl, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IngestEndpoint_mkvUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngestEndpoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _IngestEndpoint_region(ctx context.Context, field graphql.CollectedField, obj *sharedpb.IngestEndpoint) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -69489,6 +69528,8 @@ func (ec *executionContext) fieldContext_IngestEndpointResponse_primary(_ contex
 				return ec.fieldContext_IngestEndpoint_rtmpUrl(ctx, field)
 			case "srtUrl":
 				return ec.fieldContext_IngestEndpoint_srtUrl(ctx, field)
+			case "mkvUrl":
+				return ec.fieldContext_IngestEndpoint_mkvUrl(ctx, field)
 			case "region":
 				return ec.fieldContext_IngestEndpoint_region(ctx, field)
 			case "loadScore":
@@ -69538,6 +69579,8 @@ func (ec *executionContext) fieldContext_IngestEndpointResponse_fallbacks(_ cont
 				return ec.fieldContext_IngestEndpoint_rtmpUrl(ctx, field)
 			case "srtUrl":
 				return ec.fieldContext_IngestEndpoint_srtUrl(ctx, field)
+			case "mkvUrl":
+				return ec.fieldContext_IngestEndpoint_mkvUrl(ctx, field)
 			case "region":
 				return ec.fieldContext_IngestEndpoint_region(ctx, field)
 			case "loadScore":
@@ -167892,6 +167935,8 @@ func (ec *executionContext) _IngestEndpoint(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._IngestEndpoint_rtmpUrl(ctx, field, obj)
 		case "srtUrl":
 			out.Values[i] = ec._IngestEndpoint_srtUrl(ctx, field, obj)
+		case "mkvUrl":
+			out.Values[i] = ec._IngestEndpoint_mkvUrl(ctx, field, obj)
 		case "region":
 			out.Values[i] = ec._IngestEndpoint_region(ctx, field, obj)
 		case "loadScore":
@@ -205699,6 +205744,7 @@ var (
 		"INGEST_PROTOCOL_SRT":         publicv1.IngestProtocol_INGEST_PROTOCOL_SRT,
 		"INGEST_PROTOCOL_WHIP":        publicv1.IngestProtocol_INGEST_PROTOCOL_WHIP,
 		"INGEST_PROTOCOL_PULL":        publicv1.IngestProtocol_INGEST_PROTOCOL_PULL,
+		"INGEST_PROTOCOL_MKV":         publicv1.IngestProtocol_INGEST_PROTOCOL_MKV,
 	}
 	marshalNEventIngestProtocol2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐIngestProtocol = map[publicv1.IngestProtocol]string{
 		publicv1.IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED: "INGEST_PROTOCOL_UNSPECIFIED",
@@ -205706,6 +205752,7 @@ var (
 		publicv1.IngestProtocol_INGEST_PROTOCOL_SRT:         "INGEST_PROTOCOL_SRT",
 		publicv1.IngestProtocol_INGEST_PROTOCOL_WHIP:        "INGEST_PROTOCOL_WHIP",
 		publicv1.IngestProtocol_INGEST_PROTOCOL_PULL:        "INGEST_PROTOCOL_PULL",
+		publicv1.IngestProtocol_INGEST_PROTOCOL_MKV:         "INGEST_PROTOCOL_MKV",
 	}
 )
 

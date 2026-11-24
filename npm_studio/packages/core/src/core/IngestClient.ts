@@ -32,8 +32,8 @@ type ResolvedIngestEndpoint = ResolvedIngest["primary"];
 // The document selects more endpoint fields than IngestEndpoint declares;
 // only the declared ones are kept, and the gateway's nulls pass through.
 function ingestEndpoint(endpoint: ResolvedIngestEndpoint): IngestEndpoint {
-  const { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, region, loadScore } = endpoint;
-  return { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, region, loadScore } as IngestEndpoint;
+  const { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, mkvUrl, region, loadScore } = endpoint;
+  return { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, mkvUrl, region, loadScore } as IngestEndpoint;
 }
 
 export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
@@ -204,6 +204,13 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
    */
   getSrtUrl(): string | null {
     return this.endpoints?.primary?.srtUrl || null;
+  }
+
+  /**
+   * Get the primary HTTP Matroska (MKV) push URL
+   */
+  getMkvUrl(): string | null {
+    return this.endpoints?.primary?.mkvUrl || null;
   }
 
   /**
