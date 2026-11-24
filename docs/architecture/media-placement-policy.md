@@ -1108,8 +1108,8 @@ for fresh admission while individual registry/authority reads remain bounded to 
 Startup supplies the source adapter with its destination so every tracked pull uses this resolver.
 Push publisher pulls and configured cross-cell relays are both reauthorized from retained viewer
 context; local configured inputs and stored artifacts present no pull attempt. Direct publisher
-ingest remains a separate final-admission path based on Mist's observed RTMP, SRT or WebRTC/WHIP
-connector and does not consume a serving receipt. Retained context alone does not demonstrate active
+ingest remains a separate final-admission path based on Mist's observed RTMP, SRT, WebRTC/WHIP or
+EBML (HTTP Matroska, placement protocol `mkv`) connector and does not consume a serving receipt. Retained context alone does not demonstrate active
 viewer demand or revoke an already-running media process. No new Mist trigger, DTSC extension, or
 separate viewer network callback is required by this flow.
 

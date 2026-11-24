@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Configure your encoder for FrameWorks. Covers OBS Studio, FFmpeg, RTMP/E-RTMP, SRT, and WHIP.
+Configure your encoder for FrameWorks. Covers OBS Studio, FFmpeg, RTMP/E-RTMP, SRT, WHIP, and HTTP Matroska (MKV).
 
 <Aside type="note" title="Works everywhere">
   These encoder settings are the same for managed and self‑hosted deployments. Ingest endpoints and
@@ -142,6 +142,30 @@ curl %PLAY_URL%/ingest/{stream-key}
 
 RTMP and SRT have no redirect mechanism, so those protocols use either the geo-DNS `%INGEST_HOSTNAME%`
 name above or the `rtmpUrl` / `srtUrl` from that JSON response.
+
+## HTTP Matroska (MKV)
+
+A tool that writes Matroska or WebM can publish over plain HTTP by streaming the file body to the
+stream key's `.mkv` path with a chunked `PUT` or `POST`:
+
+```
+%INGEST_URL%/{stream-key}.mkv
+```
+
+**FFmpeg piped into curl:**
+
+```bash
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -preset veryfast -b:v 4500k -g 60 \
+  -c:a aac -b:a 160k \
+  -f matroska -live 1 - |
+  curl -sS --fail -H 'Content-Type: video/x-matroska' -T - "%INGEST_URL%/{stream-key}.mkv"
+```
+
+The request stays open for as long as the stream is live; closing it ends the session. Matroska
+keeps track metadata such as a rotation flag. A self-hosted proxy in front of the edge must stream request bodies to MistServer
+instead of buffering them. The `/ingest/{stream-key}` front door does not return an MKV URL; use
+`%INGEST_URL%` directly.
 
 ## Choosing the Right Bitrate
 

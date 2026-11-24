@@ -27,7 +27,7 @@ can also declare managed local sources for loops, playlists, and site-local work
 
 | Model   | How media arrives                                                     | Creation path                         |
 | ------- | --------------------------------------------------------------------- | ------------------------------------- |
-| Push    | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks            | Dashboard or GraphQL `createStream`   |
+| Push    | Your encoder opens RTMP/E-RTMP, SRT, WHIP or HTTP MKV to FrameWorks   | Dashboard or GraphQL `createStream`   |
 | Pull    | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you             | Dashboard or GraphQL `createStream`   |
 | Managed | The deployment supplies a local file, playlist, or controlled process | Operator bootstrap configuration only |
 
@@ -138,6 +138,7 @@ page:
 | RTMP/E-RTMP | OBS, hardware encoders, FFmpeg     | [Encoder Setup](/builders/encoder-setup)                          |
 | SRT         | Unreliable or long-haul networks   | [Encoder Setup](/builders/encoder-setup#srt-alternative-protocol) |
 | WHIP        | Browser or WebRTC-native broadcast | [StreamCrafter](/builders/ingest)                                 |
+| HTTP MKV    | Tools that write Matroska or WebM  | [Encoder Setup](/builders/encoder-setup#http-matroska-mkv)        |
 
 The stream becomes live once the media edge accepts the input and MistServer reports an active
 session.
