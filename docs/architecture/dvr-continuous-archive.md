@@ -6,6 +6,8 @@
 
 Live DVR is designed as a continuous archive rather than a short rolling buffer or per-broadcast asset rotation. Chapter finalization makes long sessions navigable without splitting the source recording into separate DVR artifacts.
 
+The internal TS writer selects original audio and video with `audio=source&video=source&unmask=1`. Live rendition processing may hide an original from viewers and external pushes after its compatible rendition starts; that visibility mask must not remove the original from archival capture. The source selectors still exclude derived renditions, subtitles and metadata from the segment playlist.
+
 This file is the canonical engineering reference. `docs/architecture/clips-dvr.md` covers the broader artifact storage model; this file is the DVR-specific overlay. Standards (chapter ID stability, mode validation, public addressing) live in `docs/standards/dvr-chapters.md`.
 
 ## Three timescales — separated

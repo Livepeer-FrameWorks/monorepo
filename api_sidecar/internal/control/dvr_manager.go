@@ -2101,6 +2101,8 @@ func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig, sourceRunt
 	// nounlink=1 stops Mist deleting segment files when pruning the rolling
 	// playlist (segment removal is owned by the chapter reclaim sweep). Record
 	// only source A/V tracks — derived renditions make MistInHLS reject the playlist.
+	// Source capture reads originals even when the live ladder hides them from
+	// viewers and external pushes; those visibility masks do not govern archival.
 	// Push options follow '?' (upstream Mist push-target syntax); Mist strips them
 	// from the segment filename it writes.
 	// Mist's append mode recovers the counter from retained playlist entries.
@@ -2111,7 +2113,7 @@ func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig, sourceRunt
 			prefix = strings.ReplaceAll(binding.ExecutionID, "-", "") + "_"
 		}
 	}
-	return fmt.Sprintf("%s/%s/%s$minute_$segmentCounter.ts?m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+	return fmt.Sprintf("%s/%s/%s$minute_$segmentCounter.ts?m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&unmask=1&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		outputDir, "segments", prefix, dvrHash, segmentDuration, windowSeconds, maxEntries,
 	)
 }
