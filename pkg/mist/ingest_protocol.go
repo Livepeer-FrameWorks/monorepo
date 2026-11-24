@@ -13,9 +13,10 @@ var ErrUnsupportedIngestProtocol = errors.New("unsupported publisher connector")
 
 // IngestProtocol maps the connector name Mist reports on PUSH_REWRITE to the
 // canonical placement ingest protocol. Only connectors publishers actually use to
-// contribute media are placement protocols; every other connector (DTSC pushes
-// between nodes, HTTP/JSON uploads, RTSP announce) is not evaluable by policy
-// and is reported as unsupported rather than guessed.
+// contribute media are placement protocols; EBML is the HTTP Matroska (MKV/WebM)
+// push. Every other connector (DTSC pushes between nodes, HTTP TS and JSON
+// uploads, RTSP announce) is not evaluable by policy and is reported as
+// unsupported rather than guessed.
 func IngestProtocol(connector string) (string, error) {
 	connector = strings.TrimSpace(connector)
 	if connector == "" || len(connector) > 64 || strings.IndexFunc(connector, unicode.IsControl) >= 0 {
@@ -28,6 +29,8 @@ func IngestProtocol(connector string) (string, error) {
 		return "srt", nil
 	case "webrtc":
 		return "whip", nil
+	case "ebml":
+		return "mkv", nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedIngestProtocol, connector)
 	}

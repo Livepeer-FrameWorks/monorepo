@@ -16,8 +16,15 @@ import (
 )
 
 func TestPublisherEventsUseAttestedConnector(t *testing.T) {
-	for _, pushURL := range []string{"rtmps://encoder.example/live/key", "srt://encoder.example:8889"} {
-		t.Run(pushURL, func(t *testing.T) {
+	for _, tc := range []struct {
+		pushURL, connector, protocol string
+		event                        publicv1.IngestProtocol
+	}{
+		{"rtmps://encoder.example/live/key", "RTMP", "rtmp", publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP},
+		{"srt://encoder.example:8889", "RTMP", "rtmp", publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP},
+		{"http://edge.example:8080/event-stream.mkv", "EBML", "mkv", publicv1.IngestProtocol_INGEST_PROTOCOL_MKV},
+	} {
+		t.Run(tc.pushURL, func(t *testing.T) {
 			connected := &byteArgRecorder{}
 			installIngestSessionMint(t, true, connected)
 			sm := state.ResetDefaultManagerForTests()
@@ -36,23 +43,23 @@ func TestPublisherEventsUseAttestedConnector(t *testing.T) {
 			admitIngestPlacementForTest(t, processor)
 			payload := &ipcpb.PushRewriteTrigger{
 				Pid: 4242, TriggerUuid: "event-protocol", TriggerUnixMillis: 1, StreamName: "event-stream",
-				Hostname: "203.0.113.1", PushUrl: pushURL, ObservedConnector: "RTMP",
+				Hostname: "203.0.113.1", PushUrl: tc.pushURL, ObservedConnector: tc.connector,
 			}
 			_, blocked, err := processor.handlePushRewrite(&ipcpb.MistTrigger{
 				NodeId: "edge-event", TriggerPayload: &ipcpb.MistTrigger_PushRewrite{PushRewrite: payload},
 			})
 			if err != nil || blocked {
-				t.Fatalf("attested RTMP publisher refused: blocked=%v, err=%v", blocked, err)
+				t.Fatalf("attested %s publisher refused: blocked=%v, err=%v", tc.connector, blocked, err)
 			}
 			_, message, err := events.Decode("stream.connected", connected.bytes())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := message.(*publicv1.StreamConnected).GetProtocol(); got != publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP {
-				t.Errorf("connected protocol=%v; want RTMP from the attested connector", got)
+			if got := message.(*publicv1.StreamConnected).GetProtocol(); got != tc.event {
+				t.Errorf("connected protocol=%v; want %v from the attested connector", got, tc.event)
 			}
-			if payload.GetProtocol() != "rtmp" {
-				t.Errorf("Decklog protocol=%q; want rtmp", payload.GetProtocol())
+			if payload.GetProtocol() != tc.protocol {
+				t.Errorf("Decklog protocol=%q; want %s", payload.GetProtocol(), tc.protocol)
 			}
 		})
 	}

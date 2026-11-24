@@ -75,6 +75,8 @@ func IngestProtocol(protocol string) publicv1.IngestProtocol {
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_PULL
 	case "whip":
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_WHIP
+	case "mkv":
+		return publicv1.IngestProtocol_INGEST_PROTOCOL_MKV
 	default:
 		return publicv1.IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED
 	}

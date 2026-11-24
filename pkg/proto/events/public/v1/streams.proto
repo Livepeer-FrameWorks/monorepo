@@ -38,6 +38,8 @@ enum IngestProtocol {
   INGEST_PROTOCOL_SRT = 2;
   INGEST_PROTOCOL_WHIP = 3;
   INGEST_PROTOCOL_PULL = 4;
+  // HTTP Matroska (MKV/WebM) push to an edge's HTTP endpoint.
+  INGEST_PROTOCOL_MKV = 5;
 }
 
 // StreamConnected reports a new ingest session for the stream.

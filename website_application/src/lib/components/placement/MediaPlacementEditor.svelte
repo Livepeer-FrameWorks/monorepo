@@ -443,7 +443,7 @@
                   onchange={changePreviewInput}
                 >
                   <option value="">Default</option>
-                  {#each verb === "SERVE" ? ["hls", "dash", "webrtc"] : ["rtmp", "srt", "whip"] as item (item)}<option
+                  {#each verb === "SERVE" ? ["hls", "dash", "webrtc"] : ["rtmp", "srt", "whip", "mkv"] as item (item)}<option
                       value={item}>{item.toUpperCase()}</option
                     >{/each}
                 </select>

@@ -10,3 +10,9 @@ func TestPullIngestProtocol(t *testing.T) {
 		t.Fatalf("pull protocol=%v want PULL", got)
 	}
 }
+
+func TestMKVIngestProtocol(t *testing.T) {
+	if got := IngestProtocol("mkv"); got != publicv1.IngestProtocol_INGEST_PROTOCOL_MKV {
+		t.Fatalf("mkv protocol=%v want MKV", got)
+	}
+}

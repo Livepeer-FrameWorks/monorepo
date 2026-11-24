@@ -209,6 +209,27 @@ func TestObservePlacementNodesIngestUsesRequestedListener(t *testing.T) {
 	}
 }
 
+func TestObservePlacementNodesIngestSelectsEdgeRunningEBMLForMKV(t *testing.T) {
+	req := placementObservationFixture()
+	req.Verb, req.Protocol = placement.Ingest, "mkv"
+	ebml := req.Snapshot.Nodes[0]
+	ebml.NodeID = "ebml-edge"
+	ebml.Outputs = map[string]any{"HTTP": "http://HOST:8080/$.html", "EBML": "http://HOST:8080/$.webm"}
+	req.Snapshot.Nodes = append(req.Snapshot.Nodes, ebml)
+	req.Paths[ebml.NodeID] = req.Paths["node"]
+	nodes, err := ObservePlacementNodes(req)
+	if err != nil || len(nodes) != 2 {
+		t.Fatalf("observe: %+v, %v", nodes, err)
+	}
+	if nodes[0].Capacity != placement.CapacityUnavailable || nodes[0].CapacityDetail != PlacementDetailProtocolUnavailable || nodes[1].Capacity != placement.CapacityAvailable {
+		t.Fatalf("mkv availability: node=%s/%q ebml-edge=%s", nodes[0].Capacity, nodes[0].CapacityDetail, nodes[1].Capacity)
+	}
+	decision, err := placement.Evaluate(placement.Request{TenantID: req.TenantID, Verb: req.Verb, Now: req.Now, Candidates: nodes, Complete: true})
+	if err != nil || len(decision.Choices) != 1 || decision.Choices[0].NodeID != "ebml-edge" {
+		t.Fatalf("mkv publisher not placed on the EBML edge: %+v, %v", decision, err)
+	}
+}
+
 func TestObservePlacementNodesPreservesColdAndUnavailablePools(t *testing.T) {
 	req := placementObservationFixture()
 	second := req.Snapshot.Nodes[0]

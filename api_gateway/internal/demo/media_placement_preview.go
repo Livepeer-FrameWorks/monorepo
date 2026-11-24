@@ -47,7 +47,7 @@ func GenerateMediaPlacementPreview(req *placementpb.PreviewRequest, now time.Tim
 	}
 	protocol := req.GetProtocol()
 	if protocol != "" {
-		supported := protocol == "rtmp" || protocol == "srt" || protocol == "whip"
+		supported := protocol == "rtmp" || protocol == "srt" || protocol == "whip" || protocol == "mkv"
 		if verb == placement.Serve {
 			supported = protocol == "hls" || protocol == "dash" || protocol == "webrtc"
 		}

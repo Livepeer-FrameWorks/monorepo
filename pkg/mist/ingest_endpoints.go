@@ -54,6 +54,8 @@ func ResolveIngestEndpointTemplate(outputs map[string]any, publicBase, protocol 
 		template = ingestTemplate(outputs, "RTMP")
 	case "srt":
 		template = ingestTemplate(outputs, "TSSRT", "SRT")
+	case "mkv":
+		template = ingestTemplate(outputs, "EBML")
 	default:
 		return ""
 	}
@@ -190,7 +192,7 @@ func normalizeIngestTemplate(template, publicBase, protocol, rtmpApplication str
 	if u == nil || u.ForceQuery {
 		return nil
 	}
-	if (protocol == "whip" && u.Scheme != "http" && u.Scheme != "https") || (protocol == "rtmp" && u.Scheme != "rtmp" && u.Scheme != "rtmps") || (protocol == "srt" && u.Scheme != "srt") {
+	if ((protocol == "whip" || protocol == "mkv") && u.Scheme != "http" && u.Scheme != "https") || (protocol == "rtmp" && u.Scheme != "rtmp" && u.Scheme != "rtmps") || (protocol == "srt" && u.Scheme != "srt") {
 		return nil
 	}
 	if u.Hostname() == "HOST" {
@@ -204,9 +206,10 @@ func normalizeIngestTemplate(template, publicBase, protocol, rtmpApplication str
 				return nil
 			}
 		}
-		if protocol == "whip" {
+		if protocol == "whip" || protocol == "mkv" {
+			// Both are served by Mist's HTTP listener behind the public origin.
 			u.Scheme, u.Host = base.Scheme, base.Host
-			if u.Path == "/webrtc/$" || u.Path == "/whip/$" {
+			if u.Path == "/webrtc/$" || u.Path == "/whip/$" || u.Path == "/$.webm" || u.Path == "/$.mkv" {
 				rawPath := strings.TrimRight(base.EscapedPath(), "/") + u.EscapedPath()
 				u.Path = strings.TrimRight(base.Path, "/") + u.Path
 				u.RawPath = rawPath
@@ -240,6 +243,24 @@ func normalizeIngestTemplate(template, publicBase, protocol, rtmpApplication str
 		// application on the same advertised listener.
 		rawPath := strings.TrimSuffix(u.EscapedPath(), suffix) + "/live/$"
 		u.Path = strings.TrimSuffix(u.Path, suffix) + "/live/$"
+		u.RawPath = rawPath
+	case "mkv":
+		if (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" {
+			return nil
+		}
+		// The EBML output advertises its WebM playback path; the same handler
+		// accepts a Matroska push to the stream's .mkv path.
+		var suffix string
+		switch {
+		case strings.HasSuffix(u.Path, "/$.webm"):
+			suffix = "/$.webm"
+		case strings.HasSuffix(u.Path, "/$.mkv"):
+			suffix = "/$.mkv"
+		default:
+			return nil
+		}
+		rawPath := strings.TrimSuffix(u.EscapedPath(), suffix) + "/$.mkv"
+		u.Path = strings.TrimSuffix(u.Path, suffix) + "/$.mkv"
 		u.RawPath = rawPath
 	case "srt":
 		query, parseErr := url.ParseQuery(u.RawQuery)
