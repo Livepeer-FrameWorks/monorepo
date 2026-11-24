@@ -25,6 +25,7 @@ function result(): ResolvedIngest {
       rtmpUrl: `rtmp://us.example:1935/live/${streamKey}`,
       whipUrl: `https://us.example:8443/webrtc/${streamKey}`,
       srtUrl: `srt://us.example:8890?streamid=${streamKey}`,
+      mkvUrl: `https://us.example:8443/${streamKey}.mkv`,
     },
     metadata: { streamId },
   };
@@ -63,6 +64,10 @@ describe("recommended ingest controls", () => {
     );
     expect((screen.getByLabelText("RTMP stream key") as HTMLInputElement).type).toBe("password");
     expect((screen.getByLabelText("WHIP URL") as HTMLInputElement).type).toBe("password");
+    expect((screen.getByLabelText("MKV URL") as HTMLInputElement).value).toBe(
+      `https://us.example:8443/${streamKey}.mkv`
+    );
+    expect((screen.getByLabelText("MKV URL") as HTMLInputElement).type).toBe("password");
     await fireEvent.click(
       screen.getByRole("checkbox", { name: "Show credential-bearing connection URLs" })
     );

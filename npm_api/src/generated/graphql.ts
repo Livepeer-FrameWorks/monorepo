@@ -420,6 +420,7 @@ export type EventCustomDomainFailureReason =
 
 /** Values of frameworks.events.public.v1.IngestProtocol, named as in the proto and the webhook JSON. */
 export type EventIngestProtocol =
+  | 'INGEST_PROTOCOL_MKV'
   | 'INGEST_PROTOCOL_PULL'
   | 'INGEST_PROTOCOL_RTMP'
   | 'INGEST_PROTOCOL_SRT'
@@ -605,6 +606,7 @@ export type LinkEmailInput = {
 };
 
 export type MediaIngestProtocol =
+  | 'MKV'
   | 'RTMP'
   | 'SRT'
   | 'WHIP'
@@ -1638,7 +1640,7 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 
 export type ViewerEndpointFieldsFragment = { nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown };
 
-export type IngestEndpointFieldsFragment = { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string };
+export type IngestEndpointFieldsFragment = { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, mkvUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string };
 
 /** An API token for programmatic access to the GraphQL API. Tokens have scoped permissions and optional expiration. */
 export type DeveloperTokenFieldsFragment = { __typename: 'DeveloperToken', /** Unique token identifier. */
@@ -2148,7 +2150,7 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
 processingWaitReason: string | null, /** Processing failure detail from the artifact catalog. */
 errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
@@ -4583,7 +4585,7 @@ playbackId: string, /** Registry origin kind. Null/user_upload for ordinary uplo
 originType: string | null, /** Origin entity id, such as DVR chapter_id when originType=dvr_chapter. */
 originId: string | null, /** Optional description of the asset content. */
 description: string | null, /** Original filename when uploaded. */
-filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
 processingWaitReason: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
 syncStatus: string | null, /** Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false. */
 hasLocalCopy: boolean | null, /** File size in bytes (available after validation). */
@@ -7030,7 +7032,7 @@ startTime: number, /** Clip duration in seconds. */
 duration: number, /** Storage path on the processing node. */
 storagePath: string | null, /** File size in bytes. */
 sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
-status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+status: string, /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
 processingWaitReason: string | null, /** Processing failure detail from the artifact catalog. */
 errorMessage: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
@@ -7903,7 +7905,7 @@ playbackId: string, /** Registry origin kind. Null/user_upload for ordinary uplo
 originType: string | null, /** Origin entity id, such as DVR chapter_id when originType=dvr_chapter. */
 originId: string | null, /** Optional description of the asset content. */
 description: string | null, /** Original filename when uploaded. */
-filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+filename: string | null, /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
 processingWaitReason: string | null, /** Current S3 sync state (pending, in_progress, synced, failed, lost_local). */
 syncStatus: string | null, /** Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman's read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not 'no local copy'. Durable S3-only state is derived by consumers as isSynced && hasLocalCopy == false. */
 hasLocalCopy: boolean | null, /** File size in bytes (available after validation). */
@@ -10030,7 +10032,7 @@ export type ResolveIngestEndpointQueryVariables = Exact<{
 
 /** Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol. */
 export type ResolveIngestEndpointQuery = { /** Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol. */
-resolveIngestEndpoint: { primary: { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }, fallbacks: Array<{ nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }>, metadata: { streamId: string, streamKey: string, tenantId: string, recordingEnabled: boolean } | null } | null };
+resolveIngestEndpoint: { primary: { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, mkvUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }, fallbacks: Array<{ nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, mkvUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }>, metadata: { streamId: string, streamKey: string, tenantId: string, recordingEnabled: boolean } | null } | null };
 
 export type GetClipQueryVariables = Exact<{
   id: string;
@@ -10842,6 +10844,7 @@ export const IngestEndpointFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
   whipUrl
   rtmpUrl
   srtUrl
+  mkvUrl
   region
   loadScore
   kind
@@ -31854,6 +31857,7 @@ export const ResolveIngestEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
   whipUrl
   rtmpUrl
   srtUrl
+  mkvUrl
   region
   loadScore
   kind

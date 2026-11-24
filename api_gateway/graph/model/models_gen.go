@@ -2808,7 +2808,7 @@ type StorageArtifact struct {
 	ErrorMessage *string  `json:"errorMessage,omitempty"`
 	SizeBytes    *float64 `json:"sizeBytes,omitempty"`
 	Status       string   `json:"status"`
-	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	// Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 	ProcessingWaitReason *string `json:"processingWaitReason,omitempty"`
 	StorageLocation      *string `json:"storageLocation,omitempty"`
 	// ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
@@ -3577,7 +3577,7 @@ type VodAsset struct {
 	Filename *string `json:"filename,omitempty"`
 	// Current processing/storage status of the asset.
 	Status VodAssetStatus `json:"status"`
-	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	// Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 	ProcessingWaitReason *string `json:"processingWaitReason,omitempty"`
 	// Where the asset is stored (s3, local, freezing).
 	StorageLocation string `json:"storageLocation"`
@@ -5012,17 +5012,19 @@ const (
 	MediaIngestProtocolWhip MediaIngestProtocol = "WHIP"
 	MediaIngestProtocolRtmp MediaIngestProtocol = "RTMP"
 	MediaIngestProtocolSrt  MediaIngestProtocol = "SRT"
+	MediaIngestProtocolMkv  MediaIngestProtocol = "MKV"
 )
 
 var AllMediaIngestProtocol = []MediaIngestProtocol{
 	MediaIngestProtocolWhip,
 	MediaIngestProtocolRtmp,
 	MediaIngestProtocolSrt,
+	MediaIngestProtocolMkv,
 }
 
 func (e MediaIngestProtocol) IsValid() bool {
 	switch e {
-	case MediaIngestProtocolWhip, MediaIngestProtocolRtmp, MediaIngestProtocolSrt:
+	case MediaIngestProtocolWhip, MediaIngestProtocolRtmp, MediaIngestProtocolSrt, MediaIngestProtocolMkv:
 		return true
 	}
 	return false

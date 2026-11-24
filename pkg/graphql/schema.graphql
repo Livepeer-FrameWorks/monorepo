@@ -3235,7 +3235,7 @@ type VodAsset implements Node {
   filename: String
   "Current processing/storage status of the asset."
   status: VodAssetStatus!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   "Where the asset is stored (s3, local, freezing)."
   storageLocation: String!
@@ -3352,7 +3352,7 @@ type StorageArtifact {
   errorMessage: String
   sizeBytes: Float
   status: String!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   storageLocation: String
   "ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore)."
@@ -6524,7 +6524,7 @@ type Clip implements Node {
   sizeBytes: Float
   "Processing status (queued, processing, ready, failed)."
   status: String!
-  "Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable."
+  "Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry."
   processingWaitReason: String
   "Processing failure detail from the artifact catalog."
   errorMessage: String
@@ -7769,6 +7769,7 @@ enum MediaIngestProtocol {
   WHIP
   RTMP
   SRT
+  MKV
 }
 
 # Individual ingest endpoint with node and protocol info
@@ -7786,6 +7787,7 @@ type IngestEndpoint {
   whipUrl: String # WHIP ingest URL
   rtmpUrl: String # RTMP/E-RTMP ingest URL
   srtUrl: String # SRT ingest URL
+  mkvUrl: String # HTTP Matroska (MKV) push URL
   region: String
   loadScore: Float
   kind: IngestEndpointKind!
@@ -9914,6 +9916,7 @@ enum EventIngestProtocol {
   INGEST_PROTOCOL_SRT
   INGEST_PROTOCOL_WHIP
   INGEST_PROTOCOL_PULL
+  INGEST_PROTOCOL_MKV
 }
 
 "Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON."

@@ -926,7 +926,7 @@ export interface Clip {
     sizeBytes: (Scalars['Float'] | null)
     /** Processing status (queued, processing, ready, failed). */
     status: Scalars['String']
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason: (Scalars['String'] | null)
     /** Processing failure detail from the artifact catalog. */
     errorMessage: (Scalars['String'] | null)
@@ -1889,7 +1889,7 @@ export type EventCustomDomainFailureReason = 'CUSTOM_DOMAIN_FAILURE_REASON_UNSPE
 
 
 /** Values of frameworks.events.public.v1.IngestProtocol, named as in the proto and the webhook JSON. */
-export type EventIngestProtocol = 'INGEST_PROTOCOL_UNSPECIFIED' | 'INGEST_PROTOCOL_RTMP' | 'INGEST_PROTOCOL_SRT' | 'INGEST_PROTOCOL_WHIP' | 'INGEST_PROTOCOL_PULL'
+export type EventIngestProtocol = 'INGEST_PROTOCOL_UNSPECIFIED' | 'INGEST_PROTOCOL_RTMP' | 'INGEST_PROTOCOL_SRT' | 'INGEST_PROTOCOL_WHIP' | 'INGEST_PROTOCOL_PULL' | 'INGEST_PROTOCOL_MKV'
 
 
 /** Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON. */
@@ -2204,6 +2204,7 @@ export interface IngestEndpoint {
     whipUrl: (Scalars['String'] | null)
     rtmpUrl: (Scalars['String'] | null)
     srtUrl: (Scalars['String'] | null)
+    mkvUrl: (Scalars['String'] | null)
     region: (Scalars['String'] | null)
     loadScore: (Scalars['Float'] | null)
     kind: IngestEndpointKind
@@ -2561,7 +2562,7 @@ export type MediaCapacityConsentChangeResult = (MediaCapacityConsentChange | Med
 
 export type MediaCapacityConsentResult = (MediaCapacityConsent | MediaPlacementError | AuthError | NotFoundError) & { __isUnion?: true }
 
-export type MediaIngestProtocol = 'WHIP' | 'RTMP' | 'SRT'
+export type MediaIngestProtocol = 'WHIP' | 'RTMP' | 'SRT' | 'MKV'
 
 export interface MediaPlacementActions {
     canRead: Scalars['Boolean']
@@ -5288,7 +5289,7 @@ export interface StorageArtifact {
     errorMessage: (Scalars['String'] | null)
     sizeBytes: (Scalars['Float'] | null)
     status: Scalars['String']
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason: (Scalars['String'] | null)
     storageLocation: (Scalars['String'] | null)
     /** ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore). */
@@ -6833,7 +6834,7 @@ export interface VodAsset {
     filename: (Scalars['String'] | null)
     /** Current processing/storage status of the asset. */
     status: VodAssetStatus
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason: (Scalars['String'] | null)
     /** Where the asset is stored (s3, local, freezing). */
     storageLocation: Scalars['String']
@@ -8251,7 +8252,7 @@ export interface ClipGenqlSelection{
     sizeBytes?: boolean | number
     /** Processing status (queued, processing, ready, failed). */
     status?: boolean | number
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason?: boolean | number
     /** Processing failure detail from the artifact catalog. */
     errorMessage?: boolean | number
@@ -9933,6 +9934,7 @@ export interface IngestEndpointGenqlSelection{
     whipUrl?: boolean | number
     rtmpUrl?: boolean | number
     srtUrl?: boolean | number
+    mkvUrl?: boolean | number
     region?: boolean | number
     loadScore?: boolean | number
     kind?: boolean | number
@@ -13839,7 +13841,7 @@ export interface StorageArtifactGenqlSelection{
     errorMessage?: boolean | number
     sizeBytes?: boolean | number
     status?: boolean | number
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason?: boolean | number
     storageLocation?: boolean | number
     /** ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore). */
@@ -15710,7 +15712,7 @@ export interface VodAssetGenqlSelection{
     filename?: boolean | number
     /** Current processing/storage status of the asset. */
     status?: boolean | number
-    /** Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable. */
+    /** Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry. */
     processingWaitReason?: boolean | number
     /** Where the asset is stored (s3, local, freezing). */
     storageLocation?: boolean | number
@@ -20367,7 +20369,8 @@ export const enumEventIngestProtocol = {
    INGEST_PROTOCOL_RTMP: 'INGEST_PROTOCOL_RTMP' as const,
    INGEST_PROTOCOL_SRT: 'INGEST_PROTOCOL_SRT' as const,
    INGEST_PROTOCOL_WHIP: 'INGEST_PROTOCOL_WHIP' as const,
-   INGEST_PROTOCOL_PULL: 'INGEST_PROTOCOL_PULL' as const
+   INGEST_PROTOCOL_PULL: 'INGEST_PROTOCOL_PULL' as const,
+   INGEST_PROTOCOL_MKV: 'INGEST_PROTOCOL_MKV' as const
 }
 
 export const enumEventMediaFailureReason = {
@@ -20481,7 +20484,8 @@ export const enumInvoiceStatus = {
 export const enumMediaIngestProtocol = {
    WHIP: 'WHIP' as const,
    RTMP: 'RTMP' as const,
-   SRT: 'SRT' as const
+   SRT: 'SRT' as const,
+   MKV: 'MKV' as const
 }
 
 export const enumMediaPlacementCharging = {

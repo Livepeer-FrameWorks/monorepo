@@ -23,6 +23,7 @@ function mockEndpointResponse() {
       whipUrl: "https://ingest1.example.com/whip/test",
       rtmpUrl: "rtmp://ingest1.example.com/live",
       srtUrl: "srt://ingest1.example.com:9710",
+      mkvUrl: "https://ingest1.example.com/test.mkv",
       region: "us-east",
       loadScore: 0.3,
     },
@@ -398,6 +399,15 @@ describe("IngestClient", () => {
       const client = createClient();
       await client.resolve();
       expect(client.getRtmpUrl()).toBe("rtmp://ingest1.example.com/live");
+      client.destroy();
+    });
+
+    it("getMkvUrl returns primary HTTP Matroska URL", async () => {
+      globalThis.fetch = mockFetchSuccess();
+      const client = createClient();
+      await client.resolve();
+      expect(client.getMkvUrl()).toBe("https://ingest1.example.com/test.mkv");
+      expect(client.getEndpoints()?.primary.mkvUrl).toBe("https://ingest1.example.com/test.mkv");
       client.destroy();
     });
 

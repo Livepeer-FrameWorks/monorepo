@@ -8,6 +8,7 @@ query ResolveIngestDestination($streamKey: String!, $protocol: MediaIngestProtoc
       whipUrl
       rtmpUrl
       srtUrl
+      mkvUrl
       region
     }
     metadata {

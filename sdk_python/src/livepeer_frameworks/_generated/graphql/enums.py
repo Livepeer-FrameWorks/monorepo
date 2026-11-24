@@ -116,6 +116,7 @@ class EventIngestProtocol(OpenEnum):
     INGEST_PROTOCOL_SRT = "INGEST_PROTOCOL_SRT"
     INGEST_PROTOCOL_WHIP = "INGEST_PROTOCOL_WHIP"
     INGEST_PROTOCOL_PULL = "INGEST_PROTOCOL_PULL"
+    INGEST_PROTOCOL_MKV = "INGEST_PROTOCOL_MKV"
 
 
 class EventMediaFailureReason(OpenEnum):
@@ -234,6 +235,7 @@ class MediaIngestProtocol(OpenEnum):
     WHIP = "WHIP"
     RTMP = "RTMP"
     SRT = "SRT"
+    MKV = "MKV"
 
 
 class MediaPlacementCharging(OpenEnum):

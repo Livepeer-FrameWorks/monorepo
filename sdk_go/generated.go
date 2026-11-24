@@ -12206,7 +12206,7 @@ type ClipInNodeDefaultFields struct {
 	SizeBytes *float64 `json:"sizeBytes"`
 	// Processing status (queued, processing, ready, failed).
 	Status string `json:"status"`
-	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	// Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 	ProcessingWaitReason *string `json:"processingWaitReason"`
 	// Processing failure detail from the artifact catalog.
 	ErrorMessage *string `json:"errorMessage"`
@@ -30250,6 +30250,7 @@ const (
 	EventIngestProtocolIngestProtocolSrt         EventIngestProtocol = "INGEST_PROTOCOL_SRT"
 	EventIngestProtocolIngestProtocolWhip        EventIngestProtocol = "INGEST_PROTOCOL_WHIP"
 	EventIngestProtocolIngestProtocolPull        EventIngestProtocol = "INGEST_PROTOCOL_PULL"
+	EventIngestProtocolIngestProtocolMkv         EventIngestProtocol = "INGEST_PROTOCOL_MKV"
 )
 
 var AllEventIngestProtocol = []EventIngestProtocol{
@@ -30258,6 +30259,7 @@ var AllEventIngestProtocol = []EventIngestProtocol{
 	EventIngestProtocolIngestProtocolSrt,
 	EventIngestProtocolIngestProtocolWhip,
 	EventIngestProtocolIngestProtocolPull,
+	EventIngestProtocolIngestProtocolMkv,
 }
 
 // Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON.
@@ -72530,6 +72532,7 @@ type IngestEndpointFields struct {
 	WhipUrl   *string            `json:"whipUrl"`
 	RtmpUrl   *string            `json:"rtmpUrl"`
 	SrtUrl    *string            `json:"srtUrl"`
+	MkvUrl    *string            `json:"mkvUrl"`
 	Region    *string            `json:"region"`
 	LoadScore *float64           `json:"loadScore"`
 	Kind      IngestEndpointKind `json:"kind"`
@@ -72550,6 +72553,9 @@ func (v *IngestEndpointFields) GetRtmpUrl() *string { return v.RtmpUrl }
 
 // GetSrtUrl returns IngestEndpointFields.SrtUrl, and is useful for accessing the field via an interface.
 func (v *IngestEndpointFields) GetSrtUrl() *string { return v.SrtUrl }
+
+// GetMkvUrl returns IngestEndpointFields.MkvUrl, and is useful for accessing the field via an interface.
+func (v *IngestEndpointFields) GetMkvUrl() *string { return v.MkvUrl }
 
 // GetRegion returns IngestEndpointFields.Region, and is useful for accessing the field via an interface.
 func (v *IngestEndpointFields) GetRegion() *string { return v.Region }
@@ -79414,12 +79420,14 @@ const (
 	MediaIngestProtocolWhip MediaIngestProtocol = "WHIP"
 	MediaIngestProtocolRtmp MediaIngestProtocol = "RTMP"
 	MediaIngestProtocolSrt  MediaIngestProtocol = "SRT"
+	MediaIngestProtocolMkv  MediaIngestProtocol = "MKV"
 )
 
 var AllMediaIngestProtocol = []MediaIngestProtocol{
 	MediaIngestProtocolWhip,
 	MediaIngestProtocolRtmp,
 	MediaIngestProtocolSrt,
+	MediaIngestProtocolMkv,
 }
 
 type MediaPlacementAllowInput struct {
@@ -92240,6 +92248,11 @@ func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbac
 	return v.IngestEndpointFields.SrtUrl
 }
 
+// GetMkvUrl returns ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbacksIngestEndpoint.MkvUrl, and is useful for accessing the field via an interface.
+func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbacksIngestEndpoint) GetMkvUrl() *string {
+	return v.IngestEndpointFields.MkvUrl
+}
+
 // GetRegion returns ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbacksIngestEndpoint.Region, and is useful for accessing the field via an interface.
 func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbacksIngestEndpoint) GetRegion() *string {
 	return v.IngestEndpointFields.Region
@@ -92296,6 +92309,8 @@ type __premarshalResolveIngestEndpointResolveIngestEndpointIngestEndpointRespons
 
 	SrtUrl *string `json:"srtUrl"`
 
+	MkvUrl *string `json:"mkvUrl"`
+
 	Region *string `json:"region"`
 
 	LoadScore *float64 `json:"loadScore"`
@@ -92321,6 +92336,7 @@ func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponseFallbac
 	retval.WhipUrl = v.IngestEndpointFields.WhipUrl
 	retval.RtmpUrl = v.IngestEndpointFields.RtmpUrl
 	retval.SrtUrl = v.IngestEndpointFields.SrtUrl
+	retval.MkvUrl = v.IngestEndpointFields.MkvUrl
 	retval.Region = v.IngestEndpointFields.Region
 	retval.LoadScore = v.IngestEndpointFields.LoadScore
 	retval.Kind = v.IngestEndpointFields.Kind
@@ -92386,6 +92402,11 @@ func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimary
 	return v.IngestEndpointFields.SrtUrl
 }
 
+// GetMkvUrl returns ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimaryIngestEndpoint.MkvUrl, and is useful for accessing the field via an interface.
+func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimaryIngestEndpoint) GetMkvUrl() *string {
+	return v.IngestEndpointFields.MkvUrl
+}
+
 // GetRegion returns ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimaryIngestEndpoint.Region, and is useful for accessing the field via an interface.
 func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimaryIngestEndpoint) GetRegion() *string {
 	return v.IngestEndpointFields.Region
@@ -92442,6 +92463,8 @@ type __premarshalResolveIngestEndpointResolveIngestEndpointIngestEndpointRespons
 
 	SrtUrl *string `json:"srtUrl"`
 
+	MkvUrl *string `json:"mkvUrl"`
+
 	Region *string `json:"region"`
 
 	LoadScore *float64 `json:"loadScore"`
@@ -92467,6 +92490,7 @@ func (v *ResolveIngestEndpointResolveIngestEndpointIngestEndpointResponsePrimary
 	retval.WhipUrl = v.IngestEndpointFields.WhipUrl
 	retval.RtmpUrl = v.IngestEndpointFields.RtmpUrl
 	retval.SrtUrl = v.IngestEndpointFields.SrtUrl
+	retval.MkvUrl = v.IngestEndpointFields.MkvUrl
 	retval.Region = v.IngestEndpointFields.Region
 	retval.LoadScore = v.IngestEndpointFields.LoadScore
 	retval.Kind = v.IngestEndpointFields.Kind
@@ -129942,7 +129966,7 @@ type VodAssetInNodeDefaultFields struct {
 	Filename *string `json:"filename"`
 	// Current processing/storage status of the asset.
 	VodAssetStatus VodAssetStatus `json:"vodAssetStatus"`
-	// Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+	// Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 	ProcessingWaitReason *string `json:"processingWaitReason"`
 	// Where the asset is stored (s3, local, freezing).
 	VodAssetStorageLocation string `json:"vodAssetStorageLocation"`
@@ -153921,6 +153945,7 @@ fragment IngestEndpointFields on IngestEndpoint {
 	whipUrl
 	rtmpUrl
 	srtUrl
+	mkvUrl
 	region
 	loadScore
 	kind

@@ -6977,8 +6977,8 @@
           "name": "ResolveIngestEndpoint",
           "kind": "query",
           "since": "v0.3.16",
-          "hash": "sha256:135dae72fff9905e070e0956aed6bbbc1ce050e282bb318b296d37af083e6a5b",
-          "document": "query ResolveIngestEndpoint ($streamKey: String!, $protocol: MediaIngestProtocol) {\n  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {\n    primary {\n      ... IngestEndpointFields\n    }\n    fallbacks {\n      ... IngestEndpointFields\n    }\n    metadata {\n      streamId\n      streamKey\n      tenantId\n      recordingEnabled\n    }\n  }\n}\nfragment IngestEndpointFields on IngestEndpoint {\n  nodeId\n  baseUrl\n  whipUrl\n  rtmpUrl\n  srtUrl\n  region\n  loadScore\n  kind\n  clusterId\n}\n"
+          "hash": "sha256:0f2be20fb4bed6ec1967aa299e0daa4e0f831730332006e22e6a885ed2c29c2e",
+          "document": "query ResolveIngestEndpoint ($streamKey: String!, $protocol: MediaIngestProtocol) {\n  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {\n    primary {\n      ... IngestEndpointFields\n    }\n    fallbacks {\n      ... IngestEndpointFields\n    }\n    metadata {\n      streamId\n      streamKey\n      tenantId\n      recordingEnabled\n    }\n  }\n}\nfragment IngestEndpointFields on IngestEndpoint {\n  nodeId\n  baseUrl\n  whipUrl\n  rtmpUrl\n  srtUrl\n  mkvUrl\n  region\n  loadScore\n  kind\n  clusterId\n}\n"
         },
         {
           "name": "ResolveViewerEndpoint",

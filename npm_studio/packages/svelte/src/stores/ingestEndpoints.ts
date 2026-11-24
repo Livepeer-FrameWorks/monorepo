@@ -42,6 +42,8 @@ export interface IngestEndpointsStore extends Readable<IngestEndpointsState> {
   rtmpUrl: Readable<string | null>;
   /** Derived store for SRT URL */
   srtUrl: Readable<string | null>;
+  /** Derived store for HTTP Matroska (MKV) push URL */
+  mkvUrl: Readable<string | null>;
 }
 
 export function createIngestEndpointsStore(): IngestEndpointsStore {
@@ -133,6 +135,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
   const whipUrl = derived({ subscribe }, ($state) => $state.endpoints?.primary?.whipUrl || null);
   const rtmpUrl = derived({ subscribe }, ($state) => $state.endpoints?.primary?.rtmpUrl || null);
   const srtUrl = derived({ subscribe }, ($state) => $state.endpoints?.primary?.srtUrl || null);
+  const mkvUrl = derived({ subscribe }, ($state) => $state.endpoints?.primary?.mkvUrl || null);
 
   return {
     subscribe,
@@ -142,6 +145,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     whipUrl,
     rtmpUrl,
     srtUrl,
+    mkvUrl,
   };
 }
 

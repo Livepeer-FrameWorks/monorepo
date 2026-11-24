@@ -734,6 +734,7 @@ export interface IngestEndpoint {
   whipUrl?: string;
   rtmpUrl?: string;
   srtUrl?: string;
+  mkvUrl?: string;
   region?: string;
   loadScore?: number;
 }

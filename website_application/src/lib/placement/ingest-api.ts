@@ -1,6 +1,11 @@
 import { ResolveIngestDestinationStore } from "$houdini";
 import { resolveOperationalStreamId } from "$lib/route-ids";
-import { ingestProtocolUrl, isSpecificIngest, type ResolvedIngest } from "./ingest";
+import {
+  ingestProtocolUrl,
+  isSpecificIngest,
+  type IngestProtocol,
+  type ResolvedIngest,
+} from "./ingest";
 
 /**
  * A failed ingest resolution. `code` is the gateway's `extensions.code` when
@@ -33,7 +38,7 @@ export async function resolveIngestDestination(
   streamId: string,
   streamKey: string,
   signal?: AbortSignal,
-  protocol?: "WHIP" | "RTMP" | "SRT"
+  protocol?: "WHIP" | "RTMP" | "SRT" | "MKV"
 ): Promise<ResolvedIngest> {
   if (!streamId || !streamKey)
     throw new IngestResolutionError("Select a stream with an active key first.", "NO_STREAM_KEY");
@@ -68,8 +73,7 @@ export async function resolveIngestDestination(
     ) {
       throw new IngestResolutionError(RESOLUTION_FAILED, "STREAM_MISMATCH");
     }
-    const requested = protocol === "WHIP" ? "whip" : protocol === "RTMP" ? "rtmp" : "srt";
-    if (protocol && !ingestProtocolUrl(result.primary, requested)) {
+    if (protocol && !ingestProtocolUrl(result.primary, protocol.toLowerCase() as IngestProtocol)) {
       throw new IngestResolutionError(RESOLUTION_FAILED, "PROTOCOL_UNAVAILABLE");
     }
     return result;

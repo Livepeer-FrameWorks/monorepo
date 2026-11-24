@@ -7,6 +7,7 @@
     destinationHost,
     ingestProtocolUrl,
     splitRtmpDestination,
+    type IngestProtocol,
     type ResolvedIngest,
   } from "$lib/placement/ingest";
   import { IngestResolutionError, resolveIngestDestination } from "$lib/placement/ingest-api";
@@ -19,7 +20,7 @@
   let copied = $state("");
   let observedAt = $state("");
   let reveal = $state(false);
-  let requestedProtocol = $state<"" | "WHIP" | "RTMP" | "SRT">("");
+  let requestedProtocol = $state<"" | "WHIP" | "RTMP" | "SRT" | "MKV">("");
   let sequence = 0;
   let requestAbort: AbortController | null = null;
   const identity = $derived(`${$auth.user?.tenant_id ?? ""}:${$auth.user?.id ?? ""}`);
@@ -108,6 +109,7 @@
         <option value="WHIP">WHIP — browser or WebRTC encoder</option>
         <option value="RTMP">RTMP / E-RTMP — encoder</option>
         <option value="SRT">SRT — encoder</option>
+        <option value="MKV">HTTP MKV — Matroska or WebM over HTTP</option>
       </select>
     </label>
     <p class="text-xs text-muted-foreground">
@@ -153,8 +155,8 @@
           </div>
         </div>
       {/if}
-      {#each ["whip", "srt", ...(!rtmp ? ["rtmp"] : [])] as protocol (protocol)}
-        {@const url = ingestProtocolUrl(result.primary, protocol as "rtmp" | "srt" | "whip")}
+      {#each ["whip", "srt", "mkv", ...(!rtmp ? ["rtmp"] : [])] as protocol (protocol)}
+        {@const url = ingestProtocolUrl(result.primary, protocol as IngestProtocol)}
         {#if url}
           <div class="flex flex-wrap items-end gap-2">
             <label class="text-sm flex-1 min-w-0"

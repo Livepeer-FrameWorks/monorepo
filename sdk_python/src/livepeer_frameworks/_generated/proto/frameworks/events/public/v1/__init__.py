@@ -133,6 +133,11 @@ class IngestProtocol(betterproto2.Enum):
 
     PULL = 4
 
+    MKV = 5
+    """
+    HTTP Matroska (MKV/WebM) push to an edge's HTTP endpoint.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -141,6 +146,7 @@ class IngestProtocol(betterproto2.Enum):
             2: "INGEST_PROTOCOL_SRT",
             3: "INGEST_PROTOCOL_WHIP",
             4: "INGEST_PROTOCOL_PULL",
+            5: "INGEST_PROTOCOL_MKV",
         }
 
     @classmethod
@@ -151,6 +157,7 @@ class IngestProtocol(betterproto2.Enum):
             "INGEST_PROTOCOL_SRT": 2,
             "INGEST_PROTOCOL_WHIP": 3,
             "INGEST_PROTOCOL_PULL": 4,
+            "INGEST_PROTOCOL_MKV": 5,
         }
 
 

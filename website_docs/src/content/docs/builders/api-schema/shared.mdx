@@ -65,7 +65,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **storagePath**: `String` — Storage path on the processing node.
 - **sizeBytes**: `Float` — File size in bytes.
 - **status**: `String!` — Processing status (queued, processing, ready, failed).
-- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 - **errorMessage**: `String` — Processing failure detail from the artifact catalog.
 - **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the clip was requested.
 - **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the clip was last updated.
@@ -828,7 +828,7 @@ Where a stream&#39;s source may be ingested. It is a summary of the stream&#39;s
 - **errorMessage**: `String` — Processing failure detail for a failed artifact; null when not failed.
 - **sizeBytes**: `Float`
 - **status**: `String!`
-- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 - **storageLocation**: `String`
 - **storageClusterId**: `String` — ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
 - **syncStatus**: `String`
@@ -1157,7 +1157,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **description**: `String` — Optional description of the asset content.
 - **filename**: `String` — Original filename when uploaded.
 - **status**: `VodAssetStatus!` ([VodAssetStatus](/builders/api-schema/shared/#vodassetstatus)) — Current processing/storage status of the asset.
-- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable or cluster_unavailable.
+- **processingWaitReason**: `String` — Why processing is queued: memory, slots, fitting_node_unavailable, cluster_unavailable or dispatch_retry.
 - **storageLocation**: `String!` — Where the asset is stored (s3, local, freezing).
 - **syncStatus**: `String` — Current S3 sync state (pending, in_progress, synced, failed, lost_local).
 - **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman&#39;s read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
