@@ -43,3 +43,34 @@ func TestCaddyCredentialURILogFieldRoundTrips(t *testing.T) {
 		t.Fatalf("log field %q does not carry the pattern and replacement verbatim", field)
 	}
 }
+
+// ApplyNginxMap evaluates map entries the way Nginx does: the first matching
+// regex wins and its value expands the named captures.
+func applyNginxMap(t *testing.T, entries []NginxMapEntry, uri string) string {
+	t.Helper()
+	for _, e := range entries {
+		re := regexp.MustCompile(e.Regex)
+		if m := re.FindStringSubmatchIndex(uri); m != nil {
+			return string(re.ExpandString(nil, e.Value, uri, m))
+		}
+	}
+	return uri
+}
+
+func TestNginxCredentialURIMapRedactsLikeCaddy(t *testing.T) {
+	entries := NginxCredentialURIMap()
+	for _, uri := range []string{
+		"/webrtc/sk_live", "/whip/sk_live", "/ingest/sk_live?protocol=whip", "/view/webrtc/sk_live",
+		"/sk_live.mkv", "/view/sk_live.mkv", "/sk_live.webm", "/view/sk_live.webm?rate=1",
+		"/webrtc/sk_live.mkv", "/hls/playback/index.m3u8", "/view/webrtc", "/healthz", "/graphql?q=1",
+	} {
+		if got, want := applyNginxMap(t, entries, uri), RedactCredentialURI(uri); got != want {
+			t.Errorf("nginx map logs %q as %q, Caddy filter as %q", uri, got, want)
+		}
+	}
+	for _, e := range entries {
+		if strings.ContainsAny(e.Regex+e.Value, "\"\\ \t\n;") {
+			t.Fatalf("nginx map entry %+v needs escaping inside a quoted Nginx token", e)
+		}
+	}
+}
