@@ -11,7 +11,9 @@ need ffmpeg jq curl python3 docker psql || finish
 WORK="$STACK_STATE_DIR/audience-$(date +%s)"
 mkdir -p "$WORK"
 PUB='' VIEWER='' SID='' CID='' STOPPED=''
+HELMSMAN_STOPPED=0
 cleanup() {
+  [ "$HELMSMAN_STOPPED" = 0 ] || stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -u /run/service/helmsman || fail 'restore serving Helmsman'
   [ -z "$STOPPED" ] || stack_ctl start "$STOPPED" || fail 'restore destination Foghorn'
   [ -z "$VIEWER" ] || kill "$VIEWER" 2>/dev/null
   [ -z "$PUB" ] || kill "$PUB" 2>/dev/null
@@ -153,8 +155,33 @@ for round in 1 2; do
   STOPPED=''
   eventually 90 "restart $round rehydrates one viewer on both replicas" counts_match || finish
 done
-stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -r /run/service/helmsman || { fail 'restart serving Helmsman'; finish; }
-eventually 90 'Helmsman restart keeps the native audience census' counts_match || finish
-check 'replica and Helmsman restarts keep the same HLS viewer receiving TS bytes' test "$(hls_poll_state "$WORK/viewer.log" "$STRICT_SINCE")" = ok
+RESTART_AT=$(monotonic_ms)
+OUTAGE_FROM=$(date +%s)
+HELMSMAN_STOPPED=1
+stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -d /run/service/helmsman || { fail 'stop serving Helmsman'; finish; }
+unavailable_seen() {
+  awk -v since="$OUTAGE_FROM" '
+    $1>=since && $2=="fail" { if ($3 ~ /^HTTPError:HTTP_Error_503:/) found=1; else bad=1 }
+    END { exit (bad ? 2 : (found ? 0 : 1)) }' "$WORK/viewer.log"
+}
+within_bound_since "$RESTART_AT" 90 'unavailable local playback decision returns retryable 503' unavailable_seen || finish
+stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -u /run/service/helmsman || { fail 'start serving Helmsman'; finish; }
+HELMSMAN_STOPPED=0
+restarted_counts() {
+  local response
+  response=$(rpc_health foghorn-b "$NODE_B") || return 1
+  jq -e --argjson since "$OUTAGE_FROM" '(.lastHeartbeat | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601)>$since' <<<"$response" >/dev/null && counts_match
+}
+within_bound_since "$RESTART_AT" 90 'Helmsman restart sends a fresh heartbeat and preserves the native audience census' restarted_counts || finish
+HEALTHY_AT=$(date +%s)
+viewer_media_recovers() {
+  awk -v since="$HEALTHY_AT" '$1>since { last=$2 } END { exit (last!="ok") }' "$WORK/viewer.log"
+}
+within_bound_since "$RESTART_AT" 90 'the same viewer receives TS bytes after the fresh control report' viewer_media_recovers || finish
+OUTAGE_END=$(date +%s)
+viewer_continues() {
+  [ "$(hls_restart_continuity_state "$WORK/viewer.log" "$STRICT_SINCE" "$OUTAGE_FROM" "$OUTAGE_END")" = ok ]
+}
+within_bound_since "$RESTART_AT" 90 'the same HLS viewer resumes TS reads, with only scoped retryable 503s' viewer_continues || finish
 check 'final Periscope serving-cluster attribution remains one' network_matches
 finish
