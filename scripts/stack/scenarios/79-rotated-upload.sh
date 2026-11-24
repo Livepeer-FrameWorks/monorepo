@@ -178,13 +178,16 @@ if [ -n "$id" ]; then
 fi
 
 
-# A push remains live while the replacement ladder is selected and served.
-if [ "${STACK_TARGET:-stack}" = staging ]; then
-  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-https://$EDGE_A_HOST}
-else
-  live_ingest=${STACK_LIVE_MKV_INGEST_URL:-http://$EDGE_A_HOST:8082}
-fi
-live_sid='' live_pub=''
+# A push remains live while the replacement ladder is selected and served. The
+# publisher uses the MKV URL the ingest front door resolves for the stream key,
+# unless STACK_LIVE_MKV_INGEST_URL names an endpoint.
+live_sid='' live_pub='' live_ingest_url=''
+live_mkv_resolved() {
+  local body
+  body=$(curl -s -m 10 "$1/ingest/$live_key?protocol=mkv") || return 1
+  live_ingest_url=$(jq -r '.primary.mkvUrl // empty' <<<"$body" 2>/dev/null)
+  case "$live_ingest_url" in http://*/"$live_key".mkv | https://*/"$live_key".mkv) return 0 ;; *) return 1 ;; esac
+}
 cleanup_live_rotation() {
   if [ -n "$live_pub" ]; then
     kill -TERM "$live_pub" 2>/dev/null || true
@@ -202,9 +205,16 @@ if [ -z "$live_sid" ] || [ -z "$live_key" ] || [ -z "$live_uuid" ] || [ -z "$liv
   fail 'create rotated live MKV stream'
 else
   live_internal=$(internal_name_of "$live_uuid")
+  if [ -n "${STACK_LIVE_MKV_INGEST_URL:-}" ]; then
+    live_ingest_url="${STACK_LIVE_MKV_INGEST_URL%/}/$live_key.mkv"
+  else
+    for live_front_door in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+      eventually 60 "front door at $live_front_door resolves a live MKV ingest URL" live_mkv_resolved "$live_front_door"
+    done
+  fi
   live_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   python3 "$STACK_LIB_DIR/rotate_live_mkv.py" "$work/coded-landscape.mp4" \
-    "${live_ingest%/}/$live_key.mkv" > "$work/live-publisher.log" 2>&1 &
+    "${live_ingest_url:-missing-mkv-ingest-url}" > "$work/live-publisher.log" 2>&1 &
   live_pub=$!
   live_rotation_routed() {
     local quoted rows runtime
