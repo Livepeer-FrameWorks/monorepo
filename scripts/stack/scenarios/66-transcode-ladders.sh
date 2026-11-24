@@ -51,7 +51,7 @@ livepeer_produced() {
 native_worker_budget() {
   local service visible
   for service in "$ORCHESTRATOR" "$ORCHESTRATOR_B"; do
-    visible=$(stack_exec "$service" nproc) || return 1
+    visible=$(stack_exec "$service" sh -c 'cpus=$(sed -n "s/^Cpus_allowed_list:[[:space:]]*//p" /proc/1/status); [ -n "$cpus" ] && exec taskset -c "$cpus" nproc') || return 1
     echo "    $service native CPU visibility: $visible (budget 2)"
     [[ "$visible" =~ ^[0-9]+$ ]] && [ "$visible" -gt 0 ] && [ "$visible" -le 2 ] || return 1
   done
@@ -59,16 +59,27 @@ native_worker_budget() {
 local_first_running() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='${local_hashes[0]}' AND status='processing' AND memory_reserved_bytes>0")" = 1 ]
 }
-local_job_waited_for_memory() {
-  [ "$(pg "$FOGHORN_A_DB" "SELECT EXISTS (
-    SELECT 1 FROM foghorn.processing_jobs AS waiting
-    JOIN foghorn.processing_jobs AS running ON running.tenant_id=waiting.tenant_id AND running.job_id<>waiting.job_id
-    WHERE waiting.tenant_id='$STACK_TENANT_ID'
-      AND waiting.artifact_hash='${local_hashes[1]}'
-      AND running.artifact_hash='${local_hashes[0]}'
-      AND waiting.status='queued' AND waiting.wait_reason='memory' AND waiting.retry_count=0
-      AND running.status IN ('dispatched','processing') AND running.memory_reserved_bytes>0)")" = t ]
+local_jobs_have_reserved_capacity() {
+  local rows node reserved budget
+  rows=$(pg "$FOGHORN_A_DB" "SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'artifact_hash',artifact_hash,'status',status,'retry_count',retry_count,
+    'processing_node_id',processing_node_id,'memory_reserved_bytes',memory_reserved_bytes,
+    'wait_reason',wait_reason)), '[]')::text FROM foghorn.processing_jobs
+    WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash IN ('${local_hashes[0]}','${local_hashes[1]}')") || return 1
+  # Adaptive encoder plans may safely admit both jobs. Require durable memory
+  # reservations within the node's reported budget, or real retry-free backpressure.
+  jq -e 'length==2 and all(.[]; .retry_count==0) and
+    any(.[]; .status=="processing" and .memory_reserved_bytes>0) and
+    all(.[]; ((.status=="processing" or .status=="dispatched") and .memory_reserved_bytes>0 and (.processing_node_id|length)>0)
+      or (.status=="queued" and .wait_reason=="memory"))' <<<"$rows" >/dev/null || return 1
+  while IFS='|' read -r node reserved; do
+    [ -n "$node" ] || return 1
+    budget=$(stack_exec foghorn-redis valkey-cli --raw get "{$CELL_A_CLUSTER}:nodes:$node") || return 1
+    jq -e --argjson reserved "$reserved" '(.processing_memory_budget_bytes|type)=="number" and .processing_memory_budget_bytes>0 and .processing_memory_budget_bytes>=$reserved' <<<"$budget" >/dev/null || return 1
+    echo "    $node reserved $reserved bytes within its reported processing budget"
+  done < <(jq -r '[.[] | select(.status=="processing" or .status=="dispatched")] | group_by(.processing_node_id)[] | "\(.[0].processing_node_id)|\(map(.memory_reserved_bytes)|add)"' <<<"$rows")
 }
+
 before_media=$(media_runtime_state all) || { fail 'read media service state before Livepeer ladders'; finish; }
 check 'native encoder worker pools see at most their two-CPU budget' native_worker_budget
 printf '%s\n' "$before_media" >"$STACK_STATE_DIR/media-runtime-livepeer-before.tsv"
@@ -97,7 +108,7 @@ if [ "$before_media" != "$after_media" ]; then
   finish
 fi
 
-# Two full 4K ladders must fit one at a time on the unchanged 3 GiB edge,
+# Two full 4K ladders must finish within the unchanged edge memory budgets,
 # including when no gateway exists to take any of the encoding work.
 gateway_drained() {
   [ "$(date +%s)" -ge "$DISCOVERY_DRAIN_AT" ] &&
@@ -122,7 +133,7 @@ for job in first second; do
     eventually 120 'first local 4K job reserves memory before the second upload' local_first_running || finish
   fi
 done
-eventually 300 'one local 4K upload queues behind the running job without spending retries' local_job_waited_for_memory || finish
+eventually 300 'local 4K uploads reserve bounded memory or queue without spending retries' local_jobs_have_reserved_capacity || finish
 for job in 0 1; do
   if eventually 900 "local 4K job $job completes" ready "${local_jobs[$job]}"; then
     check "local 4K job $job retains its 2160 rung" recorded_ceiling "${local_hashes[$job]}" 2160
