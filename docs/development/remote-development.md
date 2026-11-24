@@ -127,6 +127,13 @@ platform tier admits may ingest to and play from:
 | `central-primary` | `foghorn`, `foghorn-2`     | `demo-media`           | `edge` (edge-node-1)   |
 | `us-primary`      | `foghorn-b`, `foghorn-b-2` | `demo-media-us`        | `edge-b` (edge-node-b) |
 
+Each offchain orchestrator keeps its two-CPU quota and 2 GiB memory limit.
+Its launcher also narrows process affinity to that CPU budget: FFmpeg sizes
+native worker pools from the available CPU set, which otherwise still exposes
+every host core under a CPU time quota. The launcher replaces itself with
+Livepeer, preserving PID 1 and signal delivery. Scenario 66 checks actual QHD/4K
+processing and rejects an OOM, restart or local fallback.
+
 Scenarios address them as `CELL_A_CLUSTER` and `CELL_B_CLUSTER`
 (`scripts/stack/endpoints.sh`). Bring-up fails when a cell has no platform
 media cluster with an enrolled edge that the `stack-qa` customer is entitled

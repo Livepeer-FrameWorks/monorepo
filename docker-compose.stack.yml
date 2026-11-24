@@ -148,6 +148,9 @@ services:
   livepeer-orch-a:
     image: *go-livepeer-image
     profiles: ["stack"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/stack-media-cpu.sh", "/usr/local/bin/livepeer"]
+    volumes:
+      - ./scripts/stack/media-cpu.sh:/usr/local/bin/stack-media-cpu.sh:ro
     command:
       - -orchestrator
       - -transcoder
@@ -208,6 +211,9 @@ services:
   livepeer-orch-b:
     image: *go-livepeer-image
     profiles: ["stack"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/stack-media-cpu.sh", "/usr/local/bin/livepeer"]
+    volumes:
+      - ./scripts/stack/media-cpu.sh:/usr/local/bin/stack-media-cpu.sh:ro
     command:
       - -orchestrator
       - -transcoder
