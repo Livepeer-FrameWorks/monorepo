@@ -226,7 +226,7 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 	if got, ok := GetDVRSourceOverride("live+test-stream"); !ok || got != "http://source" {
 		t.Fatalf("DVR source override = %q, %v; want http://source, true", got, ok)
 	}
-	for _, want := range []string{"audio=source", "video=source", "subtitle=none", "meta=none"} {
+	for _, want := range []string{"audio=source", "video=source", "subtitle=none", "meta=none", "unmask=1"} {
 		if !strings.Contains(mc.lastTargetURI, want) {
 			t.Fatalf("target URI %q missing %q", mc.lastTargetURI, want)
 		}
