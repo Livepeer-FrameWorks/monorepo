@@ -1505,6 +1505,13 @@ func (sm *StreamStateManager) updateNodeStats(internalName, nodeID string, total
 		sm.mu.Unlock()
 		return
 	}
+	if len(runtime) > 0 {
+		if binding, bound := streamident.ParseRuntimeBinding(runtime[0]); bound && binding.InternalName == internalName {
+			// A previous inbound pull can leave a logical-stream replication hint
+			// behind. The current fenced runtime fixes this physical buffer's role.
+			replicated = binding.Role == streamident.RuntimeRelay
+		}
+	}
 	now := time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
