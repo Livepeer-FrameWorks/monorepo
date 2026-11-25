@@ -2682,7 +2682,7 @@ type TrackListUpdate {
 How source media enters a stream.
 """
 enum IngestMode {
-  "An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks."
+  "An encoder pushes RTMP/E-RTMP, SRT, WHIP, or HTTP MKV into FrameWorks."
   PUSH
   "FrameWorks pulls from a configured upstream URI."
   PULL

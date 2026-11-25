@@ -72591,7 +72591,7 @@ var AllIngestEndpointKind = []IngestEndpointKind{
 type IngestMode string
 
 const (
-	// An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks.
+	// An encoder pushes RTMP/E-RTMP, SRT, WHIP, or HTTP MKV into FrameWorks.
 	IngestModePush IngestMode = "PUSH"
 	// FrameWorks pulls from a configured upstream URI.
 	IngestModePull IngestMode = "PULL"
