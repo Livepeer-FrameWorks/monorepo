@@ -130,6 +130,11 @@ func ValidatePolicy(renditions []RenditionSpec) error {
 		default:
 			return fmt.Errorf("rendition %s profile %q is not high, main or baseline", r.Name, r.Profile)
 		}
+		// MistProcAV hands a rendition's profile to whichever encoder runs it, and these are H264's
+		// profiles: an HEVC encoder knows no high or baseline profile, an AV1 encoder none of them.
+		if r.Profile != "" && r.Codec != "H264" {
+			return fmt.Errorf("rendition %s is %s; a profile applies to H264 only", r.Name, r.Codec)
+		}
 	}
 	return nil
 }
