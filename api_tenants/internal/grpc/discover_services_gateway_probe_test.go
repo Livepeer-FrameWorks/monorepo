@@ -83,6 +83,49 @@ func TestDiscoverServices_ProbesUnhealthyRunningGateway(t *testing.T) {
 	}
 }
 
+// A gateway that stopped answers its recovery probe only when the probe times out. Discovery must
+// not wait for it past its caller's deadline: Foghorn asks with a 1 s deadline, and an answer later
+// than that reads as Quartermaster unreachable, which keeps the dead gateway listed. Discovery
+// answers from the stored health within a share of the deadline; the probe finishes on its own.
+func TestDiscoverServices_DoesNotWaitOnASlowRecoveryProbe(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	probeDone := make(chan struct{})
+	server.SetInstanceHealthProber(func(ctx context.Context, _ []quartermasterdb.ServiceDiscoveryRow) map[string]string {
+		defer close(probeDone)
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+		return map[string]string{"inst-lpgw-1": "unhealthy"}
+	})
+	now := time.Now()
+	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url",
+	}).AddRow("uuid-1", "inst-lpgw-1", "livepeer-gateway", "media-eu", "core-eu-1",
+		"http", "203.0.113.10", int32(8935), nil, "running", "unhealthy", []byte(`{}`), now, now, now, "Media EU", "frameworks.network"))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := server.DiscoverServices(ctx, &quartermasterpb.ServiceDiscoveryRequest{ServiceType: "livepeer-gateway", ClusterId: "media-eu"})
+	if elapsed := time.Since(start); err != nil || elapsed > 500*time.Millisecond {
+		t.Fatalf("DiscoverServices answered after %v (err %v), want within half its caller's 1 s deadline", elapsed, err)
+	}
+	if len(resp.GetInstances()) != 1 || resp.GetInstances()[0].GetHealthStatus() != "unhealthy" {
+		t.Fatalf("instances = %+v, want the gateway's stored health", resp.GetInstances())
+	}
+	<-probeDone
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Healthy gateways, and other service types, are served from the stored
 // health without a probe.
 func TestDiscoverServices_DoesNotProbeHealthyGateways(t *testing.T) {
