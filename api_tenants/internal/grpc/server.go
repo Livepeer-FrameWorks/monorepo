@@ -1284,11 +1284,23 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *quartermast
 	return &resp, nil
 }
 
+// Recovery probes run on their own deadline, so a result reaches the store even after the
+// discovery that asked has answered. Discovery waits for them at most a quarter of its caller's
+// remaining deadline, and never longer than recoveryProbeMaxWait.
+const (
+	recoveryProbeTimeout = 5 * time.Second
+	recoveryProbeMaxWait = 250 * time.Millisecond
+)
+
 // recoverUnhealthyGateways checks running Livepeer gateways that are marked
 // unhealthy now, instead of leaving them out until the next health poll. A
-// restarted gateway is then offered on the discovery that finds it; callers
-// cache a miss for a few seconds, which bounds how often this probes. It
-// reports whether any instance came back healthy.
+// restarted gateway answers its probe at once and is offered on the discovery
+// that finds it. A gateway that does not answer within the wait is answered
+// from its stored health: a caller (Foghorn asks with a 1 s deadline) that saw
+// no answer in time would take Quartermaster as unreachable and keep the dead
+// gateway it last knew. The probe still completes and persists its result for
+// the next discovery; callers cache a miss for a few seconds, which bounds how
+// often this probes. It reports whether any instance came back healthy in time.
 func (s *QuartermasterServer) recoverUnhealthyGateways(ctx context.Context, serviceType string, rows []quartermasterdb.ServiceDiscoveryRow) bool {
 	if serviceType != livepeerGatewayServiceType || s.instanceHealthProber == nil {
 		return false
@@ -1302,8 +1314,28 @@ func (s *QuartermasterServer) recoverUnhealthyGateways(ctx context.Context, serv
 	if len(suspect) == 0 {
 		return false
 	}
+	wait := recoveryProbeMaxWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/4)
+	}
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recoveryProbeTimeout)
+	done := make(chan map[string]string, 1)
+	go func() {
+		defer cancel()
+		done <- s.instanceHealthProber(probeCtx, suspect)
+	}()
+	var results map[string]string
+	timer := time.NewTimer(max(wait, 0))
+	defer timer.Stop()
+	select {
+	case results = <-done:
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 	recovered := false
-	for instanceID, health := range s.instanceHealthProber(ctx, suspect) {
+	for instanceID, health := range results {
 		if health == "healthy" {
 			recovered = true
 			s.logger.WithField("instance_id", instanceID).Info("Livepeer gateway healthy again on discovery probe")
