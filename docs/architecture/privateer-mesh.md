@@ -118,6 +118,12 @@ socket bind when the socket unit is new or changed; `cleanup` stops the socket
 before the service, because a query to a listening socket starts the service
 again.
 
+The role's Molecule verify (`molecule/default/dns_restart.yml`) proves this: it
+restarts Privateer three times while one loop queries the held socket and one
+queries through resolved's `~internal` route, and requires every answer to be
+the seeded mesh address within a bound taken from a single restart. The compose
+stack has no systemd or resolved, so no stack scenario covers it.
+
 ## Health
 
 - Mesh substrate: unhealthy after >3 consecutive sync failures or >5 minutes without

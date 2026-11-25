@@ -9,10 +9,11 @@
 #      the update ends idle, the node returns to normal mode (no leftover
 #      update fence), and the stream keeps its publisher, its ingest
 #      generation and its media through the Helmsman restart and Mist reload.
-#   3. Privateer restart while services resolve .internal names.
 # Catches: R3 (in-flight jobs orphaned until lease expiry), N3 (update fence
 # never lifted, node excluded from later updates), WS3b (Mist API wedged after
-# a rolling reload), F12 (.internal leaked to the LAN resolver).
+# a rolling reload). F12 (.internal leaked to the LAN resolver while Privateer
+# restarts) needs systemd and resolved, so the privateer role's Molecule verify
+# covers it (molecule/default/dns_restart.yml).
 . "$(dirname "$0")/../lib.sh"
 
 EDGE_SERVICE=${STACK_EDGE_A_SERVICE:-edge}
@@ -179,17 +180,4 @@ if [ "$stage_ready" = 1 ]; then
 fi
 update_cleanup
 UPDATE_STAGED="" UPDATE_SRV="" SID="" PUB=""
-
-log "3. Privateer restart while resolving .internal"
-if stack_ctl restart privateer 2>/dev/null; then
-  leaked=0
-  for _ in $(seq 1 40); do
-    addr=$(getent hosts quartermaster.internal 2>/dev/null | awk '{print $1}')
-    case "$addr" in "" | 10.* | 172.* | 192.168.*) ;; *) leaked=$((leaked + 1)); echo "    quartermaster.internal -> $addr" ;; esac
-    sleep 0.5
-  done
-  check ".internal never resolved outside the mesh during the restart" [ "$leaked" = 0 ]
-else
-  blocked "the stack has no privateer service; F12 remains a staging check"
-fi
 finish
