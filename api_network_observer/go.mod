@@ -3,6 +3,7 @@ module frameworks/api_network_observer
 go 1.27.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/google/uuid v1.6.0

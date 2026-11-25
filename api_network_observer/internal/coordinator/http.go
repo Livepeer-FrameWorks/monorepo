@@ -206,7 +206,7 @@ func (a *API) candidates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	feed := obs.CandidateFeed{Version: 1, GeneratedAt: now, ExpiresAt: now.Add(5 * time.Minute), Network: a.Engine.Network, Environment: a.Engine.Environment, Candidates: []obs.Endpoint{}}
+	feed := obs.CandidateFeed{Version: 1, GeneratedAt: now, ExpiresAt: now.Add(5 * time.Minute), Provider: "livepeer", Network: a.Engine.Network, Environment: a.Engine.Environment, Candidates: []obs.Endpoint{}}
 	for _, p := range s.Endpoints {
 		if p.Resource.Active && p.Referenced && now.Sub(p.LastSuccess) < 30*time.Minute {
 			p.Checks = nil

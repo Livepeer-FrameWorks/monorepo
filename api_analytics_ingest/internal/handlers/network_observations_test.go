@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -13,6 +14,66 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+func TestNetworkStatePreservesInstanceConfiguration(t *testing.T) {
+	for _, producer := range []string{"prober", "gateway"} {
+		for _, resolvedIP := range []string{"203.0.113.1", ""} {
+			t.Run(producer+"/"+resolvedIP, func(t *testing.T) {
+				conn := newFakeClickhouseConn()
+				handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+				owner := uuid.NewString()
+				ts := time.Now().UTC().Truncate(time.Second)
+				msg := &pb.OrchestratorStateUpdate{
+					OrchAddr: "0xabc", CanonicalUrl: "https://orch.example:8935",
+					AdvertisedNodeUrls: []string{"https://node.example:8935"},
+					Capabilities:       []string{"caps:0:0000000000000001", "caps:1:0000000000000002"},
+					Hardware:           `[{"name":"test GPU"}]`, Source: producer,
+					PriceKnown: true, PricePerUnit: 7, PixelsPerUnit: 100,
+					PriceCurrency: "ETH", PriceUnit: "wei/pixel",
+					Vantage: &pb.OrchestratorVantageGeo{ResolvedIp: resolvedIP, Dialed: resolvedIP != ""},
+				}
+				identity := fullIdentity()
+				identity["cluster_owner_tenant_id"] = owner
+				identity["producer_kind"], identity["network_id"], identity["environment"] = producer, "42161", "staging"
+				event := orchestratorEvent(t, owner, ts, msg, identity)
+				event.EventID, event.EventType, event.SchemaVersion = uuid.NewString(), "orchestrator_state_update", 3
+				if err := handler.processNetworkObservation(t.Context(), event); err != nil {
+					t.Fatal(err)
+				}
+				observations := conn.batches["network_observations"]
+				if observations == nil || !observations.sent || len(observations.rows) != 1 {
+					t.Fatal("network state observation was not retained")
+				}
+				var metric obs.Metric
+				if err := json.Unmarshal([]byte(observations.rows[0][31].(string)), &metric); err != nil {
+					t.Fatal(err)
+				}
+				if metric.Price == nil || metric.Price.Numerator != "7" || metric.Price.Denominator != "100" {
+					t.Fatalf("network state price lost: %+v", metric.Price)
+				}
+				instance := conn.batches["orchestrator_instance_state_current"]
+				if resolvedIP == "" {
+					if instance != nil {
+						t.Fatal("instance state written without resolved IP")
+					}
+				} else {
+					if instance == nil || !instance.sent || len(instance.rows) != 1 {
+						t.Fatal("instance configuration was not retained")
+					}
+					row := instance.rows[0]
+					if row[0] != uuid.MustParse(owner) || row[1] != msg.OrchAddr || row[2] != resolvedIP || row[3] != msg.CanonicalUrl || !reflect.DeepEqual(row[4], msg.AdvertisedNodeUrls) || !reflect.DeepEqual(row[5], msg.Capabilities) || row[6] != int64(7) || row[7] != int64(100) || row[12] != msg.Hardware || row[13] != producer || row[14] != ts || row[16] != ts {
+						t.Fatalf("instance configuration mapping lost: %+v", row)
+					}
+				}
+				for _, table := range []string{"orchestrator_vantage_current", "orchestrator_discovery_samples", "orchestrator_transcode_outcomes"} {
+					if conn.batches[table] != nil {
+						t.Errorf("state update unexpectedly wrote %s", table)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestNetworkDiscoveryAdmissionDoesNotBecomeDowntime(t *testing.T) {
 	for _, tc := range []struct {
