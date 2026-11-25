@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,6 +81,64 @@ func TestDiscoverServices_ProbesUnhealthyRunningGateway(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Concurrent discoveries that each find the same dead gateway share one recovery probe: a probe
+// outlives the discoveries that wait for it, and those must not pile probes on the gateway.
+func TestDiscoverServices_ConcurrentDiscoveriesShareOneRecoveryProbe(t *testing.T) {
+	var probes atomic.Int32
+	release := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		<-release
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer gateway.Close()
+	defer close(release)
+	host, portText, err := net.SplitHostPort(gateway.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mock.MatchExpectationsInOrder(false)
+	handlers.Init(db, logging.NewLogger())
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetInstanceHealthProber(handlers.ProbeDiscoveredInstances)
+	now := time.Now()
+	cols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url",
+	}
+	const discoveries = 20
+	for range discoveries {
+		mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments`).WillReturnRows(sqlmock.NewRows(cols).AddRow("uuid-1", "inst-lpgw-1", "livepeer-gateway", "media-eu", "core-eu-1",
+			"http", host, int32(port), "/healthz", "running", "unhealthy", []byte(`{}`), now, now, now, "Media EU", "frameworks.network"))
+	}
+	var wg sync.WaitGroup
+	for range discoveries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := server.DiscoverServices(ctx, &quartermasterpb.ServiceDiscoveryRequest{ServiceType: "livepeer-gateway", ClusterId: "media-eu"}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("%d concurrent discoveries probed the gateway %d times, want one shared probe", discoveries, got)
 	}
 }
 
