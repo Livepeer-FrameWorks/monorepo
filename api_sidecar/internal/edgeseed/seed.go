@@ -353,6 +353,12 @@ func ensureLayout(fw, caddyIDs ids) error {
 	return nil
 }
 
+// syncFile flushes one copied file to disk before it is renamed into place.
+// A whole-tree install (Mist is several GiB in the dev stack) would otherwise
+// leave every byte dirty in the page cache, which counts against the edge
+// container's memory limit and gets init-seed OOM-killed when writeback lags.
+var syncFile = (*os.File).Sync
+
 func copyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -365,6 +371,11 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := syncFile(out); err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
