@@ -35,7 +35,8 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          # The Python of ansible/lint.Dockerfile, which make verify-ansible-lint runs.
+          python-version: "3.12.16"
           cache: "pip"
           cache-dependency-path: ansible/requirements-ci-lint.txt
 
