@@ -5266,14 +5266,16 @@ func (p *Processor) broadcastStreamOffline(ctx context.Context, internalName, te
 	// broadcast when ownership is unresolved (empty tenant): peers filter federated lifecycle by tenant, so an
 	// empty tenant would bypass those filters and leak the event cross-tenant. Retain stream tracking when an attributed broadcast
 	// cannot enqueue to every required peer, so the durable retry cannot lose its required set.
+	// Federation membership is only tracked for a tenant-owned publisher generation, so an offline
+	// source without both (a pull buffer, or unresolved ownership) has no membership to untrack.
 	if p.peerNotifier != nil {
+		tracked := strings.TrimSpace(tenantID) != "" && strings.TrimSpace(sourceGeneration) != ""
 		if strings.TrimSpace(tenantID) != "" {
-			broadcastErr := p.peerNotifier.BroadcastStreamLifecycle(ctx, internalName, tenantID, sourceRevision, false)
-			if broadcastErr == nil {
-				broadcastErr = p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision)
+			if err := p.peerNotifier.BroadcastStreamLifecycle(ctx, internalName, tenantID, sourceRevision, false); err != nil {
+				return err
 			}
-			return broadcastErr
-		} else {
+		}
+		if tracked {
 			return p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision)
 		}
 	}
