@@ -91,8 +91,9 @@ type EdgeProvisionConfig struct {
 	// mistPassword is lazily populated by mistAPIPassword() so a single
 	// Provision invocation sees one consistent MIST_API_PASSWORD across
 	// mistserver and helmsman (both via the env var).
-	mistPassword  string
-	onnxDRIDevice bool
+	mistPassword    string
+	onnxDRIDevice   bool
+	onnxAccelDevice bool
 }
 
 // generateEdgePassword returns a random 32-char hex string used as the
@@ -194,11 +195,9 @@ func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, co
 		return EdgeInspection{}, err
 	}
 	config.ONNXProfile = profile
-	if profile == "openvino" && mode == "container" {
-		if result, probeErr := e.RunCommand(ctx, host, "test -d /dev/dri"); probeErr == nil && result.ExitCode == 0 {
-			config.onnxDRIDevice = true
-		}
-	}
+	config.onnxDRIDevice, config.onnxAccelDevice = detectEdgeONNXDevices(profile, mode, func(command string) (*ssh.CommandResult, error) {
+		return e.RunCommand(ctx, host, command)
+	})
 	fmt.Printf("  ONNX profile: %s\n", profile)
 
 	fmt.Println("  ensuring Python for Ansible")

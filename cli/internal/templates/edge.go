@@ -73,6 +73,7 @@ type EdgeVars struct {
 	MistAPIPassword  string // MistServer API auth password (MIST_API_PASSWORD for MistController's API account and helmsman)
 	EdgeImage        string // Single edge image (helmsman+Mist+Caddy); manifest-pinned (image@digest) when a release is selected.
 	ONNXProfile      string // Profile baked into EdgeImage; NVIDIA profiles need GPU device access.
+	ONNXAccelDevice  bool   // Pass an available Intel NPU device into an OpenVINO container.
 	ONNXDRIDevice    bool   // Pass an available Intel DRM device into an OpenVINO container.
 	ChandlerUpstream string // localhost:18020 in both modes
 	TelemetryURL     string
@@ -161,13 +162,20 @@ func edgeNetworkBlock(edgeOS string) string {
         condition: service_completed_successfully`
 }
 
-func edgeAcceleratorBlock(profile string, driDevice bool) string {
+func edgeAcceleratorBlock(profile string, driDevice, accelDevice bool) string {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
 	case "cuda", "tensorrt":
 		return "    gpus: all\n"
 	case "openvino":
-		if driDevice {
-			return "    devices:\n      - /dev/dri:/dev/dri\n"
+		if driDevice || accelDevice {
+			block := "    devices:\n"
+			if driDevice {
+				block += "      - /dev/dri:/dev/dri\n"
+			}
+			if accelDevice {
+				block += "      - /dev/accel:/dev/accel\n"
+			}
+			return block
 		}
 	}
 	return ""
@@ -411,7 +419,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 		content = strings.ReplaceAll(content, "{{RELAY_TRUSTED_CIDR}}", vars.RelayTrustedCIDR)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{EDGE_IMAGE}}", vars.EdgeImage)
-		content = strings.ReplaceAll(content, "{{EDGE_ACCELERATOR_BLOCK}}", edgeAcceleratorBlock(vars.ONNXProfile, vars.ONNXDRIDevice))
+		content = strings.ReplaceAll(content, "{{EDGE_ACCELERATOR_BLOCK}}", edgeAcceleratorBlock(vars.ONNXProfile, vars.ONNXDRIDevice, vars.ONNXAccelDevice))
 		content = strings.ReplaceAll(content, "{{EDGE_NETWORK_BLOCK}}", edgeNetworkBlock(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{EDGE_TUNING_SERVICE}}", edgeTuningService(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{CONTAINER_LOGGING}}", composelog.Block("    "))

@@ -110,6 +110,7 @@ edge_mistserver_artifact_checksum: ""
 edge_mistserver_version: ""
 edge_mistserver_onnx_profile: cpu
 edge_mistserver_onnx_dri_device: false
+edge_mistserver_onnx_accel_device: false
 edge_mistserver_runtime_packages:
   - ffmpeg
 edge_mistserver_runtime_package_manager: ""

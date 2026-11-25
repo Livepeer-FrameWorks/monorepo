@@ -70,17 +70,21 @@ func TestRenderEdgeTemplatesAcceleratorDevices(t *testing.T) {
 		name    string
 		profile string
 		dri     bool
+		accel   bool
 		want    string
 	}{
 		{name: "cuda", profile: "cuda", want: "    gpus: all\n"},
 		{name: "tensorrt", profile: "tensorrt", want: "    gpus: all\n"},
 		{name: "openvino gpu", profile: "openvino", dri: true, want: "      - /dev/dri:/dev/dri\n"},
+		{name: "openvino npu", profile: "openvino", accel: true, want: "    devices:\n      - /dev/accel:/dev/accel\n"},
+		{name: "openvino gpu and npu", profile: "openvino", dri: true, accel: true, want: "    devices:\n      - /dev/dri:/dev/dri\n      - /dev/accel:/dev/accel\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			vars := fixedEdgeVars()
 			vars.Mode = "container"
 			vars.ONNXProfile = test.profile
 			vars.ONNXDRIDevice = test.dri
+			vars.ONNXAccelDevice = test.accel
 			files, err := RenderEdgeTemplates(vars)
 			if err != nil {
 				t.Fatal(err)

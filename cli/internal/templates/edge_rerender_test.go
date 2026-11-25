@@ -84,3 +84,32 @@ func TestRerenderEdgeStackRejectsNativeAndUninitialized(t *testing.T) {
 		t.Fatal("stack without NODE_ID must be rejected")
 	}
 }
+
+func TestRerenderEdgeStackPreservesOpenVINODevices(t *testing.T) {
+	for _, devices := range [][]string{nil, {"dri"}, {"accel"}, {"dri", "accel"}} {
+		t.Run(strings.Join(devices, "+"), func(t *testing.T) {
+			vars := fixedEdgeVars()
+			vars.Mode = "container"
+			vars.ONNXProfile = "openvino"
+			fresh := renderedEdgeFiles(t, vars)
+			compose := fresh["docker-compose.edge.yml"]
+			if len(devices) > 0 {
+				block := "    devices:\n"
+				for _, device := range devices {
+					block += "      - /dev/" + device + ":/dev/" + device + "\n"
+				}
+				compose = strings.Replace(compose, "    shm_size:", block+"    shm_size:", 1)
+			}
+			got, _, err := RerenderEdgeStack(EdgeDeployedStack{Env: fresh[".edge.env"], Compose: compose})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, device := range []string{"dri", "accel"} {
+				mapping := "/dev/" + device + ":/dev/" + device
+				if strings.Contains(got, mapping) != strings.Contains(compose, mapping) {
+					t.Errorf("rerender changed available device %s:\n%s", mapping, got)
+				}
+			}
+		})
+	}
+}

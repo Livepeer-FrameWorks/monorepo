@@ -61,6 +61,7 @@ func RerenderEdgeStack(d EdgeDeployedStack) (compose, env string, err error) {
 		RelayTrustedCIDR:     deployed.value("HELMSMAN_RELAY_TRUSTED_CIDR"),
 		StorageCapacityBytes: deployed.value("HELMSMAN_STORAGE_CAPACITY_BYTES"),
 		ONNXDRIDevice:        strings.Contains(d.Compose, "/dev/dri:/dev/dri"),
+		ONNXAccelDevice:      strings.Contains(d.Compose, "/dev/accel:/dev/accel"),
 	}
 	if vars.NodeID == "" {
 		return "", "", fmt.Errorf(".edge.env has no NODE_ID; not an initialized edge stack")
