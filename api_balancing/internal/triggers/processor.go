@@ -2650,7 +2650,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 				return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher runtime superseded before readiness projection")
 			}
 		} else {
-			state.DefaultManager().SetStreamInstanceInputs(streamValidation.GetInternalName(), trigger.GetNodeId(), 1)
+			state.DefaultManager().BeginLegacyPublisherRuntime(streamValidation.GetInternalName(), trigger.GetNodeId(), streamValidation.GetTenantId())
 		}
 		// The prior-owner drain is NOT run here: the node the projection replaced is persisted on the
 		// durable admission-effect obligation at confirmation time and drained by the
