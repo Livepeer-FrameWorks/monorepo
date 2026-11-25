@@ -3,6 +3,7 @@ const waitLabels: Record<string, string> = {
   slots: "processing slots",
   fitting_node_unavailable: "suitable node unavailable",
   cluster_unavailable: "cluster unavailable",
+  dispatch_retry: "retrying dispatch",
 };
 
 export function processingStatusLabel(
