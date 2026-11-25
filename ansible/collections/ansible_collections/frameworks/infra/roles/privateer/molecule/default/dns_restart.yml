@@ -1,0 +1,107 @@
+---
+# F12: .internal lookups keep their mesh answer while Privateer restarts. The
+# DNS address belongs to frameworks-privateer.socket, so a query sent while the
+# service is down waits in the socket queue and the new process answers it; it
+# is never refused, which would send the resolver on to the host's own search
+# domains. Two query loops run through three service restarts: one straight to
+# the held socket, one through systemd-resolved's ~internal route on wg0 (cache
+# off). Every answer must be the seeded mesh address, and no query may wait
+# longer than twice the time one restart takes to answer again, plus 1 s.
+- name: Privateer DNS restart | name the seeded record
+  ansible.builtin.set_fact:
+    privateer_dns_probe_name: quartermaster.internal
+    privateer_dns_probe_address: "{{ privateer_static_dns.quartermaster | first }}"
+    privateer_dns_probe_port: "{{ privateer_env.DNS_PORT | default(53) }}"
+
+- name: Privateer DNS restart | query .internal through repeated restarts
+  ansible.builtin.shell: |
+    set -uo pipefail
+    command -v dig >/dev/null || { echo "dig is not installed"; exit 1; }
+    work=$(mktemp -d)
+    trap 'touch "$work/stop"; wait; rm -rf "$work"' EXIT
+    now() { date +%s%3N; }
+    direct() { # direct <timeout s>: "<rcode> <addresses>" from the held socket
+      local out rc
+      out=$(dig @127.0.0.1 -p "$PROBE_PORT" +tries=1 +time="$1" +noall +comments +answer "$PROBE_NAME" A 2>&1)
+      rc=$?
+      [ "$rc" = 0 ] || { echo "rc$rc none"; return; }
+      printf '%s %s\n' \
+        "$(printf '%s\n' "$out" | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -n1)" \
+        "$(printf '%s\n' "$out" | awk '$4 == "A" { print $5 }' | sort | paste -sd, -)"
+    }
+    resolved() { # resolved <timeout s>: "<status> <addresses>" through systemd-resolved
+      local out rc
+      out=$(timeout "$1" resolvectl query -4 --cache=no --legend=no "$PROBE_NAME" 2>&1)
+      rc=$?
+      [ "$rc" = 0 ] || { echo "rc$rc none"; return; }
+      echo "NOERROR $(printf '%s\n' "$out" | grep -oE '[0-9]+(\.[0-9]+){3}' | sort -u | paste -sd, -)"
+    }
+
+    # The bound comes from one restart: how long after `systemctl restart`
+    # the held socket answers again.
+    r0=$(now)
+    systemctl restart frameworks-privateer.service
+    until [ "$(direct 1)" = "NOERROR $PROBE_ADDRESS" ]; do
+      [ $(( $(now) - r0 )) -lt 60000 ] || { echo "no answer within 60 s of a restart"; exit 1; }
+      sleep 0.05
+    done
+    recovery_ms=$(( $(now) - r0 ))
+    bound_ms=$(( 2 * recovery_ms + 1000 ))
+    timeout_s=$(( bound_ms / 1000 + 2 ))
+    echo "recovery_ms=$recovery_ms bound_ms=$bound_ms"
+
+    for kind in direct resolved; do
+      (
+        while [ ! -e "$work/stop" ]; do
+          t0=$(now)
+          res=$("$kind" "$timeout_s")
+          echo "$kind $t0 $(( $(now) - t0 )) $res" >>"$work/queries"
+        done
+      ) &
+    done
+    sleep 2
+    for _ in 1 2 3; do
+      r0=$(now)
+      systemctl restart frameworks-privateer.service
+      echo "$r0 $(now)" >>"$work/restarts"
+      sleep 3
+    done
+    touch "$work/stop"
+    wait
+
+    awk -v want="$PROBE_ADDRESS" -v bound="$bound_ms" '
+      FILENAME ~ /restarts$/ { n++; rs[n] = $1; re[n] = $2; next }
+      {
+        kind = $1; t0 = $2; dur = $3; status = $4; addrs = $5
+        total[kind]++
+        if (dur > max[kind]) max[kind] = dur
+        if (status != "NOERROR" || addrs != want || dur > bound) {
+          bad++
+          if (bad <= 20) print "BAD " $0
+        }
+        for (i = 1; i <= n; i++)
+          if (t0 <= re[i] && t0 + dur >= rs[i]) hit[kind, i]++
+      }
+      END {
+        for (k in total) printf "%s: %d queries, slowest %d ms\n", k, total[k], max[k]
+        for (i = 1; i <= n; i++) {
+          printf "restart %d took %d ms; queries in flight: direct=%d resolved=%d\n",
+            i, re[i] - rs[i], hit["direct", i], hit["resolved", i]
+          if (!hit["direct", i] || !hit["resolved", i]) missed++
+        }
+        printf "failed answers: %d\n", bad
+        exit (bad || missed || n < 2) ? 1 : 0
+      }
+    ' "$work/restarts" "$work/queries"
+  args:
+    executable: /bin/bash
+  environment:
+    PROBE_NAME: "{{ privateer_dns_probe_name }}"
+    PROBE_ADDRESS: "{{ privateer_dns_probe_address }}"
+    PROBE_PORT: "{{ privateer_dns_probe_port }}"
+  register: privateer_dns_restart
+  changed_when: true
+
+- name: Privateer DNS restart | report
+  ansible.builtin.debug:
+    var: privateer_dns_restart.stdout_lines
