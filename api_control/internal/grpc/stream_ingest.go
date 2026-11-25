@@ -57,10 +57,17 @@ func (s *CommodoreServer) GetStreamIngestStates(ctx context.Context, req *pb.Get
 			response.States[row.ID] = &pb.StreamIngest{State: pb.StreamIngestState_STREAM_INGEST_STATE_IDLE}
 		}
 	}
+	// A pull's serving cell is unknown here, and every cell answers IDLE for a stream it holds no
+	// session for. Without a session from some cell, a pull is IDLE only once every cell that
+	// could serve it answered; otherwise a bystander's IDLE would hide the serving cell's outage.
+	unanswered := map[string]bool{}
 	if len(pulls) > 0 {
 		targets, inventoryErr := s.tenantControlFanoutTargets(ctx, tenant)
 		if inventoryErr != nil {
 			s.logger.WithError(inventoryErr).Warn("Pull ingest inventory incomplete; returning available cell states")
+			for _, id := range pulls {
+				unanswered[id] = true
+			}
 		}
 		for _, target := range targets {
 			groups[target.clusterID] = append(groups[target.clusterID], pulls...)
@@ -75,8 +82,17 @@ func (s *CommodoreServer) GetStreamIngestStates(ctx context.Context, req *pb.Get
 	deliveries := dispatchTenantControlTargets(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient, target clusterFanoutTarget) (*pb.GetStreamIngestStatesResponse, error) {
 		return client.GetStreamIngestStates(callCtx, &pb.GetStreamIngestStatesRequest{TenantId: tenant, StreamIds: groups[target.clusterID]})
 	})
+	isPull := make(map[string]bool, len(pulls))
+	for _, id := range pulls {
+		isPull[id] = true
+	}
 	for index, delivery := range deliveries {
 		if delivery.err != nil {
+			for _, id := range groups[targets[index].clusterID] {
+				if isPull[id] {
+					unanswered[id] = true
+				}
+			}
 			continue
 		}
 		for _, id := range groups[targets[index].clusterID] {
@@ -89,6 +105,12 @@ func (s *CommodoreServer) GetStreamIngestStates(ctx context.Context, req *pb.Get
 				response.States[id] = incoming
 			}
 			delete(pending, id)
+		}
+	}
+	for id := range unanswered {
+		if response.States[id].GetSessionId() == "" {
+			delete(response.States, id)
+			pending[id] = true
 		}
 	}
 	for id := range pending {

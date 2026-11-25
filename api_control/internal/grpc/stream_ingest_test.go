@@ -23,9 +23,23 @@ type ingestStateCell struct {
 	response   *pb.GetStreamIngestStatesResponse
 	err        error
 	delayFirst *atomic.Int32
+	// idleDefault and session answer like a Foghorn: every requested stream is IDLE unless
+	// this cell holds its session.
+	idleDefault bool
+	session     *pb.StreamIngest
 }
 
 func (c *ingestStateCell) GetStreamIngestStates(ctx context.Context, req *pb.GetStreamIngestStatesRequest) (*pb.GetStreamIngestStatesResponse, error) {
+	if c.err == nil && (c.idleDefault || c.session != nil) {
+		response := &pb.GetStreamIngestStatesResponse{States: map[string]*pb.StreamIngest{}}
+		for _, id := range req.GetStreamIds() {
+			response.States[id] = &pb.StreamIngest{State: pb.StreamIngestState_STREAM_INGEST_STATE_IDLE}
+			if c.session != nil {
+				response.States[id] = c.session
+			}
+		}
+		return response, nil
+	}
 	if c.delayFirst != nil {
 		if c.delayFirst.Add(1) <= 8 {
 			<-ctx.Done()
