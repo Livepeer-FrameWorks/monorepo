@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -162,6 +163,13 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	markLegacyNodeObservation(incoming)
 }
 
+func nodeConnectionObservedAt(node *NodeState) time.Time {
+	if !node.LastHeartbeat.IsZero() {
+		return node.LastHeartbeat
+	}
+	return node.DisconnectedAt
+}
+
 // keepNewerNodeObservations keeps, per observation stamp, whichever snapshot
 // observed later. A node's heartbeat, listener and metrics reports each stamp
 // their own facts; a replicated snapshot can be older than what this replica
@@ -172,14 +180,21 @@ func keepNewerNodeObservations(incoming, local *NodeState) {
 		incoming.ProcessingMemoryBudgetBytes = cloneUint64Ptr(local.ProcessingMemoryBudgetBytes)
 	}
 
-	// A zero heartbeat is a disconnect, which stands when it happened after
-	// the heartbeat this replica holds.
-	heartbeatOlder := local.LastHeartbeat.After(incoming.LastHeartbeat) &&
+	older := local.LastHeartbeat.After(incoming.LastHeartbeat) &&
 		(!incoming.LastHeartbeat.IsZero() || !incoming.LastUpdate.After(local.LastHeartbeat))
-	if heartbeatOlder {
+	// An explicit disconnect stamp orders connection events independently of
+	// later metadata; unstamped identity snapshots still allow a first heartbeat.
+	if !local.DisconnectedAt.IsZero() || !incoming.DisconnectedAt.IsZero() {
+		older = nodeConnectionObservedAt(local).After(nodeConnectionObservedAt(incoming))
+	}
+	if older {
 		incoming.LastHeartbeat = local.LastHeartbeat
+		incoming.DisconnectedAt = local.DisconnectedAt
 		incoming.IsHealthy = local.IsHealthy
 		incoming.IsStale = local.IsStale
+	}
+	if !incoming.LastHeartbeat.IsZero() {
+		incoming.DisconnectedAt = time.Time{}
 	}
 	// Listeners observed for another address are not evidence for this one.
 	if incoming.BaseURL == local.BaseURL && local.OutputsObservedAt.After(incoming.OutputsObservedAt) {

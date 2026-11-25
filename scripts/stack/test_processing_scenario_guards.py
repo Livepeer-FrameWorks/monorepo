@@ -17,6 +17,28 @@ def function(scenario, name):
     return match.group(0)
 
 class ProcessingScenarioGuards(unittest.TestCase):
+    def test_reconnected_clip_decodes_frames_despite_misleading_playlist_duration(self):
+        source = (ROOT / "scenarios/85-pinned-clip-reconnect.sh").read_text()
+        predicate = re.search(r"^clip_decodes\(\) \{[^\n]*\}$|^clip_decodes\(\) \{\n.*?^\}", source, re.M | re.S)
+        self.assertIsNotNone(predicate)
+        with tempfile.TemporaryDirectory(prefix="fw-clip-decode-") as directory:
+            root = Path(directory)
+            valid, short, corrupt = root / "valid.mp4", root / "short.mp4", root / "corrupt.mp4"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=15:duration=4",
+                            "-c:v", "libx264", "-threads", "1", "-preset", "ultrafast", str(valid)],
+                           check=True, capture_output=True, timeout=20)
+            subprocess.run(["ffmpeg", "-v", "error", "-i", str(valid), "-frames:v", "15", "-c", "copy", str(short)],
+                           check=True, capture_output=True, timeout=20)
+            corrupt.write_bytes(b"not a media file")
+            for name, path, expected in (("complete", valid, True), ("truncated", short, False), ("corrupt", corrupt, False)):
+                with self.subTest(case=name):
+                    script = "STACK_STATE_DIR=" + shlex.quote(directory) + "\nSTACK_LIB_DIR=" + shlex.quote(str(ROOT)) + "\n"
+                    script += "full_length() { return 0; }\n"
+                    script += "location_at() { printf '%s\\n' " + shlex.quote(str(path)) + "; }\n"
+                    script += predicate.group(0) + "\nclip_decodes http://fixture fixture\n"
+                    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+
     def test_hls_restart_accepts_only_scoped_503_and_fresh_media_recovery(self):
         source = (ROOT / "lib.sh").read_text()
         predicate = re.search(r"^hls_restart_continuity_state\(\) \{\n.*?^\}", source, re.M | re.S).group(0)

@@ -383,11 +383,7 @@ func (d *ProcessingDispatcher) dispatchJobWithInventory(ctx context.Context, job
 	if tick.warm && job.PreferredNode.Valid && job.PreferredNode.String != "" && job.SourceParams.Valid {
 		var source map[string]string
 		if json.Unmarshal([]byte(job.SourceParams.String), &source) == nil && (source["source_kind"] == "live" || source["source_kind"] == "dvr_rolling") {
-			alive := false
-			for _, id := range state.DefaultManager().ConnectedNodeIDs(time.Minute) {
-				alive = alive || id == job.PreferredNode.String
-			}
-			if !alive {
+			if !processingSourceNodePresent(state.DefaultManager().GetNodeState(job.PreferredNode.String), time.Now()) {
 				if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "source unavailable: pinned source node is gone", d.logger); err != nil {
 					d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to settle missing processing source")
 				}
@@ -883,12 +879,9 @@ func (d *ProcessingDispatcher) recoverStale() {
 		if listErr != nil {
 			d.logger.WithError(listErr).Warn("Failed to inspect pinned processing sources")
 		} else {
-			alive := make(map[string]bool)
-			for _, id := range state.DefaultManager().ConnectedNodeIDs(time.Minute) {
-				alive[id] = true
-			}
+			now := time.Now()
 			for _, job := range pinned {
-				if alive[job.PreferredNodeID.String] {
+				if processingSourceNodePresent(state.DefaultManager().GetNodeState(job.PreferredNodeID.String), now) {
 					continue
 				}
 				if failErr := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, "source unavailable: pinned source node is gone", d.logger); failErr != nil {

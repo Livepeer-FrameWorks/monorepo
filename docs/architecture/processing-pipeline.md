@@ -535,7 +535,10 @@ and spends no failure retries. Every processing job has a 24-hour deadline. The 
 VOD transcode uses upload creation time; clips, DVR, chapters, thumbnails and other
 follow-up jobs use their own creation time. A new thumbnail job on an older ready VOD
 gets its own deadline. A live-source clip or DVR job pinned to a node known to be gone
-fails immediately with a "source unavailable" reason.
+fails with a "source unavailable" reason. An unannounced control disconnect allows
+one minute for the source node to reconnect before it is considered gone; announced
+restarts retain their declared reconnect window. Node metadata updates do not extend
+the disconnect window.
 Completion, memory release, node recovery/undrain and budget increases wake the queue;
 the periodic sweep recovers missed notifications. Busy-node replanning lowers threads
 while preserving the quality selected against that node's full budget.
