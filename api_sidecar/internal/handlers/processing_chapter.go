@@ -430,17 +430,23 @@ loop:
 	// to boot the asset first. It runs apart from the job: the result is
 	// delivered when the handler returns, and the sidecar is vod+<hash> work
 	// that does not need the processing stream.
-	go h.generateChapterDTSH("vod+"+req.GetArtifactHash(), outputPath+".dtsh", log)
+	h.background.Add(1)
+	go func() {
+		defer h.background.Done()
+		h.generateChapterDTSH("vod+"+req.GetArtifactHash(), outputPath+".dtsh", log)
+	}()
 }
 
 // generateChapterDTSH writes a finalized chapter's DTSH sidecar, then triggers
-// a storage check so the .mkv and .dtsh freeze to S3 promptly.
+// a storage check so the .mkv and .dtsh freeze to S3 promptly. A failed first
+// attempt is retried in the background, in this same goroutine.
 func (h *ProcessingJobHandler) generateChapterDTSH(vodStreamName, dtshPath string, log *logrus.Entry) {
-	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, dtshPath, log); err != nil {
-		log.WithError(err).Warn("Chapter finalize: DTSH generation failed, scheduling background retries")
-		go h.retryChapterDTSH(vodStreamName, dtshPath, log)
-	}
+	err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, dtshPath, log)
 	TriggerStorageCheck()
+	if err != nil {
+		log.WithError(err).Warn("Chapter finalize: DTSH generation failed, scheduling background retries")
+		h.retryChapterDTSH(vodStreamName, dtshPath, log)
+	}
 }
 
 // retryChapterDTSH retries DTSH generation for a finalized chapter
@@ -453,7 +459,11 @@ func (h *ProcessingJobHandler) generateChapterDTSH(vodStreamName, dtshPath strin
 func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, log *logrus.Entry) {
 	backoffs := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, 60 * time.Minute}
 	for i, wait := range backoffs {
-		time.Sleep(wait)
+		select {
+		case <-time.After(wait):
+		case <-h.stopBackground:
+			return
+		}
 		if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, dtshPath, log); err == nil {
 			log.WithField("attempt", i+2).Info("Chapter finalize: DTSH generation succeeded on retry")
 			TriggerStorageCheck()

@@ -180,6 +180,9 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 		case <-time.After(60 * time.Second):
 			t.Error("processing handler did not return")
 		}
+		// A finalized chapter's DTSH generation runs on after its result and reads the same
+		// package timing state.
+		h.stopBackgroundWork()
 	})
 
 	switch kind {
