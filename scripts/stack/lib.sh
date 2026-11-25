@@ -566,7 +566,9 @@ publish_until_admitted() {
       if [ -n "$(admitted_generation "$db" "$internal" "$since")" ]; then echo "$pid"; return 0; fi
       sleep 1
     done
+    # The next publisher or the caller must never overlap a refused one.
     kill "$pid" 2>/dev/null
+    wait_publisher "$pid" 10 || { kill -KILL "$pid" 2>/dev/null; wait_publisher "$pid" 10; }
     sleep 3
   done
   return 1
