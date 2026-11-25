@@ -544,8 +544,10 @@ Placement is best-effort FIFO, with smaller jobs allowed to pass a blocked one.
 After one minute the oldest memory waiter protects room on its best-fitting node.
 Thumbnail jobs whose source is already ready retain the same reservation eligibility
 and ordering. A disconnected hold moves when a healthy fitting node is available.
-Other work must leave those bytes free. Protection survives dispatch until Helmsman
-acknowledges actual durable memory admission, including admission on another node.
+Other work must leave those bytes free. Transcode protection survives dispatch until
+Helmsman acknowledges actual durable memory admission, including admission on another
+node. Clips, thumbnails and chapter-finalization jobs have no later admission report;
+their protection and accumulated memory wait end when dispatch commits their start.
 Versioned clears fence delayed updates, and persisted edge protection survives a
 Helmsman restart. Waiting work holds no source or encoder processes. A fallback's
 local policy survives redispatch, avoiding another paid Livepeer attempt.

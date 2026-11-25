@@ -124,6 +124,8 @@ type Querier interface {
 	CloseOpenDVRChapterAt(ctx context.Context, arg CloseOpenDVRChapterAtParams) (int64, error)
 	ClosePreviousCurrentDVRChapters(ctx context.Context, arg ClosePreviousCurrentDVRChaptersParams) (int64, error)
 	CommitArtifactCreationCommand(ctx context.Context, arg CommitArtifactCreationCommandParams) (int64, error)
+	// Clip, thumbnail and chapter handlers have no later memory-admission report;
+	// dispatch ends their wait and releases their fairness protection.
 	CommitDispatchedProcessingJob(ctx context.Context, arg CommitDispatchedProcessingJobParams) (int64, error)
 	// Settles the parent's durable state from the segment counts: any uploaded
 	// segment makes the recording 'synced' in this cell's S3 under the DVR prefix
