@@ -117,7 +117,8 @@ expect "a failed session read cannot prove a fresh publisher ended" ended_requir
 sleep() { :; }
 publish() {
   printf 'Sending publish command\n' >"$STACK_STATE_DIR/publish-${2:-key}.log"
-  command sleep 300 >/dev/null 2>&1 &
+  # Like ffmpeg flushing its output, the publisher takes a moment to exit on SIGTERM.
+  bash -c 'trap "command sleep 0.3; exit 0" TERM; command sleep 300 & wait' >/dev/null 2>&1 &
   echo $! >>"$work/pids"
   echo $!
 }
