@@ -6,6 +6,7 @@ import (
 	"time"
 
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // RegisteredProcessingNodes includes disconnected edges. A missing runtime report
@@ -24,7 +25,7 @@ func RegisteredProcessingNodes(ctx context.Context, clusterID string) ([]string,
 			return nil, listErr
 		}
 		for _, node := range response.GetNodes() {
-			if node.GetClusterId() == clusterID && node.GetNodeId() != "" && node.GetStatus() != "retired" && node.GetStatus() != "evicted" {
+			if node.GetClusterId() == clusterID && node.GetNodeId() != "" && node.GetStatus() != quartermasterpb.NodeStatusRetired && node.GetStatus() != quartermasterpb.NodeStatusEvicted {
 				ids = append(ids, node.GetNodeId())
 			}
 		}
