@@ -181,6 +181,9 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
+			if ignoreRetiredPushEnd(log, pushEnd, pushID) {
+				continue loop
+			}
 			// RECORDING_END is the authoritative completion signal and breaks
 			// the loop, so a PUSH_END here always precedes it.
 			awaitRecordingEnd.start(log, pushEnd)

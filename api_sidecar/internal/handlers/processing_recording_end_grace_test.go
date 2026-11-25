@@ -30,7 +30,11 @@ type recordingGraceHarness struct {
 	nukeCount   atomic.Int32
 	pushCount   atomic.Int32
 	results     chan *ipcpb.ProcessingJobResult
+	pushTarget  atomic.Value
 }
+
+// harnessPushID is the id the fake Mist lists for the job's recording push.
+const harnessPushID = 7
 
 func setRecordingEndGraceForTest(t *testing.T, grace time.Duration) {
 	t.Helper()
@@ -86,6 +90,14 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 		body, _ := io.ReadAll(r.Body)
 		request := string(body) + r.URL.RawQuery
 		if strings.Contains(request, "push_start") {
+			var command struct {
+				PushStart struct {
+					Target string `json:"target"`
+				} `json:"push_start"`
+			}
+			if json.Unmarshal([]byte(r.URL.Query().Get("command")), &command) == nil && command.PushStart.Target != "" {
+				hx.pushTarget.Store(command.PushStart.Target)
+			}
 			hx.pushStarted.Store(true)
 			if hx.pushCount.Add(1) == 1 && shape.fallbackPhase == "push" {
 				RouteProcessExit(ProcessExitEvent{StreamName: hx.streamName, ProcessType: "Livepeer", ExitCode: 2, BootCount: 1, Status: "unrecoverable", Reason: "fixture gateway refused source"})
@@ -126,7 +138,12 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 				active[hx.streamName].(map[string]any)["lastms"] = shape.completedEnd
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"authorize": map[string]any{"status": "OK"}, "active_streams": active})
+		response := map[string]any{"authorize": map[string]any{"status": "OK"}, "active_streams": active}
+		// Like Mist, push_list names the started recording push by its id.
+		if target, ok := hx.pushTarget.Load().(string); ok && strings.Contains(request, "push_list") {
+			response["push_list"] = []any{[]any{float64(harnessPushID), hx.streamName, target, target}}
+		}
+		_ = json.NewEncoder(w).Encode(response)
 		if strings.Contains(request, "active_streams") {
 			startupListed.Do(func() { close(startupListedCh) })
 		}
@@ -236,7 +253,7 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string, geometry ..
 func (hx *recordingGraceHarness) pushEnd(status string) {
 	SignalProcessingPushEnd(ProcessingPushEndEvent{
 		StreamName:  hx.streamName,
-		PushID:      7,
+		PushID:      harnessPushID,
 		TargetAfter: hx.outputPath,
 		PushStatus:  status,
 		LogMessages: `["output terminated"]`,
@@ -368,6 +385,41 @@ func TestPushFailureWithRecordingEndStaysFailed(t *testing.T) {
 			}
 			if strings.HasPrefix(result.GetError(), recordingOutputVanishedPrefix) {
 				t.Fatalf("error = %q: a recording that reported its end is not a vanished output", result.GetError())
+			}
+		})
+	}
+}
+
+// PUSH_END is delivered by stream name. After a Helmsman restart the orphan
+// sweep kills the previous attempt's push, and that push's PUSH_END reaches
+// the new attempt once it has started its own push. The retired push's end is
+// not this attempt's recording output vanishing: the attempt keeps running and
+// completes on its own push's end.
+func TestRetiredPushEndDoesNotEndTheAttempt(t *testing.T) {
+	for _, kind := range recordingGraceKinds {
+		t.Run(kind, func(t *testing.T) {
+			setRecordingEndGraceForTest(t, 300*time.Millisecond)
+			hx := startRecordingGraceJob(t, kind, "retiredpush"+kind)
+			SignalProcessingPushEnd(ProcessingPushEndEvent{
+				StreamName:  hx.streamName,
+				PushID:      harnessPushID - 1,
+				TargetAfter: hx.outputPath,
+				PushStatus:  `{"active_ms":0,"active_seconds":0,"current_target":"","media_tx":0,"mediatime":0}`,
+			})
+			select {
+			case result := <-hx.results:
+				t.Fatalf("a retired push's PUSH_END ended the attempt: %q (%s)", result.GetStatus(), result.GetError())
+			case <-time.After(1500 * time.Millisecond):
+			}
+
+			if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			SignalProcessingRecordingEnd(hx.cleanRecordingEnd())
+			hx.pushEnd(`{"active_seconds":10}`)
+			result := hx.awaitResult(t, 30*time.Second)
+			if result.GetStatus() != "completed" {
+				t.Fatalf("status = %q (%s), want completed", result.GetStatus(), result.GetError())
 			}
 		})
 	}
