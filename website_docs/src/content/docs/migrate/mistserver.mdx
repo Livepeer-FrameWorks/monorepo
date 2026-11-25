@@ -29,7 +29,7 @@ We co-maintain MistServer. Start with the table below; for some workloads raw Mi
 
 ## TL;DR
 
-- **What stays:** RTMP, E-RTMP, SRT, and WHIP ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
+- **What stays:** RTMP, E-RTMP, SRT, WHIP, and HTTP MKV ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
 - **What changes:** Mist JSON config and HTTP API calls become GraphQL mutations; Mist triggers become signed webhooks, GraphQL subscriptions, or platform-managed webhook policies; per-node Prometheus becomes FrameWorks telemetry; `pushStart` and automatic pushes become stream-scoped push targets.
 - **What you gain:** provider-operated cross-cluster routing and federation, managed GraphQL, sprite-sheet seek previews, `?jwt=` playback auth across protocols, Skipper diagnostics, managed registration for Mist pull sources, wallet auth, MCP, x402, and a future marketplace path for operator-owned edge capacity.
 - **What you give up:** raw config portability, custom HTTP/exec triggers, exec inputs, FLV workflows, multiview compositor management, SCTE-35 insertion, JWT-on-ingest, wildcard stream inheritance, custom variables in recording paths, and direct Mist analyser workflows.
@@ -101,6 +101,7 @@ MistServer supports a broad input surface: push inputs over RTMP, RTSP, SRT, WHI
 | RTMP / E-RTMP push               | Push stream with the FrameWorks ingest URL and stream key                                                         |
 | SRT push                         | Push stream with `streamid` carrying the stream key                                                               |
 | WHIP push                        | StreamCrafter or direct WHIP URL, using MistServer's `/webrtc/{streamKey}` path                                   |
+| HTTP MKV push                    | Push the Matroska or WebM body to the `mkvUrl` from `/ingest/{streamKey}?protocol=mkv` (`/{streamKey}.mkv`)       |
 | RTSP push                        | Hybrid/direct edge only when that port is intentionally exposed; not a managed SaaS ingest default                |
 | DTSC pull from another Mist node | Managed pull-source record with `dtsc://...`; MistServer still performs the actual pull                           |
 | RTSP pull                        | Managed pull-source record with `rtsp://...`; MistServer still performs the actual pull                           |
@@ -287,7 +288,7 @@ Use this path when you want to stop running the media engine and accept the mana
 1. **Inventory your MistServer setup.** Export config, list streams, triggers, pushes, recordings, JWT keys, external writers, custom variables, and local scripts.
 2. **Classify blockers.** Anything in [What you give up](#what-you-give-up-vs-raw-mistserver) needs a replacement plan before you cut over.
 3. **Create FrameWorks streams.** Use the dashboard or `createStream(input)`.
-4. **Repoint encoders.** RTMP, E-RTMP, SRT, and WHIP remain the normal managed ingest paths.
+4. **Repoint encoders.** RTMP, E-RTMP, SRT, WHIP, and HTTP MKV remain the normal managed ingest paths.
 5. **Replace trigger scripts.** Point trigger-driven HTTP handlers at a [webhook endpoint](/builders/webhooks) for the public events, or use subscriptions. For Mist `USER_NEW` authorization scripts, use `setPlaybackPolicy` with `type: WEBHOOK` so FrameWorks calls your authorization endpoint on viewer connect.
 6. **Recreate push targets.** Use `createPushTarget(streamId, input)` per stream.
 7. **Recreate recording and DVR behavior.** Use `record: true` or `startDVR(streamId)`.
