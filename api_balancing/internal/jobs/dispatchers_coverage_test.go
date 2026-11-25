@@ -132,6 +132,7 @@ func TestDispatchJobInvalidSourceParamsReverts(t *testing.T) {
 // revert to 'queued' with the "presign failed" reason rather than dispatching a
 // job that points at nothing.
 func TestDispatchJobPresignFailureReverts(t *testing.T) {
+	useControlS3Client(t, nil)
 	restore := control.SetupTestRegistry("", nil)
 	defer restore()
 	sm := state.ResetDefaultManagerForTests()
