@@ -114,7 +114,12 @@ func (p *Prober) Run(ctx context.Context, report func(error)) error {
 	if report == nil {
 		report = func(error) {}
 	}
-	go p.Queue.RunBatches(ctx, func() (int, int) { return int(max(1, p.bulkRecords.Load())), int(max(1, p.bulkBytes.Load())) }, p.sendRecords, report)
+	ctx, cancel := context.WithCancel(ctx)
+	deliveryDone := make(chan struct{})
+	go func() {
+		defer close(deliveryDone)
+		p.Queue.RunBatches(ctx, func() (int, int) { return int(max(1, p.bulkRecords.Load())), int(max(1, p.bulkBytes.Load())) }, p.sendRecords, report)
+	}()
 
 	commit := func(batch obs.Batch, reservation *telemetryspool.Reservation) bool {
 		defer reservation.Cancel()
@@ -160,7 +165,13 @@ func (p *Prober) Run(ctx context.Context, report func(error)) error {
 	}
 
 	var workers sync.WaitGroup
-	defer workers.Wait()
+	defer func() {
+		cancel()
+		workers.Wait()
+		// Delivery persists receipts after HTTP returns, so it must finish before
+		// the caller closes or removes the spool.
+		<-deliveryDone
+	}()
 	var dnsRunning atomic.Bool
 	nextDNS := time.Time{}
 	nextReport := time.Time{}
