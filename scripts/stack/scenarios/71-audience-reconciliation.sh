@@ -150,7 +150,8 @@ for round in 1 2; do
   }
   eventually 90 "handoff $round acquires a higher control fence" moved || finish
   eventually 60 "handoff $round keeps native and surviving replica counts equal" counts_match || finish
-  check "handoff $round keeps serving-cluster attribution" network_matches
+  # Periscope projects the fresh node census through the analytics pipeline.
+  eventually 60 "handoff $round keeps serving-cluster attribution" network_matches || finish
   stack_ctl start "$STOPPED" || { fail 'restart destination owner'; finish; }
   STOPPED=''
   eventually 90 "restart $round rehydrates one viewer on both replicas" counts_match || finish
@@ -159,12 +160,11 @@ RESTART_AT=$(monotonic_ms)
 OUTAGE_FROM=$(date +%s)
 HELMSMAN_STOPPED=1
 stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -d /run/service/helmsman || { fail 'stop serving Helmsman'; finish; }
-unavailable_seen() {
-  awk -v since="$OUTAGE_FROM" '
-    $1>=since && $2=="fail" { if ($3 ~ /^HTTPError:HTTP_Error_503:/) found=1; else bad=1 }
-    END { exit (bad ? 2 : (found ? 0 : 1)) }' "$WORK/viewer.log"
+viewer_during_restart() {
+  [ "$(hls_poll_state "$WORK/viewer.log" "$STRICT_SINCE")" = ok ] &&
+    awk -v since="$OUTAGE_FROM" '$1>since && $2=="ok" { n++ } END { exit (n<3) }' "$WORK/viewer.log"
 }
-within_bound_since "$RESTART_AT" 90 'unavailable local playback decision returns retryable 503' unavailable_seen || finish
+within_bound_since "$RESTART_AT" 30 'the admitted viewer keeps reading TS while Helmsman is stopped' viewer_during_restart || finish
 stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -u /run/service/helmsman || { fail 'start serving Helmsman'; finish; }
 HELMSMAN_STOPPED=0
 restarted_counts() {
@@ -182,6 +182,6 @@ OUTAGE_END=$(date +%s)
 viewer_continues() {
   [ "$(hls_restart_continuity_state "$WORK/viewer.log" "$STRICT_SINCE" "$OUTAGE_FROM" "$OUTAGE_END")" = ok ]
 }
-within_bound_since "$RESTART_AT" 90 'the same HLS viewer resumes TS reads, with only scoped retryable 503s' viewer_continues || finish
+within_bound_since "$RESTART_AT" 90 'the same HLS viewer keeps reading TS with zero failures across the restart' viewer_continues || finish
 check 'final Periscope serving-cluster attribution remains one' network_matches
 finish
