@@ -1698,7 +1698,7 @@ This changes a concrete behavior we found while tracing upload cleanup. Previous
 
 Keeping an original does not require serving it to every viewer. Standard playback still defaults to four renditions, from 360p through 1080p. Free accounts keep that ladder. Paid accounts can choose a 1440p ladder or a 4K ladder, adding one or two higher renditions to the same standard set.
 
-For the conference team, this means a large-screen screening can use 4K playback while smaller devices continue to choose lower renditions. A separate stream with a modest source can keep the standard choice. Renditions above the source size are skipped, so choosing the larger ladder does not create source detail that the camera never captured.
+For the conference team, this means a large-screen screening can use 4K playback while smaller devices continue to choose lower renditions. A separate stream with a modest source can keep the standard choice. Renditions larger than the source's short side are skipped, so choosing the larger ladder does not create source detail that the camera never captured. When the upload or live feed already carries a matching H264 rendition at a sensible bitrate, that track is served as the rendition instead of being encoded a second time.
 
 The account can set a default and override it for a stream or an upload. Live changes take effect with the next broadcast. The choices also survive a plan change: when a stored choice is outside the current plan, playback falls back to an allowed ladder. Upgrading restores the stored choice without requiring the team to find every affected stream.
 
@@ -2918,7 +2918,7 @@ query {
 
 ### Create a Stream
 
-`createStream` creates a push-input live stream for RTMP/E-RTMP, SRT, or WHIP ingest.
+`createStream` creates a push-input live stream for RTMP/E-RTMP, SRT, WHIP, or HTTP MKV ingest.
 Most mutations return a **union** result. Always check `__typename`.
 
 ```graphql
@@ -16670,18 +16670,51 @@ FrameWorks generates lower-quality renditions of your stream so viewers on slowe
 When you go live, the control plane attaches your tier's live process configuration to the stream.
 Every tier defaults to the **standard** ladder for live streams and VOD processing. Paid tiers also allow **qhd** and **uhd**:
 
-| Rendition       | Bitrate     | Added when the source is at least |
-| --------------- | ----------- | --------------------------------- |
-| 360p            | 900 kbps    | 640×360                           |
-| 480p            | 1600 kbps   | 850×480                           |
-| 720p            | 4500 kbps   | 1280×720                          |
-| 1080p           | 7800 kbps   | 1920×1080                         |
-| 1440p (qhd/uhd) | 10,800 kbps | 2560×1440                         |
-| 2160p (uhd)     | 15,000 kbps | 3840×2160                         |
+| Rendition       | Bitrate     | Added when the source's short side is at least |
+| --------------- | ----------- | ---------------------------------------------- |
+| 360p            | 900 kbps    | 360 px                                         |
+| 480p            | 1600 kbps   | 480 px                                         |
+| 720p            | 4500 kbps   | 720 px                                         |
+| 1080p           | 7800 kbps   | 1080 px                                        |
+| 1440p (qhd/uhd) | 10,800 kbps | 1440 px                                        |
+| 2160p (uhd)     | 15,000 kbps | 2160 px                                        |
 
-Sources smaller than 640×360 get no video renditions. Renditions keep the source frame rate and use
+The short side is the height of a landscape source and the width of a portrait one. When the
+source has several video tracks, the one with the highest bitrate is the source. Sources whose
+short side is below 360 px get no video renditions. Renditions keep the source frame rate and use
 `H264ConstrainedHigh`. Audio compatibility processes generate Opus when the incoming audio is not
 already Opus and AAC when it is not already AAC.
+
+### Original tracks used as renditions
+
+When a video track you send already matches a rendition, FrameWorks serves that track as the
+rendition instead of encoding it again. This covers the source itself and every extra video track
+of a multitrack publish (E-RTMP multitrack, HTTP Matroska) or a multi-rendition upload. A track
+fills a rendition when all of these hold:
+
+- it is H264, upright and not mirrored;
+- its short side is within 32 px of the rendition's, or 5% for 720p and above;
+- its bitrate is between half and twice the rendition's bitrate;
+- for live streams, it has no B-frames (set your encoder's B-frames to 0, or use the `baseline`
+  profile).
+
+| Rendition | Short side kept | Bitrate kept      |
+| --------- | --------------- | ----------------- |
+| 360p      | 328–392 px      | 450–1,800 kbps    |
+| 480p      | 448–512 px      | 800–3,200 kbps    |
+| 720p      | 684–756 px      | 2,250–9,000 kbps  |
+| 1080p     | 1026–1134 px    | 3,900–15,600 kbps |
+| 1440p     | 1368–1512 px    | 5,400–21,600 kbps |
+| 2160p     | 2052–2268 px    | 7,500–30,000 kbps |
+
+When two tracks qualify, the one whose bitrate is closest to the rendition's bitrate is used. A
+rendition filled by your own track is not transcoded and not billed as processing. The decision is
+made once, when the tracks arrive: FrameWorks waits up to 5 seconds for each track to report its
+size and bitrate, and a track that has not reported them by then is encoded instead. Changing the
+bitrate later does not switch a rendition between kept and encoded; reconnecting does.
+
+HEVC, rotated and mirrored tracks are still used as the source for encoding, but they never fill
+an H264 rendition themselves.
 
 Set a stream's advanced `liveVideoAbr` option to `OFF` to omit its live video
 renditions on the next ingest session. Audio compatibility and thumbnail
@@ -16696,6 +16729,8 @@ media node encodes the same ladder itself.
 
 - **Stream at the highest quality your upload supports.** The default ladder adds lower
   renditions up to the chosen ladder’s ceiling when the source is large enough.
+- **Send renditions yourself if you already encode them.** An E-RTMP multitrack or Matroska
+  publish whose tracks sit inside the ranges above is served as is, without a second encode.
 - **Viewers automatically get the best available quality their connection supports** via HLS ABR,
   with DASH and LL-HLS available alongside on every cluster.
 
@@ -16709,7 +16744,10 @@ A stream's choice applies on its next broadcast. A plan downgrade preserves a st
 uses the next allowed default until the account upgrades again. Custom process overrides remain
 independent of these named ladders. Live video ABR `OFF` still suppresses video renditions.
 
-The source track is masked in processed playback so it cannot conceal a missing rendition.
+Once at least one rendition is encoded, every original video track that fills no rendition, the
+source included, is hidden from playback and from the saved recording, so an off-ladder or
+out-of-range track cannot sit next to the encoded rendition that replaces it. Tracks that fill a
+rendition stay visible as that rendition. A source below every rendition keeps playing as is.
 Keep the [original upload](/builders/recordings#original-uploads) when source quality is needed.
 Named ladders preserve frame rate; they do not add a separate 60 fps profile.
 
@@ -22956,7 +22994,7 @@ To check a playback ID or URL outside your app, open the [stream test](https://f
 # Pull-input Streams
 https://logbook.frameworks.network/builders/pull-streams
 
-A normal stream is **push-in**: your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks and
+A normal stream is **push-in**: your encoder opens RTMP/E-RTMP, SRT, WHIP, or HTTP MKV to FrameWorks and
 uploads media. A **pull-input stream** is the inverse: FrameWorks stores an upstream URL, then a
 media edge opens that source when playback needs it.
 
@@ -23878,6 +23916,20 @@ Set `transcodeLadder` on `CreateVodUploadInput` or `ImportVodAssetInput` to choo
 ladder for that upload. Omit it to inherit the account and plan defaults; a saved upload choice is
 used when multipart completion starts processing. See [ladder choices](/builders/encoder-setup#custom-transcoding-profiles).
 
+### Uploads that already contain renditions
+
+An MP4 or MKV file with several video tracks, for example 1080p, 720p and 360p exports of the same
+edit, keeps the tracks that already match a ladder rendition and encodes only the missing ones.
+The highest-bitrate video track is the source for those encodes. A track is kept when it is
+upright, unmirrored H264 with a size and bitrate inside that rendition's
+[range](/builders/encoder-setup#original-tracks-used-as-renditions); uploads may use B-frames.
+Kept renditions are not billed as processing.
+
+When at least one rendition is encoded, every original video track that fills no rendition, the
+source included, is left out of playback and the processed recording. A 720p track at 15 Mbps, for
+example, is replaced by an encoded 720p rendition instead of appearing next to it. The
+[original upload](#original-uploads) still keeps every track of the file you sent.
+
 ### VOD Playback
 
 Same URL pattern as all other content:
@@ -24634,6 +24686,17 @@ page:
 
 The stream becomes live once the media edge accepts the input and MistServer reports an active
 session.
+
+HTTP MKV pushes the Matroska or WebM body to the stream key's `.mkv` path on the edge's public
+HTTP origin. An edge offers it only when its MistServer reports a Matroska (EBML) listener;
+request `/ingest/{stream-key}?protocol=mkv` from the front door and use the returned `mkvUrl`,
+which GraphQL also exposes as `IngestEndpoint.mkvUrl`. Stream events report these sessions with
+the ingest protocol `INGEST_PROTOCOL_MKV`. E-RTMP multitrack and Matroska can carry several
+video tracks in one publish. A track that already matches a ladder rendition, as H264 without
+B-frames and with a size and bitrate in that rendition's
+[range](/builders/encoder-setup#original-tracks-used-as-renditions), is served as that rendition
+instead of being encoded again; tracks that fill no rendition are hidden once the ladder encodes
+one.
 
 ## Watch the Stream
 
@@ -44916,7 +44979,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, WHIP (WebRTC), and HTTP Matroska (MKV); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | [Expanding](/roadmap#pull-input-streams) | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. *Not shown yet are the upstream connection attempts, retries, and drops after a source resolves.* |
 | ↳ Multistream push targets | [Available](/roadmap#per-destination-multistream-stats) | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. *Each destination shows its status and failure reason. Live bitrate and bytes sent per destination are not shown yet.* |
@@ -44963,7 +45026,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Processing** *(foundation)* | Expanding | API, Agents (MCP), Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. *Live transcoding runs today. GPU-aware placement of large AI models and a processing control surface for tenants are not there yet.* |
-| ↳ Named transcode ladders | Available | API, Agents (MCP), Dashboard, Docs | Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides. *Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.* |
+| ↳ Named transcode ladders | Available | API, Agents (MCP), Dashboard, Docs | Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides. *Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source's short side are skipped, and an H264 original track already matching a rendition's size and bitrate is served as that rendition instead of being encoded again.* |
 | ↳ Gateway-backed transcoding | [Expanding](/roadmap#gateway-backed-transcoding) | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. *Choose a named ladder within your plan, or turn live video ABR off for a stream.* |
 | ↳ Live AI processing | [Planned](/roadmap#live-ai-processing) | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
 | ↳ Composition and SSAI | [Planned](/roadmap#composition-and-ssai) | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
@@ -45077,7 +45140,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, WHIP (WebRTC), and HTTP Matroska (MKV); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | [Expanding](/roadmap#pull-input-streams) | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. *Not shown yet are the upstream connection attempts, retries, and drops after a source resolves.* |
 | ↳ Multistream push targets | [Available](/roadmap#per-destination-multistream-stats) | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. *Each destination shows its status and failure reason. Live bitrate and bytes sent per destination are not shown yet.* |
@@ -45118,7 +45181,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Processing** *(foundation)* | Expanding | API, Agents (MCP), Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. *Live transcoding runs today. GPU-aware placement of large AI models and a processing control surface for tenants are not there yet.* |
-| ↳ Named transcode ladders | Available | API, Agents (MCP), Dashboard, Docs | Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides. *Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.* |
+| ↳ Named transcode ladders | Available | API, Agents (MCP), Dashboard, Docs | Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides. *Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source's short side are skipped, and an H264 original track already matching a rendition's size and bitrate is served as that rendition instead of being encoded again.* |
 | ↳ Gateway-backed transcoding | [Expanding](/roadmap#gateway-backed-transcoding) | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. *Choose a named ladder within your plan, or turn live video ABR off for a stream.* |
 | ↳ Live AI processing | [Planned](/roadmap#live-ai-processing) | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
 | ↳ Composition and SSAI | [Planned](/roadmap#composition-and-ssai) | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |

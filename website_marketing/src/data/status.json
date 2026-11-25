@@ -1330,7 +1330,7 @@
         "title": "Live video delivery",
         "summary": "Ingest, protocol conversion, low-latency delivery, recording, and playback, on our own media server and delivery network.",
         "bullets": [
-          "Push over RTMP, E-RTMP, SRT, or WHIP from any encoder or browser",
+          "Push over RTMP, E-RTMP, SRT, WHIP, or HTTP MKV from any encoder or browser",
           "Deliver over HLS, LL-HLS, DASH, WebRTC (WHEP), and progressive MP4",
           "The same stream converts between protocols without a separate transcode step"
         ],
@@ -1412,7 +1412,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.",
+      "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source's short side are skipped, and an H264 original track already matching a rendition's size and bitrate is served as that rendition instead of being encoded again.",
       "roadmap": null,
       "showcase": null
     },
