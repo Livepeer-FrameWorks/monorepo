@@ -2478,7 +2478,7 @@ ANSIBLE_LINT_IMAGE = frameworks-ansible-lint:$(shell cat $(ANSIBLE_LINT_IMAGE_IN
 # host uid, with HOME (the ansible-compat cache) under $(ANSIBLE_DIR)/.cache.
 ANSIBLE_LINT_HOME := $(CURDIR)/$(ANSIBLE_DIR)/.cache/lint-home
 ANSIBLE_LINT_RUN = docker run --rm --init --user "$$(id -u):$$(id -g)" \
-	-v "$(CURDIR):$(CURDIR)" -w "$$PWD" -e HOME=$(ANSIBLE_LINT_HOME) $(ANSIBLE_LINT_IMAGE)
+	-v "$(CURDIR):$(CURDIR)" -w "$$(/bin/pwd -P)" -e HOME=$(ANSIBLE_LINT_HOME) $(ANSIBLE_LINT_IMAGE)
 # Every Ansible tool a target runs, the collection and role install included, runs in that image,
 # never with the host's ansible-core, whose version the pinned collections may refuse.
 ANSIBLE_RUN = $(ANSIBLE_LINT_RUN)
