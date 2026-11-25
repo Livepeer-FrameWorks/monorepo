@@ -243,3 +243,17 @@ func TestChapterFinalizeDeadlineRejectsExpiredDispatch(t *testing.T) {
 		t.Fatalf("legacy missing deadline = %s ok:%v, want one-hour compatibility budget", d, ok)
 	}
 }
+
+func TestChapterFinalizeDeadlineCapsRuntime(t *testing.T) {
+	for _, remaining := range []time.Duration{24 * time.Hour, 5 * time.Minute} {
+		t.Run(remaining.String(), func(t *testing.T) {
+			budget, ok := chapterFinalizeDeadline(&ipcpb.ProcessingJobRequest{
+				DeadlineUnixMs: time.Now().Add(remaining).UnixMilli(),
+			})
+			limit := min(remaining, time.Hour)
+			if !ok || budget > limit || budget < limit-time.Second {
+				t.Fatalf("chapter runtime budget = %s, valid=%v; want at most %s within dispatch deadline", budget, ok, limit)
+			}
+		})
+	}
+}

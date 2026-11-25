@@ -665,7 +665,7 @@ func chapterFinalizeDeadline(req *ipcpb.ProcessingJobRequest) (time.Duration, bo
 	if dl := req.GetDeadlineUnixMs(); dl > 0 {
 		remaining := time.Until(time.UnixMilli(dl))
 		if remaining > 0 {
-			return remaining, true
+			return min(remaining, time.Hour), true
 		}
 		return 0, false
 	}
