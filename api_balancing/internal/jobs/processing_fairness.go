@@ -14,8 +14,8 @@ import (
 
 const processingFairnessThreshold = time.Minute
 
-// Reservations survive dispatch: only a durable edge admission or a terminal
-// job transition releases protection. Selection and edge enforcement share the
+// Transcode reservations survive dispatch until durable edge admission; handlers
+// without admission release their protection on start. Selection and enforcement share the
 // same versioned record, so a delayed frame cannot resurrect a cleared hold.
 func (d *ProcessingDispatcher) refreshProcessingReservations(ctx context.Context, tick *processingTickInventory) error {
 	queries := foghorndb.New(d.db)

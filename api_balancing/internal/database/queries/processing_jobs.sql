@@ -78,9 +78,19 @@ WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type IN ('clip', 'vod')
   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
 
+-- Clip, thumbnail and chapter handlers have no later memory-admission report;
+-- dispatch ends their wait and releases their fairness protection.
 -- name: CommitDispatchedProcessingJob :execrows
 UPDATE foghorn.processing_jobs
-SET status = 'processing', wait_reason = NULL, memory_wait_ms = memory_wait_ms + CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END,
+SET status = 'processing', wait_reason = NULL,
+        memory_wait_ms = CASE WHEN job_type IN ('thumbnail','dvr_chapter_finalize')
+            OR (BTRIM(source_params->>'source_kind') IN ('live','dvr_rolling','chapter')
+                AND NULLIF(BTRIM(source_params->>'source_stream_name'),'') IS NOT NULL) THEN 0
+            ELSE memory_wait_ms + CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END END,
+        memory_admitted_at = CASE WHEN job_type IN ('thumbnail','dvr_chapter_finalize')
+            OR (BTRIM(source_params->>'source_kind') IN ('live','dvr_rolling','chapter')
+                AND NULLIF(BTRIM(source_params->>'source_stream_name'),'') IS NOT NULL)
+            THEN NOW() AT TIME ZONE 'UTC' ELSE memory_admitted_at END,
         memory_wait_started_at = NULL,
         wait_started_at = NULL, processing_node_id = $2, routing_reason = $3,
     started_at = NOW(), updated_at = NOW(),
