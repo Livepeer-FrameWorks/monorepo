@@ -65,6 +65,40 @@ stale_dist_is_built() {
 }
 expect "a source newer than the dist rebuilds it" stale_dist_is_built
 
+# Scenario 62's browser imports Playwright and hls.js from the mounted checkout;
+# a fresh checkout (a remote-dev clone) has no node_modules, so the run installs
+# the fixture package's lockfile closure, and only that.
+fresh_checkout_installs_browser_deps() {
+  : >"$work/pnpm-calls"
+  rm -rf "$work/repo/scripts/stack/node_modules"
+  run_helper install_stack_browser_deps "$work/repo" >/dev/null &&
+    [ "$(cat "$work/pnpm-calls")" = "install --frozen-lockfile --filter frameworks-stack-fixtures" ]
+}
+expect "a checkout without the browser fixture's packages installs only that package's closure" fresh_checkout_installs_browser_deps
+
+installed_browser_deps_are_kept() {
+  : >"$work/pnpm-calls"
+  mkdir -p "$work/repo/scripts/stack/node_modules/playwright" "$work/repo/scripts/stack/node_modules/hls.js"
+  echo '{}' >"$work/repo/scripts/stack/node_modules/playwright/package.json"
+  echo '{}' >"$work/repo/scripts/stack/node_modules/hls.js/package.json"
+  run_helper install_stack_browser_deps "$work/repo" >/dev/null && [ ! -s "$work/pnpm-calls" ]
+}
+expect "installed browser fixture packages are not reinstalled" installed_browser_deps_are_kept
+
+# The fixture package is the one the run installs and the one the browser and
+# scenario 62 resolve from; the marketing site's node_modules is never assumed.
+browser_resolves_from_fixture_package() {
+  local repo_root
+  repo_root=$(cd "$here/../.." && pwd)
+  [ "$(node -p "require('$here/package.json').name" 2>/dev/null)" = frameworks-stack-fixtures ] &&
+    grep -qx '  - scripts/stack' "$repo_root/pnpm-workspace.yaml" &&
+    grep -q '^  scripts/stack:$' "$repo_root/pnpm-lock.yaml" &&
+    grep -q 'install_stack_browser_deps "$stack_repo_root"' "$here/verify.sh" &&
+    grep -q 'scripts/stack/node_modules/playwright/package.json' "$here/scenarios/62-external-player.sh" &&
+    ! grep -q 'website_marketing\|npm_player' "$here/playback-browser.mjs" "$here/test_playback_browser_context.mjs" "$here/scenarios/62-external-player.sh"
+}
+expect "verify.sh installs the fixture package scenario 62's browser resolves Playwright and hls.js from" browser_resolves_from_fixture_package
+
 # A deployed-target run executes the smokes on the operator's machine, which has
 # no stack-runner image: it must prepare both itself and drop the venv at exit.
 target_prepares_sdks() {

@@ -64,9 +64,12 @@ else
 fi
 
 # The TS SDK smoke in stack-runner imports npm_api's built dist from the
-# mounted checkout.
+# mounted checkout, and scenario 62's browser the stack fixture package's
+# Playwright and hls.js.
 # shellcheck source=scripts/stack/sdk-prereqs.sh
 . "$here/sdk-prereqs.sh"
+install_stack_browser_deps "$stack_repo_root" ||
+  echo "WARN: the stack browser fixture's install failed; scenario 62 will fail"
 build_npm_api_dist "$stack_repo_root"
 
 scenarios=()

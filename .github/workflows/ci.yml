@@ -97,6 +97,8 @@ jobs:
               - '**/*.yml'
               - '**/*.yaml'
             marketing_browser:
+              - 'scripts/stack/package.json'
+              - 'pnpm-workspace.yaml'
               - 'scripts/stack/playback-browser*.mjs'
               - 'scripts/stack/test_playback_browser_context.mjs'
               - 'website_marketing/**'

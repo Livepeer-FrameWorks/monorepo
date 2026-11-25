@@ -5,11 +5,12 @@ import { createPlaybackBrowserPage } from "./playback-browser-context.mjs";
 
 const [base, playbackId] = process.argv.slice(2);
 assert(base && playbackId, "usage: playback-browser.mjs <Foghorn origin> <playback id>");
-const require = createRequire(new URL("../../website_marketing/package.json", import.meta.url));
+// Both come from this directory's workspace package (scripts/stack/package.json),
+// whose catalog versions are the marketing fixtures' Playwright and the player
+// core's hls.js.
+const require = createRequire(new URL("./package.json", import.meta.url));
 const { chromium } = require("playwright");
-const hlsPath = require.resolve("hls.js", {
-  paths: [new URL("../../npm_player/packages/core/", import.meta.url).pathname],
-});
+const hlsPath = require.resolve("hls.js");
 const browser = await chromium.launch({
   headless: true,
   args: ["--autoplay-policy=no-user-gesture-required"],

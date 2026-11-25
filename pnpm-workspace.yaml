@@ -8,6 +8,14 @@ packages:
   - npm_studio/packages/*
   - npm_api
   - website_docs
+  - scripts/stack
+
+# One version for each dependency more than one package must agree on: the stack's
+# external-player browser (scripts/stack) runs the Playwright the marketing browser
+# fixtures run and the hls.js the player core builds against.
+catalog:
+  hls.js: 1.6.16
+  playwright: 1.64.1
 
 injectWorkspacePackages: true
 syncInjectedDepsAfterScripts:
