@@ -6,7 +6,7 @@
       "area": "streaming",
       "kind": "product",
       "audience": "product",
-      "description": "Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources.",
+      "description": "Push streams with stream keys over RTMP/E-RTMP, SRT, WHIP (WebRTC), and HTTP Matroska (MKV); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources.",
       "status": "shipped",
       "horizon": "now",
       "required_surfaces": {
@@ -1670,7 +1670,7 @@
           "description": "Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides.",
           "status": "shipped",
           "horizon": "now",
-          "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.",
+          "note": "Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source's short side are skipped, and an H264 original track already matching a rendition's size and bitrate is served as that rendition instead of being encoded again.",
           "required_surfaces": {
             "docs": {
               "required": true

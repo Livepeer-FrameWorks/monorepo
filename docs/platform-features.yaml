@@ -86,14 +86,14 @@ features:
   - slug: streams
     name: Live streams
     area: streaming
-    description: Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources.
+    description: Push streams with stream keys over RTMP/E-RTMP, SRT, WHIP (WebRTC), and HTTP Matroska (MKV); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources.
     status: shipped
     showcase:
       order: 20
       title: Live video delivery
       summary: Ingest, protocol conversion, low-latency delivery, recording, and playback, on our own media server and delivery network.
       bullets:
-        - Push over RTMP, E-RTMP, SRT, or WHIP from any encoder or browser
+        - Push over RTMP, E-RTMP, SRT, WHIP, or HTTP MKV from any encoder or browser
         - Deliver over HLS, LL-HLS, DASH, WebRTC (WHEP), and progressive MP4
         - The same stream converts between protocols without a separate transcode step
       link: { label: Quick start, docs: builders/quick-start.mdx }
@@ -929,7 +929,7 @@ features:
         name: Named transcode ladders
         description: Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides.
         status: shipped
-        note: Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.
+        note: Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source's short side are skipped, and an H264 original track already matching a rendition's size and bitrate is served as that rendition instead of being encoded again.
         depends_on: [processing]
         required_surfaces:
           graphql: { required: true }
