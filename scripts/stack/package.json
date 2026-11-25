@@ -1,0 +1,10 @@
+{
+  "name": "frameworks-stack-fixtures",
+  "private": true,
+  "type": "module",
+  "description": "What the stack's browser fixtures (playback-browser.mjs) import: verify-stack installs only this package's lockfile closure, and scenario 62 runs it in the Playwright image of the same version.",
+  "devDependencies": {
+    "hls.js": "catalog:",
+    "playwright": "catalog:"
+  }
+}

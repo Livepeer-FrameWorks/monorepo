@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { createPlaybackBrowserPage } from "./playback-browser-context.mjs";
 
-const require = createRequire(new URL("../../website_marketing/package.json", import.meta.url));
+const require = createRequire(new URL("./package.json", import.meta.url));
 const { chromium } = require("playwright");
 const requests = [];
 const server = createServer((request, response) => {

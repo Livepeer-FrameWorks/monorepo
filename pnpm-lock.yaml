@@ -5,6 +5,15 @@ settings:
   excludeLinksFromLockfile: false
   injectWorkspacePackages: true
 
+catalogs:
+  default:
+    hls.js:
+      specifier: 1.6.16
+      version: 1.6.16
+    playwright:
+      specifier: 1.64.1
+      version: 1.64.1
+
 patchedDependencies:
   '@codecov/sveltekit-plugin':
     hash: 90dac3f704c5c4c4705dedffda308cffdc8f75bbf53212d8ec724999337d4aa1
@@ -173,7 +182,7 @@ importers:
         specifier: 5.2.0
         version: 5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0)
       hls.js:
-        specifier: 1.6.16
+        specifier: 'catalog:'
         version: 1.6.16
       postcss:
         specifier: ^8.5.10
@@ -655,6 +664,15 @@ importers:
 
   packages/site-config: {}
 
+  scripts/stack:
+    devDependencies:
+      hls.js:
+        specifier: 'catalog:'
+        version: 1.6.16
+      playwright:
+        specifier: 'catalog:'
+        version: 1.64.1
+
   website_application:
     dependencies:
       '@codemirror/lang-json':
@@ -1099,7 +1117,7 @@ importers:
         specifier: ^17.5.0
         version: 17.5.0
       playwright:
-        specifier: 1.64.1
+        specifier: 'catalog:'
         version: 1.64.1
       postcss:
         specifier: ^8.5.10

@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
-# What scenario 07's SDK smokes need outside the stack-runner image. Sourced by
-# verify.sh (the compose stack builds npm_api on the host) and verify-target.sh
+# What scenario 07's SDK smokes and scenario 62's external browser need outside
+# the stack-runner image. Sourced by verify.sh (the compose stack builds npm_api
+# and installs the browser fixture's packages on the host) and verify-target.sh
 # (a deployed target runs every smoke from the operator's checkout).
+
+# install_stack_browser_deps <repo>: scenario 62 runs scripts/stack/playback-browser.mjs
+# from the mounted checkout in the Playwright image of the version it imports. A
+# fresh checkout has no node_modules; install only the lockfile closure of the
+# stack's fixture package (Playwright and hls.js), with the pinned pnpm the
+# Makefile puts on PATH.
+install_stack_browser_deps() {
+  local repo=$1
+  if [ -f "$repo/scripts/stack/node_modules/playwright/package.json" ] &&
+    [ -f "$repo/scripts/stack/node_modules/hls.js/package.json" ]; then
+    return 0
+  fi
+  echo "installing the stack browser fixture's packages (scripts/stack/package.json)"
+  (cd "$repo" && pnpm install --frozen-lockfile --filter frameworks-stack-fixtures)
+}
 
 # build_npm_api_dist <repo>: the TS SDK smoke imports npm_api's built dist.
 build_npm_api_dist() {

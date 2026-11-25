@@ -7,7 +7,9 @@
 . "$(dirname "$0")/../lib.sh"
 need docker jq node timeout || finish
 REPO=${STACK_REPO:-/repo}
-version=$(node -p "require('$REPO/website_marketing/node_modules/playwright/package.json').version") || { blocked 'Playwright workspace dependency missing'; finish; }
+# verify.sh installs the fixture package (sdk-prereqs.sh install_stack_browser_deps);
+# its absence is that step's failure, not something the host lacks.
+version=$(node -p "require('$REPO/scripts/stack/node_modules/playwright/package.json').version") || { fail 'stack browser fixture package not installed (scripts/stack/package.json)'; finish; }
 image="mcr.microsoft.com/playwright:v${version}-noble"
 source_repo=$(docker inspect "$HOSTNAME" --format '{{range .Mounts}}{{if eq .Destination "/repo"}}{{.Source}}{{end}}{{end}}')
 network=$(docker inspect "$HOSTNAME" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}')
