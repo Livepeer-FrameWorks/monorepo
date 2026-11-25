@@ -4,6 +4,26 @@
   become: true
   gather_facts: true
   tasks:
+    - name: Assert container templates map each available OpenVINO device
+      ansible.builtin.assert:
+        that:
+          - (('/dev/dri:/dev/dri' in edge_device_compose) == item.dri)
+          - (('/dev/accel:/dev/accel' in edge_device_compose) == item.accel)
+          - ((edge_device_compose | from_yaml).services.edge.devices | default([]) | length) == (item.dri | int + item.accel | int)
+        fail_msg: "Available OpenVINO devices lost: {{ item }}: {{ edge_device_compose }}"
+      vars:
+        edge_image: frameworks-edge:device-test
+        edge_telemetry_url: ""
+        edge_mistserver_onnx_profile: openvino
+        edge_mistserver_onnx_dri_device: "{{ item.dri }}"
+        edge_mistserver_onnx_accel_device: "{{ item.accel }}"
+        edge_device_compose: "{{ lookup('ansible.builtin.template', lookup('env', 'MOLECULE_PROJECT_DIRECTORY') ~ '/templates/compose.yml.j2') }}"
+      loop:
+        - { dri: false, accel: false }
+        - { dri: true, accel: false }
+        - { dri: false, accel: true }
+        - { dri: true, accel: true }
+
     - name: Skip verify when converge short-circuited
       ansible.builtin.meta: end_play
       when: >-

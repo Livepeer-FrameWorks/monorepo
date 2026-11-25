@@ -1,6 +1,12 @@
 package provisioner
 
-import "testing"
+import (
+	"errors"
+	"frameworks/cli/pkg/ssh"
+	"slices"
+	"strings"
+	"testing"
+)
 
 func TestSelectEdgeONNXProfile(t *testing.T) {
 	tests := []struct {
@@ -34,5 +40,42 @@ func TestSelectEdgeONNXProfile(t *testing.T) {
 				t.Fatalf("profile = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDetectEdgeONNXDevices(t *testing.T) {
+	for _, present := range [][]string{nil, {"dri"}, {"accel"}, {"dri", "accel"}} {
+		t.Run(strings.Join(present, "+"), func(t *testing.T) {
+			probed := map[string]bool{}
+			dri, accel := detectEdgeONNXDevices("openvino", "container", func(command string) (*ssh.CommandResult, error) {
+				device := strings.TrimPrefix(command, "test -d /dev/")
+				probed[device] = true
+				code := 1
+				if slices.Contains(present, device) {
+					code = 0
+				}
+				return &ssh.CommandResult{ExitCode: code}, nil
+			})
+			if !probed["dri"] || !probed["accel"] || dri != slices.Contains(present, "dri") || accel != slices.Contains(present, "accel") {
+				t.Fatalf("devices=%v probed=%v got dri=%v accel=%v", present, probed, dri, accel)
+			}
+		})
+	}
+	for _, mode := range []string{"native", "container"} {
+		profile := "cpu"
+		if mode == "native" {
+			profile = "openvino"
+		}
+		dri, accel := detectEdgeONNXDevices(profile, mode, func(string) (*ssh.CommandResult, error) {
+			t.Fatal("unrelated profile/mode probed container devices")
+			return nil, nil
+		})
+		if dri || accel {
+			t.Fatal("unexpected device mapping")
+		}
+	}
+	dri, accel := detectEdgeONNXDevices("openvino", "container", func(string) (*ssh.CommandResult, error) { return nil, errors.New("disconnected") })
+	if dri || accel {
+		t.Fatal("failed probes exposed devices")
 	}
 }

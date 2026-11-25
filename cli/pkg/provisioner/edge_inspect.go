@@ -10,6 +10,7 @@ import (
 
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
 )
 
 // edgeInterruptingReports are the check-mode handler results (roles
@@ -179,11 +180,9 @@ func (e *EdgeProvisioner) Inspect(ctx context.Context, host inventory.Host, conf
 		return EdgeInspection{Changed: true, Interrupting: true}, err
 	}
 	config.ONNXProfile = profile
-	if profile == "openvino" && mode == "container" {
-		if result, probeErr := e.RunCommand(ctx, host, "test -d /dev/dri"); probeErr == nil && result.ExitCode == 0 {
-			config.onnxDRIDevice = true
-		}
-	}
+	config.onnxDRIDevice, config.onnxAccelDevice = detectEdgeONNXDevices(profile, mode, func(command string) (*ssh.CommandResult, error) {
+		return e.RunCommand(ctx, host, command)
+	})
 	if err := ensureRemoteAnsiblePython(ctx, e.sshPool, host, true); err != nil {
 		return EdgeInspection{Changed: true, Interrupting: true}, err
 	}

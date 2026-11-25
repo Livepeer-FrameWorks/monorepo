@@ -182,3 +182,17 @@ func TestEdgeRoleVarsRenderEveryFoghornInstance(t *testing.T) {
 		t.Fatalf("edge_foghorn_grpc_addr = %#v, want %q", got, addrs)
 	}
 }
+
+func TestEdgeRoleVarsCarryOpenVINODeviceAvailability(t *testing.T) {
+	for _, devices := range [][2]bool{{false, false}, {true, false}, {false, true}, {true, true}} {
+		config := edgeRenderFixtureConfig("container")
+		config.onnxDRIDevice, config.onnxAccelDevice = devices[0], devices[1]
+		vars, err := edgeRoleVarsFrom(config, "linux", "amd64", edgeTelemetryTestSources())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vars["edge_mistserver_onnx_dri_device"] != devices[0] || vars["edge_mistserver_onnx_accel_device"] != devices[1] {
+			t.Fatalf("device availability %v lost in role variables: %v", devices, vars)
+		}
+	}
+}

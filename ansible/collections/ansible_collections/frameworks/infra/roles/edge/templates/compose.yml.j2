@@ -18,9 +18,14 @@ services:
 {% if edge_mistserver_onnx_profile in ['cuda', 'tensorrt'] %}
     gpus: all
 {% endif %}
-{% if edge_mistserver_onnx_profile == 'openvino' and edge_mistserver_onnx_dri_device %}
+{% if edge_mistserver_onnx_profile == 'openvino' and (edge_mistserver_onnx_dri_device or edge_mistserver_onnx_accel_device) %}
     devices:
+{% if edge_mistserver_onnx_dri_device %}
       - /dev/dri:/dev/dri
+{% endif %}
+{% if edge_mistserver_onnx_accel_device %}
+      - /dev/accel:/dev/accel
+{% endif %}
 {% endif %}
 {% if edge_container_flavor | default('linux') == 'darwin' %}
     ports:

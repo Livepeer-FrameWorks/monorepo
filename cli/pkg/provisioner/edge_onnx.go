@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/system"
 )
 
@@ -120,4 +121,15 @@ func (e *EdgeProvisioner) resolveONNXProfile(ctx context.Context, host inventory
 		}
 	}
 	return selected, nil
+}
+
+func detectEdgeONNXDevices(profile, mode string, run func(string) (*ssh.CommandResult, error)) (dri, accel bool) {
+	if profile != "openvino" || mode != "container" {
+		return false, false
+	}
+	for path, present := range map[string]*bool{"/dev/dri": &dri, "/dev/accel": &accel} {
+		result, err := run("test -d " + path)
+		*present = err == nil && result != nil && result.ExitCode == 0
+	}
+	return dri, accel
 }
