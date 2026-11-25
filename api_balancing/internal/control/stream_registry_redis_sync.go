@@ -252,6 +252,10 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 	// Source-ownership winner: higher revision, else (equal) the UpdatedAt winner.
 	src := cur
 	switch {
+	case legacyAndFencedOwnership(cur, incoming):
+		if incoming.SourceRevision > cur.SourceRevision {
+			src = incoming
+		}
 	case incoming.SourceLeaseEpoch > cur.SourceLeaseEpoch:
 		src = incoming
 	case incoming.SourceLeaseEpoch < cur.SourceLeaseEpoch:
