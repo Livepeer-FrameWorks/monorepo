@@ -197,6 +197,9 @@ check "the chapters hold the whole ${PUSH}s push without a hole" json_has "$C" \
    and (map(.endMs - .startMs) | add) >= $(((PUSH - 2) * 1000))
    and ([range(1; length) as \$i | (.[\$i].startMs - .[\$i - 1].endMs) | fabs <= 1000] | all)"
 if [ "$FAIL" -gt "$F" ]; then
+  echo "    chapters (id, state, startMs, endMs, gap after the previous chapter's end in ms):"
+  echo "$C" | jq -r 'sort_by(.startMs) | . as $c | range(0; length) as $i | $c[$i]
+    | "      \(.chapterId[0:8]) \(.state) \(.startMs) \(.endMs) \(if $i == 0 then "-" else (.startMs - $c[$i - 1].endMs) end)"'
   echo "    segment ledger (offset from the first media ms, duration, status, recorded at):"
   pg "$FOGHORN_A_DB" "SELECT s.segment_name, s.media_start_ms - (EXTRACT(EPOCH FROM a.started_at) * 1000)::bigint, s.duration_ms, s.status, s.created_at
     FROM foghorn.dvr_segments s JOIN foghorn.artifacts a ON a.artifact_hash = s.artifact_hash
