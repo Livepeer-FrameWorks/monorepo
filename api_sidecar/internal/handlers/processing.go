@@ -45,6 +45,19 @@ type ProcessingJobHandler struct {
 	mistServerURL  string
 	storagePath    string
 	memorySnapshot func() (uint64, uint64, error)
+	// background is the work a job leaves running after its result (a finalized chapter's DTSH
+	// sidecar and its retries); stopBackground ends the retries' waits.
+	background     sync.WaitGroup
+	stopBackground chan struct{}
+}
+
+// stopBackgroundWork ends the background retries a handler started and waits for its background
+// work to return.
+func (h *ProcessingJobHandler) stopBackgroundWork() {
+	if h.stopBackground != nil {
+		close(h.stopBackground)
+	}
+	h.background.Wait()
 }
 
 // pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
@@ -1036,9 +1049,10 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, 
 	startProcessingOverridePersistenceReconciler(mistServerURL, logger)
 	startOrphanProcessingStreamCleanup(mistServerURL, logger)
 	return &ProcessingJobHandler{
-		logger:        logger,
-		mistServerURL: mistServerURL,
-		storagePath:   storagePath,
+		logger:         logger,
+		mistServerURL:  mistServerURL,
+		storagePath:    storagePath,
+		stopBackground: make(chan struct{}),
 	}
 }
 
