@@ -127,7 +127,10 @@ platform tier admits may ingest to and play from:
 | `central-primary` | `foghorn`, `foghorn-2`     | `demo-media`           | `edge` (edge-node-1)   |
 | `us-primary`      | `foghorn-b`, `foghorn-b-2` | `demo-media-us`        | `edge-b` (edge-node-b) |
 
-Each offchain orchestrator keeps its two-CPU quota and 2 GiB memory limit.
+Each offchain orchestrator keeps its two-CPU quota. Orchestrator B has a 2 GiB
+memory limit; orchestrator A, which transcodes scenario 66's UHD ladder, has
+4 GiB: that ladder's segments need about 3.3 GiB with the preceding QHD session
+still warm, and 2 GiB left it at its limit or OOM-killed.
 Its launcher also narrows process affinity to that CPU budget: FFmpeg sizes
 native worker pools from the available CPU set, which otherwise still exposes
 every host core under a CPU time quota. The launcher replaces itself with

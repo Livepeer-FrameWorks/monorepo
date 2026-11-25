@@ -164,7 +164,11 @@ services:
       - -v=4
     networks: [frameworks]
     cpus: 2.0
-    mem_limit: 2g
+    # Scenario 66's UHD ladder (six libx264 rungs up to 2160p on two CPUs) needs about 3.3 GiB of
+    # anonymous memory per segment with its QHD session still warm (isolated probe, 2026-11-24). In
+    # 2 GiB it runs only on allocator trimming at the limit (in-stack peak 1.94 GiB) and was
+    # OOM-killed in one of three runs, taking scenario 69 with it.
+    mem_limit: 4g
     logging: *stack-logging
 
   livepeer-gateway-a:
