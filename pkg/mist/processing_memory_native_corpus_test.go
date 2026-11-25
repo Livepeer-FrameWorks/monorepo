@@ -91,7 +91,11 @@ func TestProcessingMemoryPlansMatchNativeCorpus(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(renditions, sample.ExpectedRenditions) {
 				t.Fatalf("production renditions differ from complete measured output: got %+v, want %+v, error %v", renditions, sample.ExpectedRenditions, err)
 			}
-			t.Logf("admission estimate / native measured peak = %.3f", float64(plan.Bytes)/float64(sample.ObservedBytes))
+			ratio := float64(plan.Bytes) / float64(sample.ObservedBytes)
+			if ratio < 1 {
+				t.Fatalf("admission estimate %d is below the native measured peak %d (%.3f)", plan.Bytes, sample.ObservedBytes, ratio)
+			}
+			t.Logf("admission estimate / native measured peak = %.3f", ratio)
 		})
 	}
 }
