@@ -11,13 +11,13 @@ import { Aside } from "@astrojs/starlight/components";
 
 Bunny.net is mainly a CDN, storage, and DNS provider; Bunny Stream is its VOD product. Teams usually pick Bunny for edge delivery, simple VOD hosting, integrated security options, automated media tooling, video analytics, and one account that also covers non-video workloads.
 
-FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently include a live-ingest product; Bunny's current [FAQ says RTMP streams are not supported](https://bunny.net/faq/). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
+FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, HTTP MKV, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently include a live-ingest product; Bunny's current [FAQ says RTMP streams are not supported](https://bunny.net/faq/). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
 
 ## TL;DR
 
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
-- **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
+- **What you gain:** RTMP, E-RTMP, SRT, WHIP, HTTP MKV push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
 - **What's up next:** DRM · generated captions through Live AI Processing · managed watermarking
   through server-side composition.
 - **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
@@ -66,7 +66,7 @@ Bunny Stream does not currently offer live ingest, so this row is a **what you g
 
 | FrameWorks                                                                            |
 | ------------------------------------------------------------------------------------- |
-| Push ingest: RTMP, E-RTMP (HEVC/AV1 over RTMP), SRT, WHIP                             |
+| Push ingest: RTMP, E-RTMP (HEVC/AV1 over RTMP), SRT, WHIP, HTTP MKV                   |
 | Pull-input: RTSP, SRT, RIST, DTSC, HLS, single-file TS, EBML/WebM, TS-over-UDP        |
 | DVR with time-shift on every recorded stream — see [Recordings](/builders/recordings) |
 | Clip API (`CLIP_NOW`, `DURATION`, `ABSOLUTE`, `RELATIVE`)                             |
