@@ -38,17 +38,24 @@ for n in $(seq 1 20); do
   PUBS+=("$pid")
   eventually 60 "ingest $n admitted and serves media on first publisher" media_at "$foghorn" "$pb"
   check "ingest $n publisher remains connected" kill -0 "$pid"
-  mist_active() { log_has "$stream_since" "Stream live\\+$internal became active" "$edge_service"; }
-  eventually 30 "ingest $n is active in Mist" mist_active
   active() { [ -n "$(open_generation "$cell" "$internal")" ]; }
   eventually 30 "ingest $n has one active generation" active
+  # Mist names the buffer after the exact runtime the session persisted: an isolated publisher's
+  # live+<internal>_fw1p_<generation>, a legacy one's live+<internal>.
+  runtime=$(pg "$cell" "SELECT COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name) FROM foghorn.ingest_sessions
+    WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL
+    AND projection_state='active' ORDER BY started_at DESC LIMIT 1")
+  check "ingest $n persisted its Mist runtime ($runtime)" [ -n "$runtime" ]
+  runtime_pattern=${runtime//+/\\+}
+  mist_active() { log_has "$stream_since" "Stream $runtime_pattern became active" "$edge_service"; }
+  eventually 30 "ingest $n is active in Mist" mist_active
   count=$(pg "$cell" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
     AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL AND projection_state='active'")
   check "ingest $n has exactly one active session (got $count)" [ "$count" = 1 ]
   kill "$pid" 2>/dev/null
   ended() { local generation; generation=$(open_generation "$cell" "$internal") || return 1; [ -z "$generation" ]; }
   eventually 90 "ingest $n session ends after the publisher disconnects" ended
-  mist_inactive() { log_has "$stream_since" "Stream live\\+$internal became inactive" "$edge_service"; }
+  mist_inactive() { log_has "$stream_since" "Stream $runtime_pattern became inactive" "$edge_service"; }
   eventually 90 "ingest $n is inactive in Mist after disconnect" mist_inactive
   delete_stream "$id"
 done
