@@ -197,6 +197,58 @@ func TestStreamPresenceAdvertisesWhenBindingConfirmedWhilePlayable(t *testing.T)
 	assertPresentOriginAd(t, awaitPresenceAd(t, leaderPeer))
 }
 
+// A publisher admitted during a control-plane outage is a legacy owner (no
+// lease epoch) that the cell orders after the fenced owner it replaced by the
+// cell's source revision. A peer cell still holding the fenced owner from
+// before the outage must take the legacy owner from the cell's advertisement,
+// so the advertisement carries that owner's revision. The registry is keyed by
+// the cell, as a Foghorn whose cluster is its control cell keys it.
+func TestPeerTakesAnOutageLegacyOwnerOverTheFencedOwnerItReplaced(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	registry := control.NewStreamRegistry(nil, presenceCell, time.Minute)
+	installPresenceRegistry(t, registry)
+	pm := newTestPeerManager(t, presenceCell, nil, true)
+	pm.controlCellID = presenceCell
+	leaderPeer := presencePeer(pm, "us-peer")
+	t.Cleanup(pm.WatchStreamPresence(sm, registry))
+
+	seedPresenceOrigin(t, sm)
+	confirmPresenceBinding(t, registry)
+	flipPresencePlayable(t, sm)
+	ad := awaitPresenceAd(t, leaderPeer)
+	assertPresentOriginAd(t, ad)
+	if ad.GetSourceLeaseEpoch() != 0 {
+		t.Fatalf("an unbound owner was advertised with a lease epoch: %+v", ad)
+	}
+
+	f, reader, _ := livePathFixture(t)
+	receiver := control.NewStreamRegistry(nil, "us", time.Minute)
+	installPresenceRegistry(t, receiver)
+	reader.Registry = receiver
+	reader.Now = time.Now
+	authority, err := balancer.CompilePlacementAuthority(f.pair, placement.Serve, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fenced owner the outage admission replaced, as the peer last heard of
+	// it before the outage: active, with no fresh origin evidence any more.
+	receiver.UpsertFederatedSource(presenceCell, control.StreamEntry{TenantID: presenceTenant, InternalName: presenceStream}, control.Location{
+		IsLiveNow: true, SourceActive: true, AdvertisedSource: true, OwnerNodeID: presenceNode, SourceClusterID: presenceCluster,
+		SourceGeneration: "fenced-generation", SourceLeaseEpoch: 4, SourceRevision: presenceRevision - 1,
+		SourceRuntimeName: "live+" + presenceStream + "_fw1p_0123456789abcdef0123456789abcdef", AdTimestamp: time.Now().Add(-time.Minute).Unix(),
+	})
+	if !applyRegistryStreamAdvertisement(ad) {
+		t.Fatal("receiving cell rejected the advertisement")
+	}
+	generation, _, err := reader.ResolveSourceGeneration(context.Background(), authority)
+	if err != nil || generation != presenceGeneration {
+		entry, _, _ := receiver.SourceSnapshot(context.Background(), presenceTenant, presenceStream)
+		t.Fatalf("peer source generation = %q, %v; want the outage owner %q (peer location %+v, ad %+v)",
+			generation, err, presenceGeneration, entry.Locations[presenceCell], ad)
+	}
+}
+
 // The trigger lands on a non-leader replica: its state and registry writes
 // reach the leader only through the cell's changelogs, and the leader must
 // advertise from what it applies. Either write can be the one that completes

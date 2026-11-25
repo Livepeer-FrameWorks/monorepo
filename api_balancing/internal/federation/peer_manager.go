@@ -2361,9 +2361,15 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 	return ad
 }
 
+// stampPublisherAdvertisement carries the cell's publisher ownership on an
+// advertisement: a fenced owner with its lease epoch, and a legacy owner (an
+// outage admission, epoch 0) with its revision. Peers order a legacy owner
+// against the fenced owner it replaced only by that revision
+// (acceptPublisherAdvertisement), so an unstamped legacy owner never replaces a
+// fenced one in a peer cell.
 func stampPublisherAdvertisement(ad *foghornfederationpb.StreamAdvertisement, entry control.StreamEntry, cellID string) {
 	loc, found := entry.LocalLocation(cellID)
-	if !found || loc.SourceLeaseEpoch <= 0 || loc.SourceGeneration == "" || loc.SourceRevision <= 0 || loc.OwnerNodeID == "" {
+	if !found || loc.SourceLeaseEpoch < 0 || loc.SourceGeneration == "" || loc.SourceRevision <= 0 || loc.OwnerNodeID == "" {
 		return
 	}
 	ad.SourceLeaseEpoch, ad.SourceGeneration, ad.SourceRevision = loc.SourceLeaseEpoch, loc.SourceGeneration, loc.SourceRevision
