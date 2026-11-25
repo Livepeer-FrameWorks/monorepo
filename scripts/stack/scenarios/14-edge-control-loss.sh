@@ -188,9 +188,14 @@ pull_opens() { PULL_MEDIA=$(hls_session_url "http://$EDGE_A_HOST:8082/hls/$PULL_
 eventually 120 'edge-local pull starts before uplink loss' pull_opens || finish
 hls_poll "$PULL_MEDIA" >"$WORK/player.log" &
 PULL_PLAYER=$!
+# PULL_SESSION is this node's buffer row; the public ingest view names the
+# cell session that groups the cell's buffers (docs/architecture/pull-streams.md).
 pull_live() {
-  PULL_SESSION=$(pg "$FOGHORN_A_DB" "SELECT id FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$PULL_UUID' AND ended_at IS NULL AND admission_state='active' AND node_id='$EDGE_NODE'")
-  [ -n "$PULL_SESSION" ] && [ "$(hls_poll_state "$WORK/player.log" 0)" = ok ]
+  local row
+  row=$(pg "$FOGHORN_A_DB" "SELECT id::text||'|'||cell_session_id::text FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$PULL_UUID' AND ended_at IS NULL AND admission_state='active' AND node_id='$EDGE_NODE'")
+  PULL_SESSION=${row%%|*}
+  PULL_CELL_SESSION=${row#*|}
+  [ -n "$row" ] && [ "$(hls_poll_state "$WORK/player.log" 0)" = ok ]
 }
 eventually 60 'edge-local pull has real media and a durable session' pull_live || finish
 
@@ -233,7 +238,7 @@ pull_lost() {
 eventually 60 'unreachable pull session ends as node_lost' pull_lost
 eventually 60 'unreachable pull reaches IDLE in its cell' idle_for "$SINCE" "$PULL_UUID"
 eventually 30 'node loss makes the public push session idle' public_ingest_matches "$SID" IDLE "$G2"
-eventually 30 'node loss makes the public pull session idle' public_ingest_matches "$PULL_ID" IDLE "$PULL_SESSION"
+eventually 30 'node loss makes the public pull session idle' public_ingest_matches "$PULL_ID" IDLE "$PULL_CELL_SESSION"
 check 'the external pull fixture stays running through the isolation' kill -0 "$PULL_SOURCE_PID"
 
 RESTORE_TS=$(utc_now)
