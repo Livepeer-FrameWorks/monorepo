@@ -110,6 +110,49 @@ the last-good record for the next pass.
 
 ### Rendition completeness
 
+#### Original rendition retention
+
+An original video track can be a ladder rung itself, so a multi-rendition upload (MP4/MKV with
+several video tracks) or a multitrack live publish (E-RTMP multitrack, Matroska push) does not
+re-encode renditions it already carries. The rule is defined once in Mist (`Util::retainedTrack`,
+`src/process_graph.h` `decideRenditions`) and mirrored in Go (`pkg/mist` `PlanRetention`,
+`ExpectedVideoRenditions`):
+
+- **Transcode source.** The source S is the original continuous-video track with the highest
+  bitrate (Mist `maxbps`; `mist.TranscodeSourceIndex`, lowest index on a tie). Image tracks never
+  count. A rung's `video=<0xN` inhibitor is judged against S only, so a small extra original does
+  not suppress the larger rungs.
+- **Retention selector.** Every height-only rung of a named ladder carries `track_retain`
+  (`mist.RetainSelector`, composed in `LadderProfiles`): an original whose short side is within
+  `max(32, N/20)` of rung N and whose bitrate is within 0.5x to 2x of the rung's target. Mist
+  compares strictly in 1024-bit kbps, so Go widens the bounds to the next whole kbps outside the
+  band. S itself can retain its own rung. When several originals qualify, the one whose bitrate
+  is closest to the target wins, the lowest index on a tie. Custom process overrides and explicit
+  `WxH` profiles carry no `track_retain`.
+- **Codec and orientation.** Foghorn's `mist.ConstrainRenditionRetention` narrows every H264
+  rung's selector to H264 originals (`,|h264`), and for live also to originals without B-frames
+  (`,!bframes`). Rotated or mirrored originals never retain a rung (see below).
+- **Decided once.** Mist waits up to 5 s (`RENDITION_DECISION_WAIT_MS`) for every original to
+  report width, height and bitrate, then decides retain/inhibit/mask once for that set of
+  original tracks. Whatever is still unknown at that point decides for a transcode: an original
+  without known geometry or bitrate retains nothing, and a source without known geometry inhibits
+  nothing. Later bitrate or geometry changes neither start nor stop a rendition; a new original
+  track (for example a restarted publisher) decides again.
+- **Masking.** Named ladders set `mask_replaced_originals` (`SetTranscodeLadder`; the local AV
+  fallback copies it). Once a transcoded rung of that
+  process carries data, every original that retains no rung, S included, is hidden from viewers,
+  pushes and the stored VOD, and stays readable by processes. When no rung is transcoded (a
+  source below every rung, or every rung retained), nothing is masked.
+
+A retained rung starts no process, reserves no processing memory and emits no processing usage, so
+it is not billed. Foghorn's Livepeer auth accepts a gateway profile set that lacks a signed
+profile only when that profile carries `track_retain`. Helmsman counts a retained original as its
+rung's rendition for completeness and span coverage, the VOD recording push selector excludes
+masked originals (`all,!<masked>`), and clip/DVR/chapter selectors treat retained originals as
+complete renditions.
+
+#### Orientation, codecs and sizes
+
 An original can satisfy a ladder rung only when its pixels are upright and unreflected.
 A rotated or mirrored original remains eligible as the decode source, but its rung must be
 rendered. Helmsman carries both orientation fields through readiness, memory planning and
@@ -132,8 +175,9 @@ reservation.
 Height-only ladder profiles name the short side for portrait video. Named ladders use
 `video=<0xN` inhibitors to compare the source short side with rung N, including square and
 ultrawide sources. Explicit `video=<WxH` selectors retain their pixel-area comparison.
-The model applies those inhibitors before matching each expected rung to a distinct recorded process
-output; source tracks and thumbnails cannot satisfy a rung. Codec rounding is tolerated
+The model applies retention and those inhibitors before matching each transcoded rung to a distinct
+recorded process output; a retained rung is satisfied by its original track, and thumbnails never
+satisfy a rung. Codec rounding is tolerated
 within `max(32, shortSide/20)` pixels.
 
 For VOD, Helmsman retains the largest source end timestamp observed at readiness, on each
@@ -536,7 +580,8 @@ cannot clear. Deferral has no separate timeout
 and spends no failure retries. Every processing job has a 24-hour deadline. The initial
 VOD transcode uses upload creation time; clips, DVR, chapters, thumbnails and other
 follow-up jobs use their own creation time. A new thumbnail job on an older ready VOD
-gets its own deadline. A live-source clip or DVR job pinned to a node known to be gone
+gets its own deadline. Chapter finalization retains a one-hour runtime cap within
+that job deadline. A live-source clip or DVR job pinned to a node known to be gone
 fails with a "source unavailable" reason. An unannounced control disconnect allows
 one minute for the source node to reconnect before it is considered gone; announced
 restarts retain their declared reconnect window. Node metadata updates do not extend
@@ -705,8 +750,10 @@ the stored file. No `vod+` artifact row is ever created; it is purely a resoluti
 
 ## Original upload retention
 
-The processed recording masks source A/V tracks and proves every expected rendition independently.
-Original quality is retained as a separate opaque object, with no track identity or lineage.
+This is the uploaded file, kept for download; it is separate from
+[original rendition retention](#original-rendition-retention), which serves an original track as a
+ladder rung. The processed recording hides the originals the ladder replaces and proves every
+expected rendition independently. Original quality is retained as a separate opaque object, with no track identity or lineage.
 Upload retention resolves upload override → tenant policy → keep. Foghorn snapshots that decision;
 an omitted field from an older Commodore means false. URL imports and failed processing never stamp
 an original. At successful processing completion, HEAD verification and original key/size stamping
