@@ -559,7 +559,7 @@ export type IngestMode =
   | 'MANAGED'
   /** FrameWorks pulls from a configured upstream URI. */
   | 'PULL'
-  /** An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks. */
+  /** An encoder pushes RTMP/E-RTMP, SRT, WHIP, or HTTP MKV into FrameWorks. */
   | 'PUSH'
   | '%future added value';
 
