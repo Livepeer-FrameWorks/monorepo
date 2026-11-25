@@ -22,7 +22,7 @@ func (fn viewerSourceReaderFunc) ResolveSourceGeneration(ctx context.Context, au
 }
 
 func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
-	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal", "playback", "authority", "authority-keeps-changing", "generation", "expired-source", "source-error", "cancelled"} {
+	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal", "playback", "authority", "authority-keeps-changing", "observation-authority", "generation", "expired-source", "source-error", "cancelled"} {
 		t.Run(change, func(t *testing.T) {
 			f := newDiscoveryFixture(t)
 			f.now = time.Now()
@@ -47,7 +47,15 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			sourceUntil := f.now.Add(10 * time.Second)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			rpc := placementRPCFixture{query: f.discovery.QueryPlacementCandidates, prepare: func(_ context.Context, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
+			advancedDuringObservation := false
+			rpc := placementRPCFixture{query: func(ctx context.Context, query *placementpb.CandidateQuery) (*placementpb.CandidateObservation, error) {
+				if change == "observation-authority" && !advancedDuringObservation {
+					advancedDuringObservation = true
+					f.pair.Tenant.Authority.MediaPlacement.Revision++
+					f.pair.Object.Authority.PlacementTenantRevision++
+				}
+				return f.discovery.QueryPlacementCandidates(ctx, query)
+			}, prepare: func(_ context.Context, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
 				preparations++
 				if change == "authority-version" || change == "authority" || change == "authority-renewal" || change == "authority-keeps-changing" {
 					f.pair.Object.Version++
@@ -97,6 +105,10 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			}
 			got, err := resolver.PrepareViewer(ctx, control.ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "internal", PlaybackID: "public", Protocol: "hls", Location: location})
 			switch change {
+			case "observation-authority":
+				if err != nil || got.NodeID == "" || preparations != 1 || sourceCalls != 3 {
+					t.Fatalf("observation failed during policy rollout: %+v, %v, source=%d prepare=%d; want routing under the new authority", got, err, sourceCalls, preparations)
+				}
 			// A version advance that changes no decision fact keeps the route.
 			case "none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal":
 				if err != nil || got.ClusterID != "us" || got.NodeID == "" || !got.ExpiresAt.Equal(sourceUntil) || sourceCalls != 2 || preparations != 1 {

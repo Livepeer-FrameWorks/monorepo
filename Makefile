@@ -774,6 +774,7 @@ verify-stack-fixtures: test-stack-bootstrap-results
 	python3 scripts/stack/test_edge_group_lifecycle.py
 	$(MAKE) --no-print-directory test-stack-media-cpus
 	$(MAKE) --no-print-directory test-stack-processing-scenarios
+	$(MAKE) --no-print-directory test-stack-media-qualification
 	python3 scripts/stack/test_rotate_live_mkv.py
 	python3 scripts/stack/test_native_source.py
 	bash scripts/stack/test_storage_pressure_fixture.sh
@@ -794,6 +795,10 @@ test-stack-lib:
 
 test-stack-processing-scenarios:
 	python3 scripts/stack/test_processing_scenario_guards.py
+
+.PHONY: test-stack-media-qualification
+test-stack-media-qualification:
+	python3 scripts/stack/test_media_qualification_guards.py
 	python3 scripts/stack/test_pinned_clip_fixture.py
 
 .PHONY: test-stack-media-cpus

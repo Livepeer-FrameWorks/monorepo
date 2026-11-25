@@ -115,10 +115,11 @@ func TestOutOfBandOriginalIsTranscodedAndMasked(t *testing.T) {
 		originalTrack(2, 1280, 720, bps15Mbps, 30000),
 		originalTrack(3, 640, 360, bps360InBand, 30000),
 	}
+	originals[1].trackIndex, originals[1].hasTrackIndex = 1, true
 	// The 15 Mbps 720p original is the highest-bitrate track: the transcode source.
 	source := mist.SourceMediaInfo{Width: 1280, Height: 720}
-	if got := processingRecordingVideoSelector(quietLog(), processes, originals, source); got != "all,!i2" {
-		t.Fatalf("VOD selector = %q, want all,!i2: the out-of-band 720p original is replaced by its transcode", got)
+	if got := processingRecordingVideoSelector(quietLog(), processes, originals, source); got != "all,!1" {
+		t.Fatalf("VOD selector = %q, want all,!1: the out-of-band 720p original is replaced by its transcode", got)
 	}
 	complete := append(append([]processingMetaVideoTrack{}, originals...), renditionTrack(6, 1280, 720, 30000), renditionTrack(5, 854, 480, 30000))
 	if !renditionsComplete(quietLog(), processes, complete, source, 30000, 0, 30000) {
@@ -143,8 +144,9 @@ func TestSingleSourceRetentionDecidesSourceMasking(t *testing.T) {
 	}
 
 	outOfBand := []processingMetaVideoTrack{originalTrack(1, 1920, 1080, 30000000/8, 30000)}
-	if got := processingRecordingVideoSelector(quietLog(), processes, outOfBand, source); got != "all,!i1" {
-		t.Fatalf("VOD selector = %q, want all,!i1: a 30 Mbps source retains no rung and is replaced", got)
+	outOfBand[0].trackIndex, outOfBand[0].hasTrackIndex = 0, true
+	if got := processingRecordingVideoSelector(quietLog(), processes, outOfBand, source); got != "all,!0" {
+		t.Fatalf("VOD selector = %q, want all,!0: a 30 Mbps source retains no rung and is replaced", got)
 	}
 	noTopRung := append(append([]processingMetaVideoTrack{}, outOfBand...), renditionTrack(6, 1280, 720, 30000), renditionTrack(5, 854, 480, 30000), renditionTrack(3, 640, 360, 30000))
 	if renditionsComplete(quietLog(), processes, noTopRung, source, 30000, 0, 30000) {
@@ -292,7 +294,7 @@ func TestRecordingRetentionDoesNotReselectTransformedOriginal(t *testing.T) {
 			for _, tracks := range variants {
 				source := mist.SourceMediaInfo{VideoCodec: "H264", Width: 1920, Height: 1080, Rotation: rotation, Mirror: mirror}
 				got := processingRecordingVideoSelector(quietLog(), retentionLadder(t), tracks, source)
-				want := "all,!i1"
+				want := "all,!0"
 				if rotation == 0 && !mirror {
 					want = "all"
 				}

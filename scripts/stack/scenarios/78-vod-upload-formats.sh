@@ -38,10 +38,11 @@ hls_audio_matches() {
 }
 subtitles_play() {
   local url
-  url=$(location_at "$1" "$2")
+  url=$(location_at "$2" "$3")
   [ -n "$url" ] || return 1
-  python3 - "$url" <<'PYVTT'
-import sys, urllib.parse, urllib.request
+  python3 - "$url" "$1" <<'PYVTT'
+from decimal import Decimal
+import json, subprocess, sys, urllib.parse, urllib.request
 url = urllib.parse.urlsplit(sys.argv[1])
 assert url.path.startswith('/hls/'), url.path
 stream = url.path[len('/hls/'):].split('/')[0]
@@ -51,7 +52,16 @@ with urllib.request.urlopen(vtt, timeout=30) as response:
     assert response.headers.get_content_type() == 'text/vtt', response.headers
     body = response.read().decode()
 assert body.startswith('WEBVTT') and 'stack subtitle cue' in body, body
-assert '00:00:00.500 --> 00:00:02.000' in body, body
+# Remuxing the MP4 into Matroska shifts every track for AAC encoder priming.
+# Compare the stored cue with the uploaded container's clock, not the SRT's.
+probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 's',
+    '-show_entries', 'packet=pts_time,duration_time,size', '-of', 'json', sys.argv[2]], timeout=10))
+cue = next(packet for packet in probe['packets'] if int(packet['size']) > 2)
+start = int(Decimal(cue['pts_time']) * 1000)
+end = start + int(Decimal(cue['duration_time']) * 1000)
+def stamp(ms):
+    return f'{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02}.{ms % 1000:03}'
+assert stamp(start) + ' --> ' + stamp(end) in body, body
 PYVTT
 }
 
@@ -102,7 +112,7 @@ for fixture in h264-surround.mp4 surround.mkv surround.ts surround.m2ts surround
     every_replica "$fixture plays through both cells" "$playback" media_at
     every_replica "$fixture retains its full duration" "$playback" full_six
     if [ "$subtitles" = true ]; then
-      every_replica "$fixture serves stored subtitles through WebVTT" "$playback" subtitles_play
+      every_replica "$fixture serves stored subtitles through WebVTT" "$playback" subtitles_play "$work/$fixture"
     fi
     if [ "$fixture" = surround-ac3.ts ]; then
       every_replica 'AC3 becomes six-channel AAC in HLS' "$playback" hls_audio_matches

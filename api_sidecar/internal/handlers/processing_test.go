@@ -580,8 +580,8 @@ func TestProcessingTracksFromProtoCarriesRecordingEndSpan(t *testing.T) {
 	if tracks[0].height != 720 || tracks[0].spanMs() != 30000 {
 		t.Fatalf("unexpected track: %+v span=%v", tracks[0], tracks[0].spanMs())
 	}
-	if tracks[0].selector() != "i42" {
-		t.Fatalf("selector = %q, want i42", tracks[0].selector())
+	if tracks[0].selector() != "3" {
+		t.Fatalf("selector = %q, want unique track index 3", tracks[0].selector())
 	}
 }
 

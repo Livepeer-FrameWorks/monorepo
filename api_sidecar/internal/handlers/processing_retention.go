@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -146,12 +147,13 @@ func processingRecordingVideoSelector(log *logrus.Entry, processesJSON string, v
 		if !info.Original || info.Image || retained[info.Index] {
 			continue
 		}
-		sel := videoTracks[positions[info.Index]].selector()
-		if sel == "" {
-			log.WithField("height", info.Height).Warn("Recording selector: masked original lacks track identity; recording every video track")
+		track := videoTracks[positions[info.Index]]
+		if !track.hasTrackIndex {
+			log.WithField("height", info.Height).Warn("Recording selector: masked original lacks track index; relying on process visibility masks")
 			return "all"
 		}
-		parts = append(parts, "!"+sel)
+		// ID exclusions can also remove future encoder outputs with the same ID.
+		parts = append(parts, "!"+strconv.Itoa(track.trackIndex))
 	}
 	return strings.Join(parts, ",")
 }

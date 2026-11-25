@@ -96,7 +96,10 @@ kill "$SOURCE_PID" 2>/dev/null || true
 wait "$SOURCE_PID" 2>/dev/null || true
 SOURCE_PID=''
 session_ended() {
-  [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' AND ended_at IS NULL")" = 0 ]
+  # A subsequent dial may hold a pending admission without ever opening a
+  # buffer. This assertion concerns playable sessions; pending dials expire
+  # independently and must not make a correctly closed buffer look live.
+  [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' AND ended_at IS NULL AND admission_state='active'")" = 0 ]
 }
 eventually 90 'ended pull buffer closes its durable session' session_ended || finish
 eventually 30 'the public pull session becomes idle without a resume window' ingest_matches IDLE "${FIRST_ROW%%|*}"
