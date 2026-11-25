@@ -230,8 +230,10 @@ else
     [ -n "$rows" ]
   }
   if eventually 90 'live MKV routes rotation to local processing' live_rotation_routed; then
-    every_replica 'live rotated MKV advertises upright renditions' "$live_playback" portrait_hls
-    every_replica 'live rotated MKV serves upright pixels' "$live_playback" upright_playback
+    for live_replica in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+      eventually 90 "live rotated MKV advertises upright renditions via $live_replica" portrait_hls "$live_replica" "$live_playback"
+      eventually 90 "live rotated MKV serves upright pixels via $live_replica" upright_playback "$live_replica" "$live_playback"
+    done
   fi
 fi
 
