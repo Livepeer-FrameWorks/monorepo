@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -170,6 +171,37 @@ func controllerOf(t *testing.T, raw []byte) (map[string]any, map[string]any) {
 	}
 	config := data["config"].(map[string]any)
 	return config, config["controller"].(map[string]any)
+}
+
+func TestCopyTreeFlushesEachFileBeforeItIsInstalled(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bin/MistController", "bin/MistProcAV", "lib.a"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var synced []string
+	orig := syncFile
+	syncFile = func(f *os.File) error {
+		target := strings.TrimSuffix(f.Name(), ".seed-tmp")
+		if _, err := os.Stat(target); err == nil {
+			t.Errorf("%s was installed before its data was flushed", target)
+		}
+		rel, _ := filepath.Rel(dst, target)
+		synced = append(synced, rel)
+		return orig(f)
+	}
+	t.Cleanup(func() { syncFile = orig })
+
+	if err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"bin/MistController", "bin/MistProcAV", "lib.a"}; strings.Join(synced, ",") != strings.Join(want, ",") {
+		t.Fatalf("flushed %v, want every copied file %v", synced, want)
+	}
 }
 
 func TestReconcileMistControllerConfig(t *testing.T) {
