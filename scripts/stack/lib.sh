@@ -828,15 +828,34 @@ dtsh_generation_signals() {
 
 # ---- tracks -----------------------------------------------------------------
 
-# latest_tracks <stream uuid>: "type codec WxH" lines from the newest track list.
-# timestamp has second precision and Mist emits several lists within one second
-# while tracks are added; the UUIDv7 event_id orders them within that second.
+# stream_origin_node <stream uuid>: the node of the stream's open ingest session,
+# in either cell: the publisher's buffer.
+stream_origin_node() {
+  local internal db node
+  internal=$(internal_name_of "$1")
+  [ -n "$internal" ] || return 1
+  for db in "$FOGHORN_A_DB" "$FOGHORN_B_DB"; do
+    node=$(pg "$db" "SELECT node_id FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$internal', 'live+$internal') AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
+    [ -n "$node" ] && { echo "$node"; return 0; }
+  done
+  return 1
+}
+# latest_tracks <stream uuid> [node]: "type codec WxH" lines from the newest track
+# list of the node (default: the stream's origin, stream_origin_node). Every node
+# holding the stream reports its own list under the same stream: a replica in
+# another cell carries only what viewers see, so a ladder's masked source is in
+# the origin's list alone. timestamp has second precision and Mist emits several
+# lists within one second while tracks are added; the UUIDv7 event_id orders
+# them within that second.
 latest_tracks() {
-  ch "SELECT track_list FROM periscope.track_list_events WHERE stream_id = toUUID('$1') ORDER BY timestamp DESC, toString(event_id) DESC LIMIT 1 FORMAT TSVRaw" |
+  local node=${2:-}
+  [ -n "$node" ] || node=$(stream_origin_node "$1") || return 1
+  ch "SELECT track_list FROM periscope.track_list_events WHERE stream_id = toUUID('$1') AND node_id = '$node' ORDER BY timestamp DESC, toString(event_id) DESC LIMIT 1 FORMAT TSVRaw" |
     jq -r '(if type=="array" then .[] else (to_entries[]|.value) end) | "\(.track_type // .type // .trackType) \(.codec) \(.width // 0)x\(.height // 0)"' 2>/dev/null
 }
-video_heights() { # video_heights <stream uuid>: sorted rendition heights, JPEG excluded
-  latest_tracks "$1" | awk '$1=="video" && $2!="JPEG" && $2!="PNG" {split($3,d,"x"); print d[2]}' | sort -n
+video_heights() { # video_heights <stream uuid> [node]: sorted rendition heights, JPEG excluded
+  latest_tracks "$1" "${2:-}" | awk '$1=="video" && $2!="JPEG" && $2!="PNG" {split($3,d,"x"); print d[2]}' | sort -n
 }
 
 # ---- webhooks ---------------------------------------------------------------

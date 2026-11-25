@@ -688,6 +688,28 @@ original_attachment_uses_runner_tools() (
 )
 expect 'original attachment check works with the runner toolchain' original_attachment_uses_runner_tools
 
+# Scenario 02 after its CPU fallback: the publisher's buffer on edge-node-1 lists
+# the masked 480 source and both renditions; a cell-B replica, whose list reached
+# Periscope last, lists only the renditions viewers see.
+ladder_heights_read_the_origin() (
+  local FOGHORN_A_DB=foghorn FOGHORN_B_DB=foghorn_b STACK_TENANT_ID=tenant
+  pg() {
+    case "$1|$2" in
+      commodore\|*"FROM commodore.streams"*) echo internal ;;
+      foghorn\|*"FROM foghorn.ingest_sessions"*"ended_at IS NULL"*) echo edge-node-1 ;;
+    esac
+  }
+  ch() {
+    local renditions='"r360":{"type":"video","codec":"H264","width":640,"height":360},"r480":{"type":"video","codec":"H264","width":854,"height":480}'
+    case "$1" in
+      *"node_id = 'edge-node-1'"*) echo "{$renditions,\"src\":{\"type\":\"video\",\"codec\":\"H264\",\"width\":854,\"height\":480}}" ;;
+      *) echo "{$renditions}" ;;
+    esac
+  }
+  [ "$(video_heights stream-uuid | tr '\n' ' ')" = "360 480 480 " ]
+)
+expect 'ladder heights read the publisher buffer, not a newer cell-B replica list' ladder_heights_read_the_origin
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
