@@ -6,7 +6,7 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: nginx-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-nginx-instance}"
     image: "${MOLECULE_DOCKER_IMAGE:-geerlingguy/docker-ubuntu2404-ansible:latest}"
     pre_build_image: true
     privileged: true

@@ -63,10 +63,16 @@ nginx_credential_path_prefixes:
 # URIs, first match wins. The CLI passes the pkg/ingress definition
 # (NginxCredentialURIMap); this default is kept identical for standalone and
 # molecule runs.
+# Escaped line breaks keep the rendered regex free of extra whitespace.
 nginx_credential_uri_map:
-  - regex: "^(?<fw_prefix>.*?/(?:ingest|webrtc|whip)/)[^/?]+(?<fw_rest>.*)$"
+  - regex:
+      "^(?<fw_prefix>.*?(?:/|%2[fF])(?:(?:i|%69)(?:n|%6[eE])(?:g|%67)(?:e|%65)(?:s|%73)(?:t|%74)|(?:w|%77)(?:e|\
+      %65)(?:b|%62)(?:r|%72)(?:t|%74)(?:c|%63)|(?:w|%77)(?:h|%68)(?:i|%69)(?:p|%70))(?:/|\
+      %2[fF]))[^/?]+(?<fw_rest>.*)$"
     value: "${fw_prefix}REDACTED${fw_rest}"
-  - regex: "^(?<fw_prefix>.*?/)[^/?]+(?<fw_rest>[.](?:mkv|webm).*)$"
+  - regex:
+      "^(?<fw_prefix>.*?(?:/|%2[fF]))[^/?]+(?<fw_rest>(?:[.]|%2[eE])(?:(?:m|%6[dD])(?:k|%6[bB])(?:v|%76)|(?:w|\
+      %77)(?:e|%65)(?:b|%62)(?:m|%6[dD])).*)$"
     value: "${fw_prefix}REDACTED${fw_rest}"
 nginx_server_names_hash_bucket_size: 128
 # A full SNI hostname can be 253 bytes; map buckets also hold hash metadata.

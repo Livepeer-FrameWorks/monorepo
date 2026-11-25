@@ -17,8 +17,12 @@ caddy_admin_listen: "localhost:2019"
 # Redacts the stream key from logged request URIs. The CLI passes the
 # pkg/ingress definition (CredentialURIRegexp, CredentialURIReplacement); this
 # default is kept identical for standalone and molecule runs.
+# Escaped line breaks keep the rendered regex free of extra whitespace.
 caddy_credential_uri_redaction:
-  regexp: "/(?:((?:ingest|webrtc|whip)/)[^/?]+|[^/?]+([.](?:mkv|webm)))"
-  replacement: "/${1}REDACTED${2}"
+  regexp:
+    "((?:/|%2[fF]))(?:((?:(?:i|%69)(?:n|%6[eE])(?:g|%67)(?:e|%65)(?:s|%73)(?:t|%74)|(?:w|%77)(?:e|%65)(?:b|\
+    %62)(?:r|%72)(?:t|%74)(?:c|%63)|(?:w|%77)(?:h|%68)(?:i|%69)(?:p|%70))(?:/|%2[fF]))[^/?]+|[^/?]+((?:[.]|\
+    %2[eE])(?:(?:m|%6[dD])(?:k|%6[bB])(?:v|%76)|(?:w|%77)(?:e|%65)(?:b|%62)(?:m|%6[dD]))))"
+  replacement: "${1}${2}REDACTED${3}"
 caddy_default_port_http: 80
 caddy_default_port_https: 443

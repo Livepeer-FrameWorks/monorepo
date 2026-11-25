@@ -16,6 +16,14 @@ func TestRedactCredentialURI(t *testing.T) {
 		"/view/sk_live.mkv":                  "/view/REDACTED.mkv",
 		"/sk_live.webm":                      "/REDACTED.webm",
 		"/view/sk_live.webm?rate=1":          "/view/REDACTED.webm?rate=1",
+		"/sk_live%2Emkv":                     "/REDACTED%2Emkv",
+		"/view/sk_live%2Ewebm":               "/view/REDACTED%2Ewebm",
+		"/%77ebrtc/sk_live":                  "/%77ebrtc/REDACTED",
+		"/webrtc%2Fsk_live":                  "/webrtc%2FREDACTED",
+		"/view%2f%77ebrtc%2fsk_live":         "/view%2f%77ebrtc%2fREDACTED",
+		"/sk_live%2e%6d%6B%76?rate=1":        "/REDACTED%2e%6d%6B%76?rate=1",
+		"/%69%6egest/sk_live":                "/%69%6egest/REDACTED",
+		"/%2577ebrtc/sk_live":                "/%2577ebrtc/sk_live",
 		"/hls/playback/index.m3u8":           "/hls/playback/index.m3u8",
 		"/view/hls/playback/index.m3u8":      "/view/hls/playback/index.m3u8",
 		"/view/webrtc":                       "/view/webrtc",
@@ -63,6 +71,8 @@ func TestNginxCredentialURIMapRedactsLikeCaddy(t *testing.T) {
 		"/webrtc/sk_live", "/whip/sk_live", "/ingest/sk_live?protocol=whip", "/view/webrtc/sk_live",
 		"/sk_live.mkv", "/view/sk_live.mkv", "/sk_live.webm", "/view/sk_live.webm?rate=1",
 		"/webrtc/sk_live.mkv", "/hls/playback/index.m3u8", "/view/webrtc", "/healthz", "/graphql?q=1",
+		"/sk_live%2Emkv", "/view/sk_live%2Ewebm", "/%77ebrtc/sk_live", "/webrtc%2Fsk_live",
+		"/view%2f%77ebrtc%2fsk_live", "/sk_live%2e%6d%6B%76?rate=1", "/%69%6egest/sk_live",
 	} {
 		if got, want := applyNginxMap(t, entries, uri), RedactCredentialURI(uri); got != want {
 			t.Errorf("nginx map logs %q as %q, Caddy filter as %q", uri, got, want)

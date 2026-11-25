@@ -28,13 +28,49 @@
         return_content: true
       register: caddy_log_fields
 
-    - name: Assert logged request URIs drop WHIP and Matroska stream keys
+    - name: Assert the global request URI filter is configured
       ansible.builtin.assert:
         that:
           - caddy_log_fields.json['request>uri'].filter == 'regexp'
-          - "'webrtc' in caddy_log_fields.json['request>uri'].regexp"
-          - "'mkv' in caddy_log_fields.json['request>uri'].regexp"
-          - "caddy_log_fields.json['request>uri'].value == '/${1}REDACTED${2}'"
+          - "'REDACTED' in caddy_log_fields.json['request>uri'].value"
+
+    - name: Request encoded publishing paths against the unavailable upstream
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:18091{{ item }}"
+        status_code: 502
+      loop:
+        - /sk_molecule_key%2Emkv
+        - /view/sk_molecule_key%2Ewebm
+        - /%77ebrtc/sk_molecule_key
+        - /webrtc%2Fsk_molecule_key
+
+    - name: Read Caddy's upstream error logs
+      ansible.builtin.command:
+        argv: [journalctl, --unit, caddy, --no-pager, --output, cat]
+      register: caddy_verify_logs
+      changed_when: false
+      until: >-
+        ('sk_molecule_key' in caddy_verify_logs.stdout) or
+        ('/REDACTED%2Emkv' in caddy_verify_logs.stdout and
+         '/view/REDACTED%2Ewebm' in caddy_verify_logs.stdout and
+         '/%77ebrtc/REDACTED' in caddy_verify_logs.stdout and
+         '/webrtc%2FREDACTED' in caddy_verify_logs.stdout)
+      retries: 10
+      delay: 1
+
+    - name: Assert upstream error logs redact every encoded publishing key
+      ansible.builtin.assert:
+        that:
+          - >-
+            '"uri":"/REDACTED%2Emkv"' in caddy_verify_logs.stdout
+          - >-
+            '"uri":"/view/REDACTED%2Ewebm"' in caddy_verify_logs.stdout
+          - >-
+            '"uri":"/%77ebrtc/REDACTED"' in caddy_verify_logs.stdout
+          - >-
+            '"uri":"/webrtc%2FREDACTED"' in caddy_verify_logs.stdout
+          - "'sk_molecule_key' not in caddy_verify_logs.stdout"
+        fail_msg: "upstream error log carries a publishing key: {{ caddy_verify_logs.stdout }}"
 
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:

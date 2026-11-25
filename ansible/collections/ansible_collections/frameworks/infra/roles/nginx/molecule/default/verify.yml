@@ -25,6 +25,10 @@
         - /whip/sk_molecule_key
         - /sk_molecule_key.mkv
         - /view/sk_molecule_key.webm
+        - /sk_molecule_key%2Emkv
+        - /view/sk_molecule_key%2Ewebm
+        - /%77ebrtc/sk_molecule_key
+        - /webrtc%2Fsk_molecule_key
 
     - name: Read the access log
       ansible.builtin.slurp:
@@ -39,6 +43,10 @@
           - "'GET /whip/REDACTED ' in nginx_verify_access"
           - "'GET /REDACTED.mkv ' in nginx_verify_access"
           - "'GET /view/REDACTED.webm ' in nginx_verify_access"
+          - "'GET /REDACTED%2Emkv ' in nginx_verify_access"
+          - "'GET /view/REDACTED%2Ewebm ' in nginx_verify_access"
+          - "'GET /%77ebrtc/REDACTED ' in nginx_verify_access"
+          - "'GET /webrtc%2FREDACTED ' in nginx_verify_access"
           - "'sk_molecule_key' not in nginx_verify_access"
         fail_msg: "access log carries a stream key: {{ nginx_verify_access }}"
 
