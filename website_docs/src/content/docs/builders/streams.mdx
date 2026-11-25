@@ -143,6 +143,17 @@ page:
 The stream becomes live once the media edge accepts the input and MistServer reports an active
 session.
 
+HTTP MKV pushes the Matroska or WebM body to the stream key's `.mkv` path on the edge's public
+HTTP origin. An edge offers it only when its MistServer reports a Matroska (EBML) listener;
+request `/ingest/{stream-key}?protocol=mkv` from the front door and use the returned `mkvUrl`,
+which GraphQL also exposes as `IngestEndpoint.mkvUrl`. Stream events report these sessions with
+the ingest protocol `INGEST_PROTOCOL_MKV`. E-RTMP multitrack and Matroska can carry several
+video tracks in one publish. A track that already matches a ladder rendition, as H264 without
+B-frames and with a size and bitrate in that rendition's
+[range](/builders/encoder-setup#original-tracks-used-as-renditions), is served as that rendition
+instead of being encoded again; tracks that fill no rendition are hidden once the ladder encodes
+one.
+
 ## Watch the Stream
 
 Use `playbackId` with the FrameWorks Player or raw `/play` URLs:

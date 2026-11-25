@@ -212,18 +212,51 @@ FrameWorks generates lower-quality renditions of your stream so viewers on slowe
 When you go live, the control plane attaches your tier's live process configuration to the stream.
 Every tier defaults to the **standard** ladder for live streams and VOD processing. Paid tiers also allow **qhd** and **uhd**:
 
-| Rendition       | Bitrate     | Added when the source is at least |
-| --------------- | ----------- | --------------------------------- |
-| 360p            | 900 kbps    | 640×360                           |
-| 480p            | 1600 kbps   | 850×480                           |
-| 720p            | 4500 kbps   | 1280×720                          |
-| 1080p           | 7800 kbps   | 1920×1080                         |
-| 1440p (qhd/uhd) | 10,800 kbps | 2560×1440                         |
-| 2160p (uhd)     | 15,000 kbps | 3840×2160                         |
+| Rendition       | Bitrate     | Added when the source's short side is at least |
+| --------------- | ----------- | ---------------------------------------------- |
+| 360p            | 900 kbps    | 360 px                                         |
+| 480p            | 1600 kbps   | 480 px                                         |
+| 720p            | 4500 kbps   | 720 px                                         |
+| 1080p           | 7800 kbps   | 1080 px                                        |
+| 1440p (qhd/uhd) | 10,800 kbps | 1440 px                                        |
+| 2160p (uhd)     | 15,000 kbps | 2160 px                                        |
 
-Sources smaller than 640×360 get no video renditions. Renditions keep the source frame rate and use
+The short side is the height of a landscape source and the width of a portrait one. When the
+source has several video tracks, the one with the highest bitrate is the source. Sources whose
+short side is below 360 px get no video renditions. Renditions keep the source frame rate and use
 `H264ConstrainedHigh`. Audio compatibility processes generate Opus when the incoming audio is not
 already Opus and AAC when it is not already AAC.
+
+### Original tracks used as renditions
+
+When a video track you send already matches a rendition, FrameWorks serves that track as the
+rendition instead of encoding it again. This covers the source itself and every extra video track
+of a multitrack publish (E-RTMP multitrack, HTTP Matroska) or a multi-rendition upload. A track
+fills a rendition when all of these hold:
+
+- it is H264, upright and not mirrored;
+- its short side is within 32 px of the rendition's, or 5% for 720p and above;
+- its bitrate is between half and twice the rendition's bitrate;
+- for live streams, it has no B-frames (set your encoder's B-frames to 0, or use the `baseline`
+  profile).
+
+| Rendition | Short side kept | Bitrate kept      |
+| --------- | --------------- | ----------------- |
+| 360p      | 328–392 px      | 450–1,800 kbps    |
+| 480p      | 448–512 px      | 800–3,200 kbps    |
+| 720p      | 684–756 px      | 2,250–9,000 kbps  |
+| 1080p     | 1026–1134 px    | 3,900–15,600 kbps |
+| 1440p     | 1368–1512 px    | 5,400–21,600 kbps |
+| 2160p     | 2052–2268 px    | 7,500–30,000 kbps |
+
+When two tracks qualify, the one whose bitrate is closest to the rendition's bitrate is used. A
+rendition filled by your own track is not transcoded and not billed as processing. The decision is
+made once, when the tracks arrive: FrameWorks waits up to 5 seconds for each track to report its
+size and bitrate, and a track that has not reported them by then is encoded instead. Changing the
+bitrate later does not switch a rendition between kept and encoded; reconnecting does.
+
+HEVC, rotated and mirrored tracks are still used as the source for encoding, but they never fill
+an H264 rendition themselves.
 
 Set a stream's advanced `liveVideoAbr` option to `OFF` to omit its live video
 renditions on the next ingest session. Audio compatibility and thumbnail
@@ -238,6 +271,8 @@ media node encodes the same ladder itself.
 
 - **Stream at the highest quality your upload supports.** The default ladder adds lower
   renditions up to the chosen ladder’s ceiling when the source is large enough.
+- **Send renditions yourself if you already encode them.** An E-RTMP multitrack or Matroska
+  publish whose tracks sit inside the ranges above is served as is, without a second encode.
 - **Viewers automatically get the best available quality their connection supports** via HLS ABR,
   with DASH and LL-HLS available alongside on every cluster.
 
@@ -251,7 +286,10 @@ A stream's choice applies on its next broadcast. A plan downgrade preserves a st
 uses the next allowed default until the account upgrades again. Custom process overrides remain
 independent of these named ladders. Live video ABR `OFF` still suppresses video renditions.
 
-The source track is masked in processed playback so it cannot conceal a missing rendition.
+Once at least one rendition is encoded, every original video track that fills no rendition, the
+source included, is hidden from playback and from the saved recording, so an off-ladder or
+out-of-range track cannot sit next to the encoded rendition that replaces it. Tracks that fill a
+rendition stay visible as that rendition. A source below every rendition keeps playing as is.
 Keep the [original upload](/builders/recordings#original-uploads) when source quality is needed.
 Named ladders preserve frame rate; they do not add a separate 60 fps profile.
 

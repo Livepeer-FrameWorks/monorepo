@@ -517,6 +517,20 @@ Set `transcodeLadder` on `CreateVodUploadInput` or `ImportVodAssetInput` to choo
 ladder for that upload. Omit it to inherit the account and plan defaults; a saved upload choice is
 used when multipart completion starts processing. See [ladder choices](/builders/encoder-setup#custom-transcoding-profiles).
 
+### Uploads that already contain renditions
+
+An MP4 or MKV file with several video tracks, for example 1080p, 720p and 360p exports of the same
+edit, keeps the tracks that already match a ladder rendition and encodes only the missing ones.
+The highest-bitrate video track is the source for those encodes. A track is kept when it is
+upright, unmirrored H264 with a size and bitrate inside that rendition's
+[range](/builders/encoder-setup#original-tracks-used-as-renditions); uploads may use B-frames.
+Kept renditions are not billed as processing.
+
+When at least one rendition is encoded, every original video track that fills no rendition, the
+source included, is left out of playback and the processed recording. A 720p track at 15 Mbps, for
+example, is replaced by an encoded 720p rendition instead of appearing next to it. The
+[original upload](#original-uploads) still keeps every track of the file you sent.
+
 ### VOD Playback
 
 Same URL pattern as all other content:

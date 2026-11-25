@@ -26,7 +26,7 @@ This changes a concrete behavior we found while tracing upload cleanup. Previous
 
 Keeping an original does not require serving it to every viewer. Standard playback still defaults to four renditions, from 360p through 1080p. Free accounts keep that ladder. Paid accounts can choose a 1440p ladder or a 4K ladder, adding one or two higher renditions to the same standard set.
 
-For the conference team, this means a large-screen screening can use 4K playback while smaller devices continue to choose lower renditions. A separate stream with a modest source can keep the standard choice. Renditions above the source size are skipped, so choosing the larger ladder does not create source detail that the camera never captured.
+For the conference team, this means a large-screen screening can use 4K playback while smaller devices continue to choose lower renditions. A separate stream with a modest source can keep the standard choice. Renditions larger than the source's short side are skipped, so choosing the larger ladder does not create source detail that the camera never captured. When the upload or live feed already carries a matching H264 rendition at a sensible bitrate, that track is served as the rendition instead of being encoded a second time.
 
 The account can set a default and override it for a stream or an upload. Live changes take effect with the next broadcast. The choices also survive a plan change: when a stored choice is outside the current plan, playback falls back to an allowed ladder. Upgrading restores the stored choice without requiring the team to find every affected stream.
 
