@@ -202,8 +202,8 @@ func TestClipSourceIdentityMapsStagedOrderOntoProcessingIDs(t *testing.T) {
 				t.Fatalf("source ids = %v, want {0}", ids)
 			}
 			// The 720p rendition is short, so the clip publishes source.
-			if got := chooseProcessingVideoSelector(logrus.NewEntry(log), processes, tracks, source, 21370, ids); got != "i0" {
-				t.Fatalf("selector = %q, want the recorded source i0", got)
+			if got := chooseProcessingVideoSelector(logrus.NewEntry(log), processes, tracks, source, 21370, ids); got != "0" {
+				t.Fatalf("selector = %q, want the recorded source at index 0", got)
 			}
 		}
 	}

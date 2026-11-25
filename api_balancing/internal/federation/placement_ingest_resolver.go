@@ -66,14 +66,12 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 	// changed while routing is routed again, so only a policy that forbids
 	// every destination refuses the publisher.
 	for round := 1; ; round++ {
-		result, err := resolver.Router.Route(ctx, balancer.PlacementRouteRequest{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName,
+		result, routeErr := resolver.Router.Route(ctx, balancer.PlacementRouteRequest{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName,
 			Verb: placement.Ingest, Protocol: request.Protocol, Policy: authority.Policy, PolicyDigest: authority.PolicyDigest, PolicyRevision: authority.PolicyRevision,
 			ParentRevision: authority.ParentRevision, Cells: authority.Cells, Location: request.Location, ActiveIngestClusterID: ownership.Cluster,
 			ArrivalClusterIDs:      control.ServedClustersSnapshot(),
 			TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion})
-		if err != nil {
-			return balancer.PlacementPreparationResult{}, err
-		}
+		// A failed observation can mean this snapshot was superseded too.
 		current, err := read()
 		if err != nil {
 			return balancer.PlacementPreparationResult{}, err
@@ -82,6 +80,9 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 			return balancer.PlacementPreparationResult{}, ctxErr
 		}
 		if placementDecisionFactsEqual(authority, current) {
+			if routeErr != nil {
+				return balancer.PlacementPreparationResult{}, routeErr
+			}
 			return result.Preparation, nil
 		}
 		if round == placementAuthorityRounds {

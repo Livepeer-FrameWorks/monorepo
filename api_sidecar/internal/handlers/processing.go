@@ -2246,11 +2246,12 @@ type processingMetaVideoTrack struct {
 func (t processingMetaVideoTrack) spanMs() float64 { return t.lastms - t.firstms }
 
 func (t processingMetaVideoTrack) selector() string {
-	if t.hasTrackID {
-		return "i" + strconv.FormatInt(t.trackID, 10)
-	}
+	// Producer-local IDs may repeat across the original and generated tracks.
 	if t.hasTrackIndex {
 		return strconv.Itoa(t.trackIndex)
+	}
+	if t.hasTrackID {
+		return "i" + strconv.FormatInt(t.trackID, 10)
 	}
 	return ""
 }

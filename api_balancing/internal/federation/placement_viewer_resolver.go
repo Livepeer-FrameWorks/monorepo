@@ -144,15 +144,17 @@ func (resolver *ViewerPlacementResolver) PrepareViewer(ctx context.Context, requ
 		if subject, err = resolver.subject(ctx, request); err != nil {
 			return balancer.PlacementPreparationResult{}, err
 		}
-		if result, err = resolver.Router.Route(ctx, resolver.routeRequest(subject, request)); err != nil {
-			return balancer.PlacementPreparationResult{}, err
-		}
+		var routeErr error
+		result, routeErr = resolver.Router.Route(ctx, resolver.routeRequest(subject, request))
 		if current, err = subject.read(); err != nil {
 			return balancer.PlacementPreparationResult{}, err
 		}
 		// A version advance that leaves every decision fact unchanged does not
 		// invalidate the route; the source generation check below still binds it.
 		if placementDecisionFactsEqual(subject.authority, current) {
+			if routeErr != nil {
+				return balancer.PlacementPreparationResult{}, routeErr
+			}
 			break
 		}
 		if round == placementAuthorityRounds {
