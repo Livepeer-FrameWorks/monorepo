@@ -94,6 +94,64 @@ func TestFencedFederatedOwnershipSurvivesStaleReplicaWrites(t *testing.T) {
 	requireCurrent("stale replica withdrawal")
 }
 
+// An outage admission is a legacy owner (no lease epoch) that the cell's
+// database serializes after the fenced owner it replaces. Its later revision
+// must replace the withdrawn fenced owner on every replica and in every peer
+// cell, and a delayed write of that fenced owner must not resurrect it.
+func TestOutageLegacyOwnerReplacesWithdrawnFencedOwner(t *testing.T) {
+	store, client, _ := newTestRedis(t)
+	makeReplica := func(store *RedisRegistryStore, id string) *StreamRegistry {
+		r := NewStreamRegistry(nil, "local", time.Minute)
+		r.redisStore = store
+		r.instanceID = id
+		return r
+	}
+	a := makeReplica(store, "a")
+	ctx := t.Context()
+	fenced := PublisherRuntimeBinding{TenantID: "tenant", RuntimeName: "live+stream_fw1p_0123456789abcdef0123456789abcdef", LayoutVersion: 1, LeaseEpoch: 4, ClusterID: "local"}
+	if _, _, applied, err := a.projectSourceWithPriorGenerationContext(ctx, "stream", "node", 11, "trigger-1", "fenced", 1, fenced); err != nil || !applied {
+		t.Fatalf("fenced projection: applied=%v err=%v", applied, err)
+	}
+	if applied, err := a.PublishSourceInactiveContext(ctx, "stream", "node", "fenced", 2); err != nil || !applied {
+		t.Fatalf("fenced withdrawal: applied=%v err=%v", applied, err)
+	}
+	outage := PublisherRuntimeBinding{TenantID: "tenant", RuntimeName: "live+stream", ClusterID: "local"}
+	if _, _, applied, err := a.projectSourceWithPriorGenerationContext(ctx, "stream", "node", 12, "trigger-2", "outage", 3, outage); err != nil || !applied {
+		t.Fatalf("outage projection: applied=%v err=%v", applied, err)
+	}
+	entry, found, err := store.GetSource(ctx, "stream")
+	got := entry.Locations["local"]
+	if err != nil || !found || !got.SourceActive || got.SourceGeneration != "outage" || got.SourceLeaseEpoch != 0 || got.SourceRevision != 3 {
+		t.Fatalf("shared store kept the withdrawn fenced owner over the outage owner: found=%v loc=%+v err=%v", found, got, err)
+	}
+
+	// A replica that cached the withdrawal merges the outage owner from the shared store.
+	b := makeReplica(NewRedisRegistryStore(client, "cluster-test"), "b")
+	withdrawn := Location{ClusterID: "local", OwnerNodeID: "node", SourceGeneration: "fenced", SourceLeaseEpoch: 4, SourceRevision: 2}
+	b.byInt["stream"] = &cachedEntry{entry: StreamEntry{TenantID: "tenant", InternalName: "stream", Locations: map[string]Location{"local": withdrawn}}, cached: time.Now()}
+	merged := mergeStreamEntry(b.byInt["stream"].entry, entry)
+	if loc := merged.Locations["local"]; !loc.SourceActive || loc.SourceGeneration != "outage" || loc.SourceLeaseEpoch != 0 {
+		t.Fatalf("replica merge kept the withdrawn fenced owner: %+v", loc)
+	}
+	// A delayed write of the ended fenced owner orders before the outage owner.
+	stale := Location{ClusterID: "local", OwnerNodeID: "node", SourceActive: true, SourceGeneration: "fenced", SourceLeaseEpoch: 4, SourceRevision: 1, SourceRuntimeName: fenced.RuntimeName}
+	if loc := mergeLocationRevisioned(got, stale); !loc.SourceActive || loc.SourceGeneration != "outage" || loc.SourceLeaseEpoch != 0 {
+		t.Fatalf("delayed fenced write resurrected the ended owner: %+v", loc)
+	}
+
+	// A peer cell orders the same advertisements the same way.
+	peer := NewStreamRegistry(nil, "remote", time.Minute)
+	identity := StreamEntry{TenantID: "tenant", InternalName: "stream"}
+	peer.UpsertFederatedSource("cell-a", identity, Location{IsLiveNow: true, SourceActive: true, OwnerNodeID: "node", SourceGeneration: "fenced", SourceLeaseEpoch: 4, SourceRevision: 1})
+	peer.UpsertFederatedSource("cell-a", identity, Location{OwnerNodeID: "node", SourceGeneration: "fenced", SourceLeaseEpoch: 4, SourceRevision: 2})
+	peer.UpsertFederatedSource("cell-a", identity, Location{IsLiveNow: true, SourceActive: true, OwnerNodeID: "node", SourceGeneration: "outage", SourceRevision: 3})
+	peer.UpsertFederatedSource("cell-a", identity, Location{IsLiveNow: true, SourceActive: true, OwnerNodeID: "node", SourceGeneration: "fenced", SourceLeaseEpoch: 4, SourceRevision: 1})
+	peerEntry, ok := peer.lookup(peer.byInt, "stream")
+	if loc := peerEntry.Locations["cell-a"]; !ok || !loc.SourceActive || loc.SourceGeneration != "outage" || loc.SourceLeaseEpoch != 0 {
+		t.Fatalf("peer kept the withdrawn fenced owner over the outage owner: found=%v loc=%+v", ok, loc)
+	}
+}
+
 func TestLegacyWithdrawalCannotRemoveFencedPublisher(t *testing.T) {
 	r := NewStreamRegistry(nil, "local", time.Minute)
 	identity := StreamEntry{TenantID: "tenant", InternalName: "stream"}
