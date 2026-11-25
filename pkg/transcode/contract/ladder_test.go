@@ -11,6 +11,7 @@ func TestRenditionPolicyRefusesAmbiguousOrUnsafeNames(t *testing.T) {
 		"reserved source": func(r *RenditionSpec) { r.Name = "source" }, "path": func(r *RenditionSpec) { r.Name = "../720p" },
 		"no bitrate": func(r *RenditionSpec) { r.Bitrate = 0 }, "unreadable size": func(r *RenditionSpec) { r.Resolution = "720p" },
 		"invalid codec": func(r *RenditionSpec) { r.Codec = "libx264;command" }, "invalid profile": func(r *RenditionSpec) { r.Profile = "extreme" },
+		"HEVC profile": func(r *RenditionSpec) { r.Codec = "HEVC" }, "AV1 profile": func(r *RenditionSpec) { r.Codec, r.Profile = "AV1", "main" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := valid
