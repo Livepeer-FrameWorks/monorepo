@@ -5,7 +5,7 @@
 		validate-migrations verify-release-state test-release-state test-release-preflight release-preflight release-tag verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-lookout-db verify-bosun-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-schema-yugabyte-schema verify-schema-yugabyte-selection-contracts verify-schema-yugabyte-engine-contracts verify-schema-yugabyte-database-contracts verify-yugabyte-contract-lanes verify-yugabyte-service-suites verify-yugabyte-services verify-yugabyte-service verify-yugabyte-database verify-yugabyte-role-engine yugabyte-role-engine-contracts yugabyte-role-engine-collections yugabyte-role-engine-contracts-a yugabyte-role-engine-contracts-b verify-yugabyte-shared-fixture yugabyte-lane-1 yugabyte-lane-2 yugabyte-lane-3 yugabyte-lane-4 yugabyte-lane-5 yugabyte-lane-6 yugabyte-ci-matrix verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-skipper-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-foghorn-contracts verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-ha measure-yugabyte-connection-warmth verify-schema-clickhouse verify-feature-registry generate-pricing-catalog verify-pricing-catalog seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		verify-backup-restore-postgres verify-backup-restore-clickhouse verify-backup-restore-yugabyte \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
-		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
+		ansible-lint-image ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
@@ -478,10 +478,10 @@ verify-yugabyte-contracts:
 	$(MAKE) --no-print-directory verify-schema-yugabyte
 	$(MAKE) --no-print-directory verify-yugabyte-ha
 
-# The collections the yugabyte role contract runs, installed as the CI "Yugabyte database contract" job installs
-# them: prometheus.prometheus declares support only up to ansible-core 2.18, and the contract runs a newer one.
+# The collections the yugabyte role contract runs, installed by the pinned ansible-core of the Ansible tool image
+# (ansible-galaxy-install), whichever ansible-core the host has.
 verify-yugabyte-contracts-deps:
-	ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore $(MAKE) --no-print-directory ansible-galaxy-install
+	$(MAKE) --no-print-directory ansible-galaxy-install
 
 # The CI "Frontend lint" job, step for step (.github/workflows/ci.yml). Rebase
 # conflict resolutions and generated docs bypass the pre-commit Prettier hook.
@@ -2445,7 +2445,9 @@ dead-code: dead-code-go dead-code-ts dead-code-report
 
 # ---- Ansible (collection-driven provisioning) -----------------------------
 # ansible-galaxy-install   resolve collections into a local cache.
-# ansible-lint             lint the frameworks.infra collection.
+# ansible-lint-image       build the CI lint job's toolchain image if it is missing.
+# ansible-lint             lint the frameworks.infra collection (in that image).
+# ansible-yamllint         yamllint the collection and playbooks (in that image).
 # ansible-check            syntax-check every playbook under ansible/playbooks.
 # ansible-molecule         run one role's Molecule default scenario.
 # provision-hello          end-to-end wiring smoke against localhost.
@@ -2466,21 +2468,46 @@ ANSIBLE_MOLECULE_ENV := $(ANSIBLE_ENV) \
 	MOLECULE_NO_LOG=false \
 	MOLECULE_DOCKER_IMAGE=$(ANSIBLE_MOLECULE_IMAGE)
 
-ansible-galaxy-install:
+# The CI lint job's toolchain as a local image: python:3.12-slim plus
+# requirements-ci-lint.txt, installed as CI installs them. The tag is a hash of
+# both inputs, so a missing image or a changed input builds a new one.
+ANSIBLE_LINT_IMAGE_INPUTS := $(ANSIBLE_DIR)/lint.Dockerfile $(ANSIBLE_DIR)/requirements-ci-lint.txt
+ANSIBLE_LINT_IMAGE = frameworks-ansible-lint:$(shell cat $(ANSIBLE_LINT_IMAGE_INPUTS) | git hash-object --stdin | cut -c1-16)
+# The repo is mounted at its host path, which carries $(ANSIBLE_DIR)/.cache, so
+# ANSIBLE_ENV and the cd into $(ANSIBLE_DIR) work unchanged. The tools run as the
+# host uid, with HOME (the ansible-compat cache) under $(ANSIBLE_DIR)/.cache.
+ANSIBLE_LINT_HOME := $(CURDIR)/$(ANSIBLE_DIR)/.cache/lint-home
+ANSIBLE_LINT_RUN = docker run --rm --init --user "$$(id -u):$$(id -g)" \
+	-v "$(CURDIR):$(CURDIR)" -w "$$PWD" -e HOME=$(ANSIBLE_LINT_HOME) $(ANSIBLE_LINT_IMAGE)
+# Every Ansible tool a target runs, the collection and role install included, runs in that image,
+# never with the host's ansible-core, whose version the pinned collections may refuse.
+ANSIBLE_RUN = $(ANSIBLE_LINT_RUN)
+
+ansible-lint-image:
+	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP) $(ANSIBLE_HOME) $(ANSIBLE_LINT_HOME)
+	@image='$(ANSIBLE_LINT_IMAGE)'; \
+	if docker image inspect "$$image" >/dev/null 2>&1; then \
+		echo "=== Using $$image ==="; \
+	else \
+		echo "=== Building $$image ==="; \
+		tar -cf - -C $(ANSIBLE_DIR) lint.Dockerfile requirements-ci-lint.txt | docker build -f lint.Dockerfile -t "$$image" -; \
+	fi
+
+ansible-galaxy-install: ansible-lint-image
 	@echo "=== Installing Ansible collections ==="
 	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP) $(ANSIBLE_HOME)
-	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_RUN) env $(ANSIBLE_ENV) ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
 	@echo "=== Installing Ansible roles ==="
-	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy role install --force -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_RUN) env $(ANSIBLE_ENV) ansible-galaxy role install --force -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
 
 ansible-lint: ansible-galaxy-install
 	@echo "=== Linting frameworks.infra collection ==="
-	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-lint --profile=production \
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_RUN) env $(ANSIBLE_ENV) ansible-lint --profile=production \
 		collections/ansible_collections/frameworks/infra
 
-ansible-yamllint:
+ansible-yamllint: ansible-lint-image
 	@echo "=== yamllint on ansible tree ==="
-	cd $(ANSIBLE_DIR) && yamllint -s collections/ansible_collections/frameworks/infra playbooks
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_RUN) yamllint -s collections/ansible_collections/frameworks/infra playbooks
 
 ansible-test: ansible-galaxy-install ansible-check ansible-lint ansible-yamllint
 	@echo "=== ansible test suite complete ==="
