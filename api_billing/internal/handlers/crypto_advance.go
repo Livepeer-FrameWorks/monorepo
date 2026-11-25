@@ -121,25 +121,26 @@ func decodeCryptoAdvance(raw []byte) (CryptoBillingProfile, error) {
 }
 
 // resizeCryptoAdvance values every received token at the accepted rate. An
-// overpayment buys additional net credit and retains its own share of VAT.
-func resizeCryptoAdvance(profile *CryptoBillingProfile, cash fx.Record) error {
+// overpayment buys additional net credit and retains its own share of VAT, in
+// EUR the rate on its EUR net (advanceMoney); the receipt is recorded at the
+// EUR gross it returns, which the tax document states.
+func resizeCryptoAdvance(profile *CryptoBillingProfile, cash fx.Record) (fx.Record, error) {
 	if profile.TaxAssessment == nil || profile.TaxAssessment.Advance == nil {
-		return fmt.Errorf("missing frozen crypto advance")
+		return fx.Record{}, fmt.Errorf("missing frozen crypto advance")
 	}
 	original := profile.TaxAssessment.Advance
 	if cash.OriginalMinor == original.GrossOriginal && cash.EURMinor == original.GrossEUR {
-		return nil
+		return cash, nil
 	}
 	net, vat := extractVATInclusive(cash.OriginalMinor, original.RateBPS)
-	convertedVAT, err := fx.RecordToEUR(vat, cash.Rate())
+	money, resized, err := advanceMoney(net, vat, cash.OriginalMinor, original.RateBPS, cash.Rate())
 	if err != nil {
-		return err
+		return fx.Record{}, err
 	}
-	money := AdvanceMoney{NetOriginal: net, VATOriginal: vat, GrossOriginal: cash.OriginalMinor, NetEUR: cash.EURMinor - convertedVAT.EURMinor, VATEUR: convertedVAT.EURMinor, GrossEUR: cash.EURMinor, Currency: cash.OriginalCurrency, RateBPS: original.RateBPS}
 	copyAssessment := *profile.TaxAssessment
 	copyAssessment.Advance = &money
 	profile.TaxAssessment = &copyAssessment
-	return nil
+	return resized, nil
 }
 
 func recoverX402AdvanceTx(ctx context.Context, tx *sql.Tx, tenant, nonce, hash, transactionID string, amount, balance int64) error {

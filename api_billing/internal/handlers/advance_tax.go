@@ -34,28 +34,38 @@ func QuoteFiatPrepaidAdvance(ctx context.Context, db *sql.DB, tenant string, net
 }
 
 // AdvanceMoney separates the gross cash receipt from the net service credit.
-// VAT is rounded in the payment currency and valued at the locked FX rate.
+// The payment-currency figures are VAT on top of the net in that currency; the
+// EUR figures, the ones the tax document states VAT in, are the net valued at
+// the locked FX rate with VAT on top of it, rounded once.
 type AdvanceMoney = billingtax.AdvanceMoney
 
 func quoteAdvanceMoney(netOriginal int64, rateBPS int, rate fx.Rate) (AdvanceMoney, fx.Record, error) {
-	a := AdvanceMoney{NetOriginal: netOriginal, Currency: rate.Currency, RateBPS: rateBPS}
 	if netOriginal <= 0 || rateBPS < 0 || rateBPS > 10000 {
-		return a, fx.Record{}, fmt.Errorf("invalid advance price or VAT rate")
+		return AdvanceMoney{NetOriginal: netOriginal, Currency: rate.Currency, RateBPS: rateBPS}, fx.Record{}, fmt.Errorf("invalid advance price or VAT rate")
 	}
-	a.VATOriginal, a.GrossOriginal = exclusiveTax(netOriginal, rateBPS)
-	cash, err := fx.RecordToEUR(a.GrossOriginal, rate)
+	vatOriginal, grossOriginal := exclusiveTax(netOriginal, rateBPS)
+	return advanceMoney(netOriginal, vatOriginal, grossOriginal, rateBPS, rate)
+}
+
+// advanceMoney values a receipt of grossOriginal, netOriginal of it net, in EUR at rate: the net
+// at the rate, VAT on top of that EUR net (exclusiveTax), and the receipt recorded at their sum.
+// Valuing the gross and the VAT apart would round each and could state a VAT that is not the
+// rate on the net. The recorded EUR gross differs from the gross valued alone by at most a cent.
+func advanceMoney(netOriginal, vatOriginal, grossOriginal int64, rateBPS int, rate fx.Rate) (AdvanceMoney, fx.Record, error) {
+	a := AdvanceMoney{NetOriginal: netOriginal, VATOriginal: vatOriginal, GrossOriginal: grossOriginal, Currency: rate.Currency, RateBPS: rateBPS}
+	net, err := fx.RecordToEUR(netOriginal, rate)
 	if err != nil {
 		return a, fx.Record{}, err
 	}
-	vat, err := fx.RecordToEUR(a.VATOriginal, rate)
-	if err != nil {
-		return a, fx.Record{}, err
-	}
-	a.GrossEUR = cash.EURMinor
-	a.VATEUR = vat.EURMinor
-	a.NetEUR = a.GrossEUR - a.VATEUR
+	a.NetEUR = net.EURMinor
 	if a.NetEUR <= 0 {
 		return a, fx.Record{}, fmt.Errorf("advance is below EUR minor-unit precision")
 	}
+	a.VATEUR, a.GrossEUR = exclusiveTax(a.NetEUR, rateBPS)
+	cash, err := fx.RecordToEUR(grossOriginal, rate)
+	if err != nil {
+		return a, fx.Record{}, err
+	}
+	cash.EURMinor = a.GrossEUR
 	return a, cash, nil
 }

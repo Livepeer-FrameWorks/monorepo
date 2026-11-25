@@ -853,7 +853,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 		if err != nil {
 			return 0, "", err
 		}
-		if err = resizeCryptoAdvance(&wallet.TaxProfile, advanceCash); err != nil {
+		if advanceCash, err = resizeCryptoAdvance(&wallet.TaxProfile, advanceCash); err != nil {
 			return 0, "", err
 		}
 		amountCents = wallet.TaxProfile.TaxAssessment.Advance.NetEUR
