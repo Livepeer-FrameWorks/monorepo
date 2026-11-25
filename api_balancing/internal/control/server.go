@@ -9114,12 +9114,14 @@ func processingFailureIgnoreReason(jobStatus, assignedNode, reportingNode string
 
 // ProcessingFailureReason classifies a processing job's error for the public
 // upload.failed / clip.failed events. Helmsman reports an unreachable source as
-// "source unavailable: <status>"; the stale-recovery and Helmsman timeouts name
-// a stall, a timeout, or exhausted retries.
+// "source unavailable: <status>", after the name of the stage that met it
+// ("processing memory admission: ", "clip readiness failed: "); the
+// stale-recovery and Helmsman timeouts name a stall, a timeout, or exhausted
+// retries.
 func ProcessingFailureReason(errMsg string) publicv1.MediaFailureReason {
 	msg := strings.ToLower(strings.TrimSpace(errMsg))
 	switch {
-	case strings.HasPrefix(msg, "source unavailable"):
+	case strings.HasPrefix(msg, "source unavailable:"), strings.Contains(msg, ": source unavailable:"):
 		return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE
 	case strings.Contains(msg, "timeout"), strings.Contains(msg, "stalled"),
 		strings.Contains(msg, "no processing progress"), strings.Contains(msg, "max retries exceeded"):
