@@ -1017,6 +1017,9 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, 
 // Handle executes a processing job: activates the processing+ wildcard stream,
 // starts a push to local disk as MKV, validates RECORDING_END, reports result.
 func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
+	send, flushTerminal := deferProcessingTerminalResult(send)
+	defer flushTerminal()
+
 	if send != nil && req.GetTenantId() != "" {
 		forward := send
 		send = func(message *ipcpb.ControlMessage) {
