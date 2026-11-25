@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -15,24 +16,45 @@ import (
 // Caddy `regexp` log filter, which every supported Caddy version has; the
 // `multi_regexp` filter only exists from Caddy 2.11. Characters that would
 // need escaping in a Caddyfile, Jinja or YAML string are avoided.
-const CredentialURIRegexp = `/(?:(` + credentialPathPrefix + `)` + credentialKey + `|` + credentialKey + `(` + matroskaSuffix + `))`
+var CredentialURIRegexp = `(` + credentialSlash + `)(?:(` + credentialPathPrefix + `)` + credentialKey + `|` + credentialKey + `(` + matroskaSuffix + `))`
 
 // The parts every rendered redaction is built from.
 const (
 	// credentialPathSegments are the path segments a stream key follows:
 	// the Foghorn ingest front door and WHIP's two publish paths.
 	credentialPathSegments = `ingest|webrtc|whip`
-	// credentialPathPrefix matches one credential path segment and its slash.
-	credentialPathPrefix = `(?:` + credentialPathSegments + `)/`
+	credentialSlash        = `(?:/|%2[fF])`
 	// credentialKey is the stream-key path segment itself.
 	credentialKey = `[^/?]+`
-	// matroskaSuffix is the extension a Matroska push appends to the key.
-	matroskaSuffix = `[.](?:mkv|webm)`
 )
+
+// Mist decodes the path once before routing. Match the equivalent raw URI
+// spellings because both proxies log the original, escaped request target.
+var (
+	credentialPathPrefix = `(?:` + encodedPathLiteral("ingest") + `|` + encodedPathLiteral("webrtc") + `|` + encodedPathLiteral("whip") + `)` + credentialSlash
+	matroskaSuffix       = `(?:[.]|%2[eE])(?:` + encodedPathLiteral("mkv") + `|` + encodedPathLiteral("webm") + `)`
+)
+
+func encodedPathLiteral(path string) string {
+	var pattern strings.Builder
+	for _, c := range []byte(path) {
+		encoded := fmt.Sprintf("%02x", c)
+		pattern.WriteString("(?:" + string(c) + "|%")
+		for _, digit := range encoded {
+			if digit >= 'a' && digit <= 'f' {
+				pattern.WriteString("[" + string(digit) + strings.ToUpper(string(digit)) + "]")
+			} else {
+				pattern.WriteRune(digit)
+			}
+		}
+		pattern.WriteByte(')')
+	}
+	return pattern.String()
+}
 
 // CredentialURIReplacement replaces a CredentialURIRegexp match, keeping the
 // path prefix and the Matroska extension.
-const CredentialURIReplacement = `/${1}REDACTED${2}`
+const CredentialURIReplacement = `${1}${2}REDACTED${3}`
 
 var credentialURI = regexp.MustCompile(CredentialURIRegexp)
 
@@ -63,8 +85,8 @@ type NginxMapEntry struct {
 func NginxCredentialURIMap() []NginxMapEntry {
 	const value = `${fw_prefix}REDACTED${fw_rest}`
 	return []NginxMapEntry{
-		{Regex: `^(?<fw_prefix>.*?/` + credentialPathPrefix + `)` + credentialKey + `(?<fw_rest>.*)$`, Value: value},
-		{Regex: `^(?<fw_prefix>.*?/)` + credentialKey + `(?<fw_rest>` + matroskaSuffix + `.*)$`, Value: value},
+		{Regex: `^(?<fw_prefix>.*?` + credentialSlash + credentialPathPrefix + `)` + credentialKey + `(?<fw_rest>.*)$`, Value: value},
+		{Regex: `^(?<fw_prefix>.*?` + credentialSlash + `)` + credentialKey + `(?<fw_rest>` + matroskaSuffix + `.*)$`, Value: value},
 	}
 }
 

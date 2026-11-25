@@ -94,10 +94,14 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 
 		const key = "sk_live_realcaddy"
 		paths := map[string]string{
-			"/webrtc/" + key:        "/webrtc/REDACTED",
-			"/" + key + ".mkv":      "/REDACTED.mkv",
-			"/view/" + key + ".mkv": "/view/REDACTED.mkv",
-			"/" + key + ".webm":     "/REDACTED.webm",
+			"/webrtc/" + key:           "/webrtc/REDACTED",
+			"/" + key + ".mkv":         "/REDACTED.mkv",
+			"/view/" + key + ".mkv":    "/view/REDACTED.mkv",
+			"/" + key + ".webm":        "/REDACTED.webm",
+			"/" + key + "%2Emkv":       "/REDACTED%2Emkv",
+			"/view/" + key + "%2Ewebm": "/view/REDACTED%2Ewebm",
+			"/%77ebrtc/" + key:         "/%77ebrtc/REDACTED",
+			"/webrtc%2F" + key:         "/webrtc%2FREDACTED",
 		}
 		for path := range paths {
 			noSNIGet(t, addr, realCaddyEdgeDomain, path)

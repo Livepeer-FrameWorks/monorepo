@@ -42,6 +42,10 @@ func TestNginxAccessLogRedactsPublishingCredentials(t *testing.T) {
 		"/" + key + ".mkv":         "/REDACTED.mkv",
 		"/view/" + key + ".mkv":    "/view/REDACTED.mkv",
 		"/" + key + ".webm":        "/REDACTED.webm",
+		"/" + key + "%2Emkv":       "/REDACTED%2Emkv",
+		"/view/" + key + "%2Ewebm": "/view/REDACTED%2Ewebm",
+		"/%77ebrtc/" + key:         "/%77ebrtc/REDACTED",
+		"/webrtc%2F" + key:         "/webrtc%2FREDACTED",
 		"/hls/playback/index.m3u8": "/hls/playback/index.m3u8",
 	}
 	for name, config := range configs {
