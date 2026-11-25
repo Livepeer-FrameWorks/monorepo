@@ -58,11 +58,37 @@ func TestCryptoAdvanceOverpaymentSeparatesAdditionalVAT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = resizeCryptoAdvance(&profile, extra); err != nil {
+	resized, err := resizeCryptoAdvance(&profile, extra)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.TaxAssessment.Advance.NetEUR != 16000 || profile.TaxAssessment.Advance.VATEUR != 3360 || money.NetEUR != 8000 {
-		t.Fatalf("overpayment=%+v original=%+v", profile.TaxAssessment.Advance, money)
+	if profile.TaxAssessment.Advance.NetEUR != 16000 || profile.TaxAssessment.Advance.VATEUR != 3360 || money.NetEUR != 8000 ||
+		resized.EURMinor != profile.TaxAssessment.Advance.GrossEUR || resized.OriginalMinor != 24200 {
+		t.Fatalf("overpayment=%+v original=%+v cash=%+v", profile.TaxAssessment.Advance, money, resized)
+	}
+	// An overpayment whose payment-currency VAT rounds apart from its EUR net still states
+	// VAT EUR as the rate on that net, at the EUR gross its receipt is recorded at.
+	odd := fx.Rate{Currency: "USD", UnitsPerEUR: decimal.RequireFromString("1.1713"), Source: "ecb", ReferenceDate: time.Now().UTC()}
+	small, _, err := quoteAdvanceMoney(500, 2100, odd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.TaxAssessment.Advance = &small
+	for paid := small.GrossOriginal + 1; paid < small.GrossOriginal+400; paid++ {
+		receipt, recordErr := fx.RecordToEUR(paid, odd)
+		if recordErr != nil {
+			t.Fatal(recordErr)
+		}
+		got, resizeErr := resizeCryptoAdvance(&profile, receipt)
+		if resizeErr != nil {
+			t.Fatal(resizeErr)
+		}
+		a := profile.TaxAssessment.Advance
+		wantVAT, _ := exclusiveTax(a.NetEUR, 2100)
+		if a.VATEUR != wantVAT || a.NetEUR+a.VATEUR != a.GrossEUR || got.EURMinor != a.GrossEUR || a.GrossOriginal != paid {
+			t.Fatalf("paid USD %d: advance=%+v cash=%+v, want VAT EUR %d", paid, a, got, wantVAT)
+		}
+		profile.TaxAssessment.Advance = &small
 	}
 }
 
