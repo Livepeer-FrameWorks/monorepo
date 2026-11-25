@@ -156,27 +156,39 @@ func TestResolveNodeClusterID_HangingQuartermasterIsOneBoundedAttempt(t *testing
 	}
 }
 
-// Discovery that cannot be made answers from the last known gateways whatever
-// their age, so a Quartermaster outage keeps Livepeer transcoding on the
-// gateways it last assigned.
+// Discovery that cannot be made answers from the last known gateways while that answer is younger
+// than the DNS health freshness window, so a Quartermaster outage keeps Livepeer transcoding on the
+// gateways it last assigned. An older answer is no gateway: it may name one that died since, which
+// Quartermaster would no longer publish either, and the transcode falls back locally.
 func TestApplyLivepeerBroadcasters_UnreachableQuartermasterUsesLastKnownGateways(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string][]string{"cluster-x": {"gw.x.example.com"}})
-	p := newGatewayProcessor(t, disc, "cluster-x")
-	if got := p.ApplyLivepeerBroadcasters(gatewayTemplate); !strings.Contains(got, "gw.x.example.com") {
-		t.Fatalf("initial resolution = %q", got)
-	}
-	p.gatewayMu.Lock()
-	entry := p.gatewayURLs["cluster-x"]
-	entry.resolvedAt = time.Now().Add(-time.Hour)
-	p.gatewayURLs["cluster-x"] = entry
-	p.gatewayMu.Unlock()
-	p.QuartermasterOutageBackoff().RecordUnreachable(status.Error(codes.Unavailable, "quartermaster is down"))
+	for _, test := range []struct {
+		name    string
+		age     time.Duration
+		gateway bool
+	}{
+		{"within the freshness window", 2 * time.Minute, true},
+		{"older than the freshness window", time.Hour, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			disc := newFakeGatewayDiscoverer(map[string][]string{"cluster-x": {"gw.x.example.com"}})
+			p := newGatewayProcessor(t, disc, "cluster-x")
+			if got := p.ApplyLivepeerBroadcasters(gatewayTemplate); !strings.Contains(got, "gw.x.example.com") {
+				t.Fatalf("initial resolution = %q", got)
+			}
+			p.gatewayMu.Lock()
+			entry := p.gatewayURLs["cluster-x"]
+			entry.resolvedAt = time.Now().Add(-test.age)
+			p.gatewayURLs["cluster-x"] = entry
+			p.gatewayMu.Unlock()
+			p.QuartermasterOutageBackoff().RecordUnreachable(status.Error(codes.Unavailable, "quartermaster is down"))
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
-	if !strings.Contains(got, "gw.x.example.com") || strings.Contains(got, `"process":"AV"`) {
-		t.Fatalf("resolution during the outage = %q; want the last known gateway", got)
-	}
-	if calls := disc.callCount("cluster-x"); calls != 1 {
-		t.Fatalf("discovery calls = %d; the outage backoff must answer without asking", calls)
+			got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
+			if strings.Contains(got, "gw.x.example.com") != test.gateway {
+				t.Fatalf("resolution during the outage with a %s-old answer = %q; want gateway %v", test.age, got, test.gateway)
+			}
+			if calls := disc.callCount("cluster-x"); calls != 1 {
+				t.Fatalf("discovery calls = %d; the outage backoff must answer without asking", calls)
+			}
+		})
 	}
 }
