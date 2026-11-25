@@ -69,13 +69,21 @@ raise SystemExit("no stable owned native AV processor became resident")
     script = r'''
 set -euo pipefail
 pid=$1 birth=$2 pressure=$3 state=$4
-current_birth() { awk '{print $22}' "/proc/$pid/stat"; }
+current_birth() {
+ local row fields
+ IFS= read -r row < "/proc/$pid/stat" || return 1
+ read -ra fields <<< "${row##*) }"
+ current_stamp=${fields[19]:-}
+}
 kills() { awk '$1=="oom_kill"{print $2}' /sys/fs/cgroup/memory.events; }
-[ "$(current_birth)" = "$birth" ] || exit 1
+current_birth && [ "$current_stamp" = "$birth" ] || exit 1
 old_score=$(cat "/proc/$pid/oom_score_adj")
 cleanup() {
+ # Cleanup utilities must have memory available to fork.
+ unset chunks chunk
+ exec 9>&- || true
  rm -f "$pressure" "$state"
- if [ -r "/proc/$pid/stat" ] && [ "$(current_birth)" = "$birth" ]; then
+ if current_birth && [ "$current_stamp" = "$birth" ]; then
   printf '%s' "$old_score" > "/proc/$pid/oom_score_adj" || true
  fi
 }
@@ -84,12 +92,18 @@ before=$(kills)
 owner_birth=$(awk '{print $22}' "/proc/$$/stat")
 printf '%s %s %s %s 0\n' "$$" "$owner_birth" "$before" "$old_score" > "$state"
 printf '1000' > "/proc/$pid/oom_score_adj"
+# Forking while pressure is held can stall before the kernel reaches OOM.
+# A FIFO read supplies the inter-allocation pause without spawning a child.
+mkfifo "$pressure"
+exec 9<> "$pressure"
+chunks=()
+printf -v chunk '%4194304s' ''
 for ((block=0; block<256; block++)); do
- [ -r "/proc/$pid/stat" ] && [ "$(current_birth)" = "$birth" ] || exit 1
+ [ -r "/proc/$pid/stat" ] && current_birth && [ "$current_stamp" = "$birth" ] || exit 1
  printf '%s %s %s %s %s\n' "$$" "$owner_birth" "$before" "$old_score" "$((block+1))" > "$state"
- dd if=/dev/zero of="$pressure" bs=4M count=1 conv=notrunc oflag=append status=none
+ chunks+=("$chunk")
  # Let the observer stop pressure after a kill before another block is written.
- sleep .05
+ read -r -t .05 -u 9 unused || true
 done
 exit 1
 '''
@@ -127,7 +141,11 @@ try:
     print(json.dumps({"initial_oom_kills":owner[2],"final_oom_kills":final,"pressure_blocks_started":owner[4],"pressure_observer_outside_edge_cgroup":True}))
     break
   time.sleep(.01)
- else:raise SystemExit("no kernel OOM within the bounded pressure window")
+ else:
+  details={"owner":owner,"observed_oom_kills":kills(),"pressure_exists":pressure.exists(),"state_exists":state.exists()}
+  for name in ["memory.current","memory.max","memory.swap.current","memory.swap.max","memory.events"]:
+   details[name]=(root/"sys/fs/cgroup"/name).read_text().strip()
+  raise SystemExit("no kernel OOM within the bounded pressure window: "+json.dumps(details))
 finally:stop()
 '''
     worker = None
@@ -143,6 +161,8 @@ finally:stop()
                           "-c", watch, state, pressure, timeout=45)
         worker.communicate(timeout=10)
         evidence.update(json.loads(observed))
+        evidence["pressure_kind"] = "retained_anonymous"
+        evidence["pressure_block_bytes"] = 4 * 1024 * 1024
         check = r'''
 import json,pathlib,sys,time
 before=json.loads(sys.argv[1]);pid=sys.argv[2];stamp=sys.argv[3]
@@ -162,9 +182,11 @@ print("native processor killed; controller and sidecar stayed alive")
                      json.dumps(evidence["services"]), str(processor["pid"]), processor["birth"]).strip())
         Path(destination).write_text(json.dumps(evidence, indent=2) + "\n")
     finally:
-        if worker is not None and worker.poll() is None:
-            worker.terminate()
-            worker.communicate(timeout=10)
+        if worker is not None:
+            if worker.poll() is None:
+                worker.terminate()
+            output, errors = worker.communicate(timeout=10)
+            print(json.dumps({"pressure_worker_exit":worker.returncode,"stdout":output,"stderr":errors}), file=sys.stderr)
         subprocess.run(["docker", "exec", container, "rm", "-f", pressure, state], capture_output=True, timeout=10)
 
 
