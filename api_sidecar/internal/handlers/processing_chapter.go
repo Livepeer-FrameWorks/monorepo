@@ -260,6 +260,9 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
+			if ignoreRetiredPushEnd(log, pushEnd, pushID) {
+				continue loop
+			}
 			// RECORDING_END is the authoritative completion signal and breaks
 			// the loop, so a PUSH_END here always precedes it.
 			awaitRecordingEnd.start(log, pushEnd)
@@ -422,16 +425,21 @@ loop:
 	// state='finalized' forever — reclaim never runs.
 	//
 	// GenerateDTSH waits up to its header window. If it still fails (Mist
-	// busy, transient hiccup), schedule background retries with backoff
-	// so finalized chapters reach frozen without waiting for a viewer
-	// to happen to boot the asset first.
-	vodStreamName := "vod+" + req.GetArtifactHash()
-	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
-		log.WithError(err).Warn("Chapter finalize: DTSH generation failed, scheduling background retries")
-		go h.retryChapterDTSH(vodStreamName, outputPath+".dtsh", log)
-	}
+	// busy, transient hiccup), background retries with backoff follow, so
+	// finalized chapters reach frozen without waiting for a viewer to happen
+	// to boot the asset first. It runs apart from the job: the result is
+	// delivered when the handler returns, and the sidecar is vod+<hash> work
+	// that does not need the processing stream.
+	go h.generateChapterDTSH("vod+"+req.GetArtifactHash(), outputPath+".dtsh", log)
+}
 
-	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly.
+// generateChapterDTSH writes a finalized chapter's DTSH sidecar, then triggers
+// a storage check so the .mkv and .dtsh freeze to S3 promptly.
+func (h *ProcessingJobHandler) generateChapterDTSH(vodStreamName, dtshPath string, log *logrus.Entry) {
+	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, dtshPath, log); err != nil {
+		log.WithError(err).Warn("Chapter finalize: DTSH generation failed, scheduling background retries")
+		go h.retryChapterDTSH(vodStreamName, dtshPath, log)
+	}
 	TriggerStorageCheck()
 }
 

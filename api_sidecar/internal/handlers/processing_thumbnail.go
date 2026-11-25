@@ -149,6 +149,9 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
+			if ignoreRetiredPushEnd(log, pushEnd, pushID) {
+				continue loop
+			}
 			awaitRecordingEnd.start(log, pushEnd)
 		case <-awaitRecordingEnd.expired():
 			h.reportRecordingOutputVanished(log, mistClient, send, req.GetJobId(), streamName, outputPath, *awaitRecordingEnd.pushEnd)

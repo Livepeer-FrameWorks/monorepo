@@ -73,6 +73,34 @@ type ProcessingPushEndEvent struct {
 	PushStatusText string
 }
 
+// pushEndListenerBuffer holds more than one PUSH_END because delivery is keyed
+// only by stream name: the end of a push this attempt did not start (one the
+// startup orphan sweep or a fallback restart killed) can land before the
+// attempt's own. A single slot would let that stale event drop the real one.
+const pushEndListenerBuffer = 8
+
+// processingPushEndRetired reports whether a PUSH_END is another push's end.
+// Mist numbers every push, so a PUSH_END whose id differs from the attempt's
+// own push is not its recording output ending. Without the attempt's push id
+// (the lookup after push_start missed) the stream name is all there is to go
+// on, and the event is taken as the attempt's.
+func processingPushEndRetired(evt ProcessingPushEndEvent, activePushID int) bool {
+	return evt.PushID > 0 && activePushID > 0 && evt.PushID != int64(activePushID)
+}
+
+// ignoreRetiredPushEnd logs and reports a PUSH_END that belongs to another push.
+func ignoreRetiredPushEnd(log *logrus.Entry, evt ProcessingPushEndEvent, activePushID int) bool {
+	if !processingPushEndRetired(evt, activePushID) {
+		return false
+	}
+	log.WithFields(logging.Fields{
+		"push_id":        evt.PushID,
+		"active_push_id": activePushID,
+		"push_status":    evt.PushStatus,
+	}).Warn("Ignoring PUSH_END from a retired push")
+	return true
+}
+
 type ProcessingRecordingEndEvent struct {
 	StreamName      string
 	FilePath        string
@@ -221,7 +249,7 @@ func claimPendingJob(streamName, jobID string, cancel ...context.CancelFunc) (ch
 	if _, exists := pendingJobs[streamName]; exists {
 		return nil, pendingJobIDs[streamName], false
 	}
-	ch = make(chan ProcessingPushEndEvent, 1)
+	ch = make(chan ProcessingPushEndEvent, pushEndListenerBuffer)
 	pendingJobs[streamName] = ch
 	pendingJobIDs[streamName] = jobID
 	pendingJobReleased[streamName] = make(chan struct{})
@@ -255,7 +283,7 @@ func replacePendingJobChannel(streamName, jobID string) (chan ProcessingPushEndE
 	if pendingJobIDs[streamName] != jobID {
 		return nil, false
 	}
-	ch := make(chan ProcessingPushEndEvent, 1)
+	ch := make(chan ProcessingPushEndEvent, pushEndListenerBuffer)
 	pendingJobs[streamName] = ch
 	return ch, true
 }
@@ -1447,6 +1475,9 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
+			if ignoreRetiredPushEnd(log, pushEnd, activePushID) {
+				continue loop
+			}
 			if recordingEnd == nil {
 				awaitRecordingEnd.start(log, pushEnd)
 				continue loop
