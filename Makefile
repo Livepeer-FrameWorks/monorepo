@@ -795,11 +795,11 @@ test-stack-lib:
 
 test-stack-processing-scenarios:
 	python3 scripts/stack/test_processing_scenario_guards.py
+	python3 scripts/stack/test_pinned_clip_fixture.py
 
 .PHONY: test-stack-media-qualification
 test-stack-media-qualification:
 	python3 scripts/stack/test_media_qualification_guards.py
-	python3 scripts/stack/test_pinned_clip_fixture.py
 
 .PHONY: test-stack-media-cpus
 test-stack-media-cpus:
