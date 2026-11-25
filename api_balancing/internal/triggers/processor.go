@@ -454,7 +454,20 @@ func (p *Processor) CacheProcessConfig(internalName, processesJSON string) {
 const (
 	gatewayCacheTTL      = 60 * time.Second
 	gatewayEmptyCacheTTL = 5 * time.Second
+	// gatewayLastKnownMaxAge bounds how long a last known answer serves when Quartermaster cannot
+	// be asked: Navigator's default DNS health freshness window, past which Quartermaster would no
+	// longer publish a gateway that stopped reporting either.
+	gatewayLastKnownMaxAge = 5 * time.Minute
 )
+
+// lastKnownGateways is a cached answer to use when Quartermaster cannot be asked: the gateways it
+// last assigned while that answer is younger than gatewayLastKnownMaxAge, otherwise none.
+func lastKnownGateways(entry gatewayCacheEntry) (urls, cells []string) {
+	if entry.resolvedAt.IsZero() || time.Since(entry.resolvedAt) > gatewayLastKnownMaxAge {
+		return nil, nil
+	}
+	return entry.urls, entry.cells
+}
 
 // getLivepeerGatewayURLsForCluster returns the cached Livepeer gateway URLs for
 // the given cluster — one per healthy assigned instance, in discovery order, so
@@ -469,9 +482,11 @@ const (
 //
 // The refresh is one attempt bounded to federation.AdmissionCallTimeout behind
 // the Quartermaster outage backoff, and never asked when ask is false. When it
-// cannot be made or fails, the last answer for the cluster is used whatever its
-// age: Quartermaster is the only writer of gateway assignments, so an outage
-// freezes them. unreachable reports that Quartermaster gave no answer.
+// cannot be made or fails, the last answer for the cluster is used while it is
+// younger than gatewayLastKnownMaxAge: Quartermaster is the only writer of
+// gateway assignments, so an outage freezes them, but an older answer may name a
+// gateway that died since and is no gateway. unreachable reports that
+// Quartermaster gave no answer.
 func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, clusterID string, ask bool) (urls, cells []string, unreachable bool) {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
@@ -496,7 +511,8 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, cluste
 		disc = p.quartermasterClient
 	}
 	if disc == nil || !ask {
-		return entry.urls, entry.cells, false
+		urls, cells = lastKnownGateways(entry)
+		return urls, cells, false
 	}
 
 	var resp *quartermasterpb.ServiceDiscoveryResponse
@@ -509,9 +525,10 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, cluste
 		// A discovery error is not evidence that the cluster has no gateway.
 		// Caching nil here would force local-AV fallback for the whole TTL; let
 		// the next stream re-resolve instead.
-		p.logger.WithError(err).WithFields(logging.Fields{"cluster_id": clusterID, "last_known_gateways": len(entry.urls)}).
-			Debug("Livepeer gateway discovery failed; using the last known answer")
-		return entry.urls, entry.cells, federation.CentralUnreachable(err) || ctx.Err() != nil
+		urls, cells = lastKnownGateways(entry)
+		p.logger.WithError(err).WithFields(logging.Fields{"cluster_id": clusterID, "last_known_gateways": len(entry.urls), "used_gateways": len(urls)}).
+			Debug("Livepeer gateway discovery failed; using the last known answer while it is fresh")
+		return urls, cells, federation.CentralUnreachable(err) || ctx.Err() != nil
 	}
 
 	seen := map[string]struct{}{}
