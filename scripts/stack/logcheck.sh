@@ -95,7 +95,9 @@ drop_designed_refusals() { # stdin: log lines; drops each allowlisted refusal of
       nrot = split(ENVIRON["ROUTED_ROTATION_STREAMS"], srot, "\n")
       ncodec = split(ENVIRON["REPLACED_CODEC_STREAMS"], scodec, "\n")
       nrefused = split(ENVIRON["REPLACED_REFUSED_STREAMS"], srefused, "\n")
-      rotation = "Source requires (0|90|180|270) degree display rotation or reflection; local AV must rotate or reflect it([)]|$)"
+      # The Mist ER_SOURCE_ROTATED exit reads "rotation[ and a mirror]; local AV must rotate it" on the
+      # release line, "rotation or reflection; local AV must rotate or reflect it" on Mist master.
+      rotation = "Source requires (0|90|180|270) degree display rotation( and a mirror| or reflection)?; local AV must rotate( or reflect)? it([)]|$)"
       codec = "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry [A-Za-z0-9_]+; local AV must decode this source([)]|$)"
     }
     function names(line, list, n,    i) {

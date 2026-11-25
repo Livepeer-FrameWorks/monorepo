@@ -98,6 +98,28 @@ expect "a rotation refusal for another stream still fails" \
 expect "a failed AV process is not covered by the Livepeer rotation route" \
   fails "0 edge $rotation_routed
 0 edge ${rotation_fail//MistProcLivepeer/MistProcAV}"
+# The Mist release line words the same ER_SOURCE_ROTATED exit as "rotation[ and a mirror]; local AV must rotate it".
+rotation_exit_release=${rotation_exit//rotation or reflection; local AV must rotate or reflect it/rotation; local AV must rotate it}
+rotation_fail_release=${rotation_fail//rotation or reflection; local AV must rotate or reflect it/rotation; local AV must rotate it}
+mirror_exit_release=${rotation_exit//90 degree display rotation or reflection; local AV must rotate or reflect it/0 degree display rotation and a mirror; local AV must rotate it}
+mirror_fail_release=${rotation_fail//90 degree display rotation or reflection; local AV must rotate or reflect it/0 degree display rotation and a mirror; local AV must rotate it}
+expect "a rotated source routed by Helmsman passes in the release line's wording" \
+  passes "0 edge $rotation_routed
+0 edge $rotation_exit_release
+0 edge $rotation_fail_release"
+expect "a rotated and mirrored source routed by Helmsman passes in the release line's wording" \
+  passes "0 edge $rotation_routed
+0 edge ${rotation_exit_release//display rotation;/display rotation and a mirror;}
+0 edge ${rotation_fail_release//display rotation;/display rotation and a mirror;}"
+expect "a mirror-only source routed by Helmsman passes in the release line's wording" \
+  passes "0 edge $rotation_routed
+0 edge $mirror_exit_release
+0 edge $mirror_fail_release"
+expect "a release-line rotation exit without a Helmsman route still fails" fails "0 edge $rotation_exit_release"
+expect "a release-line mirror exit without a Helmsman route still fails" fails "0 edge $mirror_exit_release"
+expect "a rotation exit with another reason clause still fails" \
+  fails "0 edge $rotation_routed
+0 edge ${rotation_exit_release//local AV must rotate it/the source is broken}"
 
 codec_routed='{"msg":"PROCESS_REPLACE: local MistProcAV decodes the source codec","routing":"source_codec_unsupported","stream":"processing+part2","reason":"SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source","replacement_count":2}'
 codec_exit='WARN|MistInBuffer|12|input.cpp:1|processing+part2|Process `Livepeer` (PID 14) exited with unrecoverable error (code 2: SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry MPEG4; local AV must decode this source), disabling restart'
