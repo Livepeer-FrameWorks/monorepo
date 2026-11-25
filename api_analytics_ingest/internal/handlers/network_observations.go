@@ -202,23 +202,23 @@ func (h *AnalyticsHandler) processNetworkObservation(ctx context.Context, event 
 		return err
 	}
 	h.networkScopes.Store(networkScope{Tenant: owner.String(), Network: m.Network, Environment: m.Environment}, true)
-	// Preserve gateway current-state readers without replaying additive legacy samples.
-	if m.ProducerKind == "gateway" {
-		switch p := payload.(type) {
-		case *pb.OrchestratorStateUpdate:
+	// Both producers populate instance configuration; only gateways populate vantages.
+	switch p := payload.(type) {
+	case *pb.OrchestratorStateUpdate:
+		if m.ProducerKind == "gateway" || m.ProducerKind == "prober" {
 			return h.processOrchestratorStateUpdate(ctx, event)
-		case *pb.OrchestratorDiscoveryObserved:
-			if p.Vantage != nil && p.Vantage.Dialed && p.Vantage.ResolvedIp != "" {
-				ident, err := requireOrchestratorIdentity(event)
-				if err != nil {
-					return err
-				}
-				latency := p.DiscoveryLatencyMs
-				if !p.Reachable {
-					latency = 0
-				}
-				return h.upsertOrchestratorVantage(ctx, event, ident, p.OrchAddr, p.Vantage, latency, p.Score, p.Reachable)
+		}
+	case *pb.OrchestratorDiscoveryObserved:
+		if m.ProducerKind == "gateway" && p.Vantage != nil && p.Vantage.Dialed && p.Vantage.ResolvedIp != "" {
+			ident, err := requireOrchestratorIdentity(event)
+			if err != nil {
+				return err
 			}
+			latency := p.DiscoveryLatencyMs
+			if !p.Reachable {
+				latency = 0
+			}
+			return h.upsertOrchestratorVantage(ctx, event, ident, p.OrchAddr, p.Vantage, latency, p.Score, p.Reachable)
 		}
 	}
 	return nil
