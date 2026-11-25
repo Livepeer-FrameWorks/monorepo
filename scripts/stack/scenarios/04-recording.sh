@@ -175,6 +175,10 @@ eventually 90 "the recording catalog projects its capture lifetime" recording_ca
 log "replay"
 [ -n "$FIRST_PB" ] && every_replica "chapter replays" "$FIRST_PB" media_at
 
+# A playable chapter (DVRChapter.playableNow): finalized, frozen, or reclaimed,
+# which the reclaim sweep makes a frozen chapter once its source segments are
+# gone; playback uses the chapter artifact in all three.
+PLAYABLE_CHAPTER='def playable: .state == "FINALIZED" or .state == "FROZEN" or .state == "RECLAIMED"; '
 # Every finalized chapter holds its whole interval: a finalize fed faster than
 # its recorder used to lose the chapter's start to buffer eviction (N25).
 log "chapters at full length"
@@ -183,17 +187,17 @@ while IFS=' ' read -r cid cpb clen; do
   chapter_full() { full_length "$1" "$2" "$clen"; }
   echo "    chapter ${cid:0:8}: expected ${clen}s"
   every_replica "chapter ${cid:0:8} replays its full ${clen}s" "$cpb" chapter_full
-done < <(chapters | jq -r '.[] | select(.state=="FINALIZED" or .state=="FROZEN") | "\(.chapterId) \(.playbackId // "") \(((.endMs - .startMs) / 1000) | floor)"')
+done < <(chapters | jq -r "$PLAYABLE_CHAPTER"'.[] | select(playable) | "\(.chapterId) \(.playbackId // "") \(((.endMs - .startMs) / 1000) | floor)"')
 C=$(chapters)
 F=$FAIL
 check "a chapter of the full ${WINDOW}s window was recorded" json_has "$C" \
-  "any((.state == \"FINALIZED\" or .state == \"FROZEN\") and ((.endMs - .startMs) / 1000) >= $((WINDOW - 4)))"
+  "${PLAYABLE_CHAPTER}any(playable and ((.endMs - .startMs) / 1000) >= $((WINDOW - 4)))"
 # The chapters hold the whole ${PUSH}s push back to back: a segment that reached
 # the ledger after its chapter was dispatched, or after the stop claimed the
 # recording, is in no chapter.
 echo "    chapter spans: $(echo "$C" | jq -c 'sort_by(.startMs) | map((.endMs - .startMs) / 1000)')"
 check "the chapters hold the whole ${PUSH}s push without a hole" json_has "$C" \
-  "sort_by(.startMs) | all(.[]; .state == \"FINALIZED\" or .state == \"FROZEN\")
+  "${PLAYABLE_CHAPTER}sort_by(.startMs) | all(.[]; playable)
    and (map(.endMs - .startMs) | add) >= $(((PUSH - 2) * 1000))
    and ([range(1; length) as \$i | (.[\$i].startMs - .[\$i - 1].endMs) | fabs <= 1000] | all)"
 if [ "$FAIL" -gt "$F" ]; then

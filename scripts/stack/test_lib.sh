@@ -710,6 +710,18 @@ ladder_heights_read_the_origin() (
 )
 expect 'ladder heights read the publisher buffer, not a newer cell-B replica list' ladder_heights_read_the_origin
 
+# Scenario 39 (scenario 04 at an 1800 s window) on 2026-11-25: the reclaim sweep
+# had moved the second chapter on to RECLAIMED, a playable chapter, when the hole
+# check read the chapters.
+chapter_hole_check_accepts_reclaimed() (
+  local PUSH=1890
+  local C='[{"chapterId":"9c4c06cf","state":"FROZEN","startMs":0,"endMs":1801666},{"chapterId":"d44668ce","state":"RECLAIMED","startMs":1801666,"endMs":1890010}]'
+  check() { shift; "$@"; }
+  eval "$(sed -n '/^PLAYABLE_CHAPTER=/p' "$here/scenarios/04-recording.sh")"
+  eval "$(sed -n '/^check "the chapters hold the whole/,/fabs <= 1000/p' "$here/scenarios/04-recording.sh")"
+)
+expect 'the long recording hole check takes a reclaimed chapter as playable' chapter_hole_check_accepts_reclaimed
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
