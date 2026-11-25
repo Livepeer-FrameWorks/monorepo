@@ -86,13 +86,16 @@ func TestVerifyTranscodeJobTokenToleratesClockDrift(t *testing.T) {
 
 func TestProcessingFailureReasonClassifiesHelmsmanErrors(t *testing.T) {
 	for errMsg, want := range map[string]string{
-		"source unavailable: 404 Not Found":                 "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE",
-		"no processing progress within the watchdog window": "MEDIA_FAILURE_REASON_TIMED_OUT",
-		"processing stalled at 12%":                         "MEDIA_FAILURE_REASON_TIMED_OUT",
-		"absolute timeout exceeded (4h)":                    "MEDIA_FAILURE_REASON_TIMED_OUT",
-		"max retries exceeded":                              "MEDIA_FAILURE_REASON_TIMED_OUT",
-		"AV process failed: encoder crashed":                "MEDIA_FAILURE_REASON_PROCESSING_FAILED",
-		"recording validation failed: zero bytes written":   "MEDIA_FAILURE_REASON_PROCESSING_FAILED",
+		"source unavailable: 404 Not Found": "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE",
+		// Helmsman names the stage that met the unavailable source before the cause.
+		"processing memory admission: source unavailable: 404 Not Found": "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE",
+		"clip readiness failed: source unavailable: 403 Forbidden":       "MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE",
+		"no processing progress within the watchdog window":              "MEDIA_FAILURE_REASON_TIMED_OUT",
+		"processing stalled at 12%":                                      "MEDIA_FAILURE_REASON_TIMED_OUT",
+		"absolute timeout exceeded (4h)":                                 "MEDIA_FAILURE_REASON_TIMED_OUT",
+		"max retries exceeded":                                           "MEDIA_FAILURE_REASON_TIMED_OUT",
+		"AV process failed: encoder crashed":                             "MEDIA_FAILURE_REASON_PROCESSING_FAILED",
+		"recording validation failed: zero bytes written":                "MEDIA_FAILURE_REASON_PROCESSING_FAILED",
 	} {
 		if got := ProcessingFailureReason(errMsg).String(); got != want {
 			t.Errorf("ProcessingFailureReason(%q) = %s, want %s", errMsg, got, want)
