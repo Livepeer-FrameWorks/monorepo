@@ -135,6 +135,9 @@ func TestProcessingMemoryMigrationReruns_RealPG(t *testing.T) {
 	if !validated {
 		t.Fatal("postdeploy left the memory constraint unvalidated")
 	}
+	if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,job_type,wait_reason) VALUES('7a6e0000-0000-4000-8000-000000000022','7a6e0000-0000-4000-8000-000000000021','transcode','dispatch_retry')`); err != nil {
+		t.Fatalf("replayed pending memory migration rejects dispatch_retry: %v", err)
+	}
 	if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,job_type,required_memory_bytes) VALUES('7a6e0000-0000-4000-8000-000000000020','7a6e0000-0000-4000-8000-000000000021','transcode',-1)`); err == nil {
 		t.Fatal("negative memory requirement accepted")
 	}

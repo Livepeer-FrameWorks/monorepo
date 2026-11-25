@@ -7,6 +7,7 @@ describe("processing queue status", () => {
     ["slots", "processing slots"],
     ["fitting_node_unavailable", "suitable node unavailable"],
     ["cluster_unavailable", "cluster unavailable"],
+    ["dispatch_retry", "retrying dispatch"],
   ])("shows why work is queued: %s", (reason, label) => {
     expect(processingStatusLabel("processing", false, reason)).toBe(`Queued (${label})`);
   });

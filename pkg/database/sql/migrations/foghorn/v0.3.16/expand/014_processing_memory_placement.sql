@@ -9,7 +9,7 @@ ALTER TABLE foghorn.processing_jobs
 ALTER TABLE foghorn.processing_jobs DROP CONSTRAINT IF EXISTS chk_processing_required_memory;
 ALTER TABLE foghorn.processing_jobs ADD CONSTRAINT chk_processing_required_memory CHECK (required_memory_bytes >= 0 AND memory_reserved_bytes >= 0 AND memory_floor_bytes >= 0) NOT VALID;
 ALTER TABLE foghorn.processing_jobs DROP CONSTRAINT IF EXISTS chk_processing_wait_reason;
-ALTER TABLE foghorn.processing_jobs ADD CONSTRAINT chk_processing_wait_reason CHECK (wait_reason IS NULL OR wait_reason IN ('memory', 'slots', 'fitting_node_unavailable', 'cluster_unavailable')) NOT VALID;
+ALTER TABLE foghorn.processing_jobs ADD CONSTRAINT chk_processing_wait_reason CHECK (wait_reason IS NULL OR wait_reason IN ('memory', 'slots', 'fitting_node_unavailable', 'cluster_unavailable', 'dispatch_retry')) NOT VALID;
 
 CREATE OR REPLACE FUNCTION foghorn.reset_processing_memory_assignment() RETURNS trigger AS $$
 BEGIN
