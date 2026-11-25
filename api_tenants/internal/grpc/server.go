@@ -4919,7 +4919,7 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *quarter
 		return nil, status.Error(codes.InvalidArgument, "node_id and status required")
 	}
 	switch nextStatus {
-	case "active", "offline", "maintenance", "retired", "evicted":
+	case quartermasterpb.NodeStatusActive, quartermasterpb.NodeStatusOffline, quartermasterpb.NodeStatusMaintenance, quartermasterpb.NodeStatusRetired, quartermasterpb.NodeStatusEvicted:
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported node status %q", nextStatus)
 	}
