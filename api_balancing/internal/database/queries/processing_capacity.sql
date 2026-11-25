@@ -8,10 +8,12 @@ SELECT node_id, CASE WHEN lifecycle ? 'processing_memory_budget_bytes'
 FROM foghorn.node_lifecycle
 WHERE node_id = ANY(sqlc.arg(node_ids)::text[]);
 
+-- Capacity changes cannot resolve a dispatch error or its retry backoff.
 -- name: WakeProcessingClusterJobs :exec
 UPDATE foghorn.processing_jobs AS job
 SET next_attempt_at = NULL
-WHERE job.status='queued' AND job.wait_reason IS NOT NULL
+WHERE job.status='queued'
+  AND job.wait_reason IN ('memory', 'slots', 'fitting_node_unavailable', 'cluster_unavailable')
   AND EXISTS (SELECT 1 FROM foghorn.artifacts AS a
               WHERE a.artifact_hash=job.artifact_hash AND a.tenant_id=job.tenant_id
                 AND a.origin_cluster_id=sqlc.arg(cluster_id)::text);

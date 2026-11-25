@@ -117,12 +117,14 @@ func (q *Queries) UpdateProcessingSourceProbe(ctx context.Context, arg UpdatePro
 const wakeProcessingClusterJobs = `-- name: WakeProcessingClusterJobs :exec
 UPDATE foghorn.processing_jobs AS job
 SET next_attempt_at = NULL
-WHERE job.status='queued' AND job.wait_reason IS NOT NULL
+WHERE job.status='queued'
+  AND job.wait_reason IN ('memory', 'slots', 'fitting_node_unavailable', 'cluster_unavailable')
   AND EXISTS (SELECT 1 FROM foghorn.artifacts AS a
               WHERE a.artifact_hash=job.artifact_hash AND a.tenant_id=job.tenant_id
                 AND a.origin_cluster_id=$1::text)
 `
 
+// Capacity changes cannot resolve a dispatch error or its retry backoff.
 func (q *Queries) WakeProcessingClusterJobs(ctx context.Context, clusterID string) error {
 	_, err := q.db.ExecContext(ctx, wakeProcessingClusterJobs, clusterID)
 	return err

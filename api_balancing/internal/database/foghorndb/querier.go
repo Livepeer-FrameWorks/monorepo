@@ -949,6 +949,7 @@ type Querier interface {
 	UpsertTenantAuthorityProjection(ctx context.Context, arg UpsertTenantAuthorityProjectionParams) error
 	VODNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	VerifyThumbnailObject(ctx context.Context, arg VerifyThumbnailObjectParams) (int64, error)
+	// Capacity changes cannot resolve a dispatch error or its retry backoff.
 	WakeProcessingClusterJobs(ctx context.Context, clusterID string) error
 	// A revived tenant withholds objects not confirmed by a fetch begun after its
 	// barrier. A fetched parent and its objects share one confirmation instant.

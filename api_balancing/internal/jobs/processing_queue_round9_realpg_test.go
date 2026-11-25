@@ -17,10 +17,19 @@ const r9Tenant = "7a900000-0000-4000-8000-000000000001"
 // locally backed, presign failure, dispatch failure) must not hold the head
 // of the claim forever and starve every younger job.
 func TestR9RevertedJobsDoNotStarveYoungerJob_RealPG(t *testing.T) {
+	assertRevertedJobsDoNotStarveYoungerJob(t, false)
+}
+
+func TestRevertedJobsDoNotStarveYoungerJobDuringCapacityChurn_RealPG(t *testing.T) {
+	assertRevertedJobsDoNotStarveYoungerJob(t, true)
+}
+
+func assertRevertedJobsDoNotStarveYoungerJob(t *testing.T, capacityChurn bool) {
+	t.Helper()
 	conn := startRealPGForCleanup(t)
 	for i := 0; i < 21; i++ {
 		hash := fmt.Sprintf("r9hol%027d", i)
-		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,tenant_id,artifact_type,status) VALUES($1,$2::uuid,'vod','queued')`, hash, r9Tenant); err != nil {
+		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,tenant_id,artifact_type,status,origin_cluster_id) VALUES($1,$2::uuid,'vod','queued','churn-cluster')`, hash, r9Tenant); err != nil {
 			t.Fatal(err)
 		}
 		job := fmt.Sprintf("7a900000-0000-4000-8000-%012d", 100+i)
@@ -45,8 +54,53 @@ func TestR9RevertedJobsDoNotStarveYoungerJob_RealPG(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if capacityChurn {
+			if err := q.WakeProcessingClusterJobs(ctx, "churn-cluster"); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	t.Fatal("younger job was never claimed: 20 reverted older jobs hold the claim head")
+}
+
+func TestCapacityWakeKeepsDispatchBackoffAndWakesCapacityWaits_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+	for i, reason := range []string{"memory", "slots", "fitting_node_unavailable", "cluster_unavailable", "dispatch_retry"} {
+		for _, cluster := range []string{"churn-cluster", "other-cluster"} {
+			hash := fmt.Sprintf("wake-%s-%d", cluster, i)
+			job := fmt.Sprintf("7a900000-0000-4000-8000-%012d", 300+i)
+			if cluster == "other-cluster" {
+				job = fmt.Sprintf("7a900000-0000-4000-8000-%012d", 400+i)
+			}
+			if _, err := conn.Exec(`INSERT INTO foghorn.artifacts(artifact_hash,tenant_id,artifact_type,status,origin_cluster_id) VALUES($1,$2::uuid,'vod','queued',$3)`, hash, r9Tenant, cluster); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs(job_id,tenant_id,artifact_hash,job_type,status,wait_reason,next_attempt_at) VALUES($1::uuid,$2::uuid,$3,'transcode','queued',$4,NOW()+INTERVAL '3 minutes')`, job, r9Tenant, hash, reason); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := foghorndb.New(conn).WakeProcessingClusterJobs(context.Background(), "churn-cluster"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(`SELECT a.origin_cluster_id,job.wait_reason,job.next_attempt_at IS NULL FROM foghorn.processing_jobs job JOIN foghorn.artifacts a ON a.artifact_hash=job.artifact_hash AND a.tenant_id=job.tenant_id WHERE job.tenant_id=$1::uuid`, r9Tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cluster, reason string
+		var woken bool
+		if err := rows.Scan(&cluster, &reason, &woken); err != nil {
+			t.Fatal(err)
+		}
+		if want := cluster == "churn-cluster" && reason != "dispatch_retry"; woken != want {
+			t.Errorf("capacity wake for %s/%s: woken=%v, want %v", cluster, reason, woken, want)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A node-pinned live/DVR clip whose source node is gone can never run. Before

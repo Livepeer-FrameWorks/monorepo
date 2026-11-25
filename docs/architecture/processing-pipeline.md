@@ -530,7 +530,9 @@ eligible when its reported budget grows enough to fit. Only a fully known cluste
 that cannot fit the ladder fails the job and asset with a capacity error.
 
 Deferred work stays queued with a reason: `memory`, `slots`,
-`fitting_node_unavailable`, or `cluster_unavailable`. Deferral has no separate timeout
+`fitting_node_unavailable`, or `cluster_unavailable`. A failed dispatch returns to
+the queue with `dispatch_retry` and a fifteen-second backoff that capacity wakes
+cannot clear. Deferral has no separate timeout
 and spends no failure retries. Every processing job has a 24-hour deadline. The initial
 VOD transcode uses upload creation time; clips, DVR, chapters, thumbnails and other
 follow-up jobs use their own creation time. A new thumbnail job on an older ready VOD
