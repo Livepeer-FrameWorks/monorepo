@@ -708,12 +708,19 @@ master_variants() { # master_variants <master url>: "WxH bandwidth" per variant
 variant_spans() {
   local loc
   loc=$(location_at "$1" "$2")
-  [ -n "$loc" ] || return 1
-  python3 - "$loc" <<'PY' 2>/dev/null
+  if [ -z "$loc" ]; then
+    echo "    no playback redirect from $1 (HTTP $(play_status "$1" "$2"))" >&2
+    return 1
+  fi
+  python3 - "$loc" <<'PY'
 import sys, urllib.request, urllib.parse
 def get(url):
-    with urllib.request.urlopen(url, timeout=15) as r:
-        return r.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception as e:
+        print(f"    {url}: {e}", file=sys.stderr)
+        sys.exit(1)
 master = sys.argv[1]
 body = get(master)
 res = "-"
