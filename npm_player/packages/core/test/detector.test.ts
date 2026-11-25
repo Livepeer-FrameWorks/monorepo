@@ -12,6 +12,7 @@ import {
   checkWebRTCCodecCompatibility,
   checkMSECodecCompatibility,
   WEBRTC_COMPATIBLE_CODECS,
+  WEBRTC_INCOMPATIBLE_CODECS,
 } from "../src/core/detector";
 
 // Save originals
@@ -544,5 +545,22 @@ describe("Mist EAC-3 alias", () => {
     expect(checkWebRTCCodecCompatibility([{ type: "audio", codec: "EAC-3" }]).audioCompatible).toBe(
       false
     );
+  });
+
+  it("honors an explicit incompatible codec even when the static fallback supports it", () => {
+    vi.stubGlobal("RTCRtpReceiver", undefined);
+    const tracks = [{ type: "audio" as const, codec: "OPUS" }];
+    expect(checkWebRTCCodecCompatibility(tracks).audioCompatible).toBe(true);
+    const original = WEBRTC_INCOMPATIBLE_CODECS.audio;
+    Object.defineProperty(WEBRTC_INCOMPATIBLE_CODECS, "audio", {
+      value: [...original, "OPUS"],
+      configurable: true,
+    });
+    try {
+      expect(checkWebRTCCodecCompatibility(tracks).audioCompatible).toBe(false);
+    } finally {
+      Object.defineProperty(WEBRTC_INCOMPATIBLE_CODECS, "audio", { value: original });
+      vi.unstubAllGlobals();
+    }
   });
 });
