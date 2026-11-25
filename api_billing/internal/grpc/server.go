@@ -131,7 +131,11 @@ func loadSubscriptionEntitlementOverrides(ctx context.Context, db *sql.DB, subsc
 	return out, nil
 }
 
-func billingTierFromListRow(row purserdb.ListBillingTiersRow) *purserpb.BillingTier {
+func billingTierFromListRow(row purserdb.ListBillingTiersRow) (*purserpb.BillingTier, error) {
+	ladders, err := scanTranscodeLadders(row.TranscodeLadders)
+	if err != nil {
+		return nil, fmt.Errorf("tier %q: %w", row.TierName, err)
+	}
 	return &purserpb.BillingTier{
 		Id: row.ID.String(), TierName: row.TierName, DisplayName: row.DisplayName,
 		Description: row.Description, BasePrice: row.BasePrice, Currency: row.Currency,
@@ -143,11 +147,15 @@ func billingTierFromListRow(row purserdb.ListBillingTiersRow) *purserpb.BillingT
 		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
 		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
 		ProcessesVod:     string(row.ProcessesVod),
-		TranscodeLadders: scanTranscodeLadders(row.TranscodeLadders), DefaultTranscodeLadder: row.DefaultTranscodeLadder,
-	}
+		TranscodeLadders: ladders, DefaultTranscodeLadder: row.DefaultTranscodeLadder,
+	}, nil
 }
 
-func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) *purserpb.BillingTier {
+func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) (*purserpb.BillingTier, error) {
+	ladders, err := scanTranscodeLadders(row.TranscodeLadders)
+	if err != nil {
+		return nil, fmt.Errorf("tier %q: %w", row.TierName, err)
+	}
 	return &purserpb.BillingTier{
 		Id: row.ID.String(), TierName: row.TierName, DisplayName: row.DisplayName,
 		Description: row.Description, BasePrice: row.BasePrice, Currency: row.Currency,
@@ -159,21 +167,26 @@ func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) *purserpb.Billing
 		ProcessesLive: string(row.ProcessesLive), ProcessesDvr: string(row.ProcessesDvr),
 		ProcessesClip: string(row.ProcessesClip), ProcessesDvrFinalize: string(row.ProcessesDvrFinalize),
 		ProcessesVod:     string(row.ProcessesVod),
-		TranscodeLadders: scanTranscodeLadders(row.TranscodeLadders), DefaultTranscodeLadder: row.DefaultTranscodeLadder,
-	}
+		TranscodeLadders: ladders, DefaultTranscodeLadder: row.DefaultTranscodeLadder,
+	}, nil
 }
 
 // scanTranscodeLadders decodes a transcode_ladders JSONB column, the
-// bootstrap catalog's []CatalogTranscodeLadder.
-func scanTranscodeLadders(data []byte) []*purserpb.TranscodeLadder {
+// bootstrap catalog's []CatalogTranscodeLadder. An empty column is a tier
+// without presets; one that does not decode is an error, never a tier that
+// silently offers none.
+func scanTranscodeLadders(data []byte) ([]*purserpb.TranscodeLadder, error) {
 	var ladders []struct {
 		Name        string          `json:"name"`
 		DisplayName string          `json:"display_name"`
 		Description string          `json:"description"`
 		Renditions  json.RawMessage `json:"renditions"`
 	}
-	if len(data) == 0 || json.Unmarshal(data, &ladders) != nil {
-		return nil
+	if len(data) == 0 {
+		return nil, nil
+	}
+	if err := json.Unmarshal(data, &ladders); err != nil {
+		return nil, fmt.Errorf("decode transcode_ladders: %w", err)
 	}
 	out := make([]*purserpb.TranscodeLadder, 0, len(ladders))
 	for _, ladder := range ladders {
@@ -182,7 +195,7 @@ func scanTranscodeLadders(data []byte) []*purserpb.TranscodeLadder {
 			RenditionsJson: string(ladder.Renditions),
 		})
 	}
-	return out
+	return out, nil
 }
 
 // scanBillingFeatures decodes a features JSONB column through
@@ -446,7 +459,10 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *purserpb.GetBil
 
 	tiers := make([]*purserpb.BillingTier, 0, len(rows))
 	for _, row := range rows {
-		tier := billingTierFromListRow(row)
+		tier, tierErr := billingTierFromListRow(row)
+		if tierErr != nil {
+			return nil, status.Errorf(codes.Internal, "read billing tier: %v", tierErr)
+		}
 		rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
 		if rulesErr != nil {
 			return nil, status.Errorf(codes.Internal, "load pricing rules for tier %q: %v", tier.TierName, rulesErr)
@@ -535,7 +551,10 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBill
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	tier := billingTierFromGetRow(row)
+	tier, err := billingTierFromGetRow(row)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read billing tier: %v", err)
+	}
 	rules, rulesErr := loadTierPricingRules(ctx, s.db, tier.Id)
 	if rulesErr != nil {
 		return nil, status.Errorf(codes.Internal, "load pricing rules: %v", rulesErr)
@@ -3049,7 +3068,10 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	if err != nil {
 		return nil, nil, fmt.Errorf("load billing tier %s: %w", subscription.TierId, err)
 	}
-	tier := billingTierFromGetRow(tierRow)
+	tier, err := billingTierFromGetRow(tierRow)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	s.logger.WithFields(map[string]any{
 		"tenant_id":    tenantID,
