@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	"frameworks/api_billing/internal/database/purserdb"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/shopspring/decimal"
@@ -109,5 +110,16 @@ func TestMarshalBillingFeaturesRoundTrip(t *testing.T) {
 	}
 	if got := scanBillingFeatures(bfJSON); got == nil || got.SupportLevel != "premium" || !got.Sla || !got.ProcessingCustomizable {
 		t.Fatalf("billing features roundtrip failed: %+v", got)
+	}
+}
+
+// A tier whose transcode_ladders column does not decode is an error, never a tier that silently
+// offers no ladders; an empty column is a tier without presets.
+func TestBillingTierRefusesUnreadableTranscodeLadders(t *testing.T) {
+	if _, err := billingTierFromGetRow(purserdb.GetBillingTierByIDRow{TierName: "broken", TranscodeLadders: []byte(`{"name":"standard"}`)}); err == nil {
+		t.Fatal("an unreadable transcode_ladders column read as no ladders")
+	}
+	if tier, err := billingTierFromGetRow(purserdb.GetBillingTierByIDRow{TierName: "plain"}); err != nil || len(tier.GetTranscodeLadders()) != 0 {
+		t.Fatalf("an empty transcode_ladders column = %+v, %v", tier.GetTranscodeLadders(), err)
 	}
 }
