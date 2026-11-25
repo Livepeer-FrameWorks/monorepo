@@ -23,11 +23,14 @@ PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 420)
 trap 'kill "$PUB" 2>/dev/null; stack_ctl start "$GATEWAY" >/dev/null 2>&1; delete_stream "$SID"' EXIT
 INTERNAL=$(internal_name_of "$UUID")
 
-# The exact ladder: source + 480p (equal area) + 360p; nothing taller than the source.
+# The exact ladder on the publisher's buffer: source + 480p (equal area) + 360p;
+# nothing taller than the source. The ladder masks the source from viewers, so a
+# replica in cell B carries the renditions only.
 ladder() {
-  local h
-  h=$(video_heights "$UUID" | tr '\n' ' ')
-  echo "    video heights: ${h:-<none>}"
+  local h node
+  node=$(stream_origin_node "$UUID")
+  h=$(video_heights "$UUID" "$node" | tr '\n' ' ')
+  echo "    video heights on ${node:-<no origin>}: ${h:-<none>}"
   [ "$h" = "360 480 480 " ]
 }
 degraded_at() {
