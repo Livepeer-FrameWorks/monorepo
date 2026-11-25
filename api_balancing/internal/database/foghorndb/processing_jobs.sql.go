@@ -848,10 +848,10 @@ const revertProcessingJobToQueued = `-- name: RevertProcessingJobToQueued :exec
 UPDATE foghorn.processing_jobs
 SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
     next_attempt_at=NOW()+INTERVAL '15 seconds',
-    wait_reason='cluster_unavailable',
+    wait_reason='dispatch_retry',
     memory_wait_ms = memory_wait_ms + CASE WHEN wait_reason='memory' THEN GREATEST(0, EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE 'UTC')-COALESCE(memory_wait_started_at,wait_started_at,NOW() AT TIME ZONE 'UTC')))*1000)::bigint ELSE 0 END,
         memory_wait_started_at = NULL,
-        wait_started_at = CASE WHEN wait_reason='cluster_unavailable' THEN COALESCE(wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END
+        wait_started_at = CASE WHEN wait_reason='dispatch_retry' THEN COALESCE(wait_started_at,NOW() AT TIME ZONE 'UTC') ELSE NOW() AT TIME ZONE 'UTC' END
 WHERE job_id = $1
 `
 
