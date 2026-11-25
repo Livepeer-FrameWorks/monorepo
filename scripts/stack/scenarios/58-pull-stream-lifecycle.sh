@@ -61,12 +61,20 @@ session_live() {
 }
 eventually 60 'playable pull has one durable buffer session' session_live || finish
 FIRST_ROW=$ROW
+INGEST_LAST=''
 ingest_matches() {
-  local state=$1 session=$2 response
-  response=$(gql 'query($id:ID!){stream(id:$id){ingest{state sessionId resumableUntil}}}' "$(jq -cn --arg id "$SID" '{id:$id}')") || return 1
-  json_has "$response" ".errors==null and .data.stream.ingest.state==\"$state\" and .data.stream.ingest.sessionId==\"$session\" and .data.stream.ingest.resumableUntil==null"
+  local state=$1 session=$2
+  INGEST_LAST=$(gql 'query($id:ID!){stream(id:$id){ingest{state sessionId resumableUntil}}}' "$(jq -cn --arg id "$SID" '{id:$id}')") || return 1
+  json_has "$INGEST_LAST" ".errors==null and .data.stream.ingest.state==\"$state\" and .data.stream.ingest.sessionId==\"$session\" and .data.stream.ingest.resumableUntil==null"
 }
-eventually 30 'pull exposes its live session without push resumption' ingest_matches LIVE "${FIRST_ROW%%|*}"
+# On a mismatch, show the public answer next to the serving cell's own answer, so
+# the report tells a cell defect from a Commodore fan-out defect.
+ingest_diag() {
+  echo "    public ingest: $(jq -c '.data.stream.ingest // .errors' <<<"$INGEST_LAST" 2>/dev/null)"
+  echo "    cell B ingest: $(jq -cn --arg t "$STACK_TENANT_ID" --arg s "$UUID" '{tenantId:$t,streamIds:[$s]}' | stack_exec commodore sh -c \
+    'grpcurl -plaintext -max-time 10 -H "authorization: Bearer $SERVICE_TOKEN" -d @ foghorn-b:18019 foghorn.TenantControlService/GetStreamIngestStates' 2>&1 | jq -c . 2>/dev/null)"
+}
+eventually 30 'pull exposes its live session without push resumption' ingest_matches LIVE "${FIRST_ROW%%|*}" || ingest_diag
 pair_once() {
   [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FILTER(WHERE event_type='stream.connected')||'|'||count(*) FILTER(WHERE event_type='stream.live') FROM foghorn.domain_event_outbox WHERE tenant_id='$STACK_TENANT_ID' AND aggregate_id='$UUID'")" = '1|1' ]
 }
@@ -87,7 +95,7 @@ check 'DVR starts on a pull live for more than thirty seconds' [ -n "$DVR" ]
 stack_exec "$STACK_EDGE_B_SERVICE" /command/s6-svc -r /run/service/helmsman || { fail 'restart pull sidecar'; finish; }
 same_session() { session_live && [ "$ROW" = "$FIRST_ROW" ] && pair_once && playing; }
 eventually 90 'Helmsman restart preserves the exact buffer and its event pair' same_session || finish
-eventually 30 'the public pull session survives a sidecar restart' ingest_matches LIVE "${FIRST_ROW%%|*}"
+eventually 30 'the public pull session survives a sidecar restart' ingest_matches LIVE "${FIRST_ROW%%|*}" || ingest_diag
 response=$(gql 'mutation($id:ID!){stopDVR(dvrHash:$id){__typename}}' "$(jq -cn --arg id "$DVR" '{id:$id}')")
 check 'DVR stop is acknowledged in the pull serving cell' json_has "$response" '.errors==null and .data.stopDVR.__typename=="DeleteSuccess"'
 kill "$PLAYER" 2>/dev/null || true
@@ -102,7 +110,7 @@ session_ended() {
   [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.pull_ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' AND ended_at IS NULL AND admission_state='active'")" = 0 ]
 }
 eventually 90 'ended pull buffer closes its durable session' session_ended || finish
-eventually 30 'the public pull session becomes idle without a resume window' ingest_matches IDLE "${FIRST_ROW%%|*}"
+eventually 30 'the public pull session becomes idle without a resume window' ingest_matches IDLE "${FIRST_ROW%%|*}" || ingest_diag
 idle_once() { [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.domain_event_outbox WHERE tenant_id='$STACK_TENANT_ID' AND aggregate_id='$UUID' AND event_type='stream.idle'")" = 1 ]; }
 eventually 60 'last direct buffer emits one idle event' idle_once || finish
 eventually 60 'idle reaches the deployed webhook consumer' saw_event "$SINCE" stream.idle "tostring | contains(\"$UUID\")" || finish
@@ -118,7 +126,7 @@ second_session() {
     [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FILTER(WHERE event_type='stream.connected')||'|'||count(*) FILTER(WHERE event_type='stream.live') FROM foghorn.domain_event_outbox WHERE tenant_id='$STACK_TENANT_ID' AND aggregate_id='$UUID'")" = '2|2' ]
 }
 eventually 60 'second burst has a new session and exactly one new event pair' second_session || finish
-eventually 30 'the second burst exposes its new public session' ingest_matches LIVE "${ROW%%|*}"
+eventually 30 'the second burst exposes its new public session' ingest_matches LIVE "${ROW%%|*}" || ingest_diag
 kill "$PLAYER" 2>/dev/null || true
 PLAYER=''
 kill "$SOURCE_PID" 2>/dev/null || true
