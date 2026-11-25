@@ -52,11 +52,18 @@ class HostedIngressSelectionTest(unittest.TestCase):
 
     def test_named_pass_preserves_the_regex_anchor_through_make(self):
         result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)\n"
-                                  "--- PASS: TestNginxRootConfigAcceptsMaximumLengthAlias (0.01s)")
+                                  "--- PASS: TestNginxRootConfigAcceptsMaximumLengthAlias (0.01s)\n"
+                                  "--- PASS: TestNginxAccessLogRedactsPublishingCredentials (0.01s)")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.repo / "flags").read_text().strip(),
                          "-run ^TestTenantAliasPrivateerDockerIngressLifecycle$ -v -timeout 180s\n"
-                         "-run ^TestNginxRootConfigAcceptsMaximumLengthAlias$ -v -timeout 180s")
+                         "-run ^TestNginxRootConfigAcceptsMaximumLengthAlias$ -v -timeout 180s\n"
+                         "-run ^TestNginxAccessLogRedactsPublishingCredentials$ -v -timeout 180s")
+
+    def test_root_config_cannot_hide_missing_credential_redaction(self):
+        result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)\n"
+                                  "--- PASS: TestNginxRootConfigAcceptsMaximumLengthAlias (0.01s)")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_first_test_cannot_hide_missing_root_config_validation(self):
         result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)")

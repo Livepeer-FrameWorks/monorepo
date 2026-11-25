@@ -458,6 +458,7 @@ type NodeState struct {
 	DiskUsedBytes     uint64                   `json:"disk_used_bytes,omitempty"`
 	LastUpdate        time.Time                `json:"last_update"`
 	LastHeartbeat     time.Time                `json:"last_heartbeat"`
+	DisconnectedAt    time.Time                `json:"disconnected_at,omitempty"`
 	// MetricsObservedAt is advanced only by a complete metrics report, never
 	// by identity/configuration writes or replay of a node snapshot.
 	MetricsObservedAt time.Time `json:"metrics_observed_at"`
@@ -1813,6 +1814,7 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	now := time.Now()
 	n.LastUpdate = now
 	n.LastHeartbeat = now
+	n.DisconnectedAt = time.Time{}
 	nodePayload, err := json.Marshal(n)
 	sm.mu.Unlock()
 
@@ -2076,6 +2078,9 @@ func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	n.IsHealthy = false
 	n.IsStale = true
 	// Keep the disconnected state sticky until a new heartbeat arrives.
+	if n.DisconnectedAt.IsZero() {
+		n.DisconnectedAt = time.Now()
+	}
 	n.LastHeartbeat = time.Time{}
 	n.LastUpdate = time.Now()
 	nodePayload := marshalNodeState(n)
