@@ -1,0 +1,51 @@
+---
+- name: Create the owned private loader fixture
+  ansible.builtin.file:
+    path: /opt/mist-onnx/lib
+    state: directory
+    mode: "0755"
+
+- name: Copy a real shared library into the private loader fixture
+  ansible.builtin.copy:
+    src: "/lib/{{ mistserver_test_multiarch[ansible_facts.architecture] }}/libm.so.6"
+    dest: /opt/mist-onnx/lib/libm.so.6
+    remote_src: true
+    mode: "0644"
+  vars:
+    mistserver_test_multiarch:
+      x86_64: x86_64-linux-gnu
+      aarch64: aarch64-linux-gnu
+
+- name: Seed the legacy host-wide provider registration
+  ansible.builtin.copy:
+    dest: /etc/ld.so.conf.d/mist-onnx.conf
+    content: "/opt/mist-onnx/lib\n"
+    mode: "0644"
+
+- name: Populate the legacy host-wide provider cache
+  ansible.builtin.command: ldconfig
+  changed_when: true
+
+- name: Apply actual native install tasks for this ONNX profile
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+    tasks_from: install-linux.yml
+  vars:
+    mistserver_onnx_profile: "{{ mistserver_test_profile }}"
+
+- name: Inspect host-wide provider registration
+  ansible.builtin.stat:
+    path: /etc/ld.so.conf.d/mist-onnx.conf
+  register: mistserver_test_loader_config
+
+- name: Read host-wide shared library cache
+  ansible.builtin.command: ldconfig -p
+  register: mistserver_test_loader_cache
+  changed_when: false
+
+- name: Assert native installs remove private libraries from the host namespace
+  ansible.builtin.assert:
+    that:
+      - not mistserver_test_loader_config.stat.exists
+      - "'/opt/mist-onnx/' not in mistserver_test_loader_cache.stdout"
+    fail_msg: "ONNX profile {{ mistserver_test_profile }} exposed private libraries in the host loader namespace"

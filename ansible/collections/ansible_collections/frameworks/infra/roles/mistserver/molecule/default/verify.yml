@@ -46,6 +46,24 @@
         name: frameworks.infra.mistserver
         tasks_from: verify-api.yml
 
+    - name: Check private loader isolation for every ONNX profile
+      ansible.builtin.include_tasks: verify-loader-profile.yml
+      loop: [cpu, cuda, tensorrt, openvino]
+      loop_control:
+        loop_var: mistserver_test_profile
+
+    - name: Restore native install manifest after profile isolation checks
+      ansible.builtin.include_role:
+        name: frameworks.infra.mistserver
+        tasks_from: install-linux.yml
+      vars:
+        mistserver_onnx_profile: cpu
+
+    - name: Remove the owned private loader fixture
+      ansible.builtin.file:
+        path: /opt/mist-onnx
+        state: absent
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.mistserver
