@@ -39,16 +39,41 @@ class ProcessingScenarioGuards(unittest.TestCase):
                     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=20)
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
 
-    def test_hls_restart_accepts_only_scoped_503_and_fresh_media_recovery(self):
+    def test_audience_handoff_waits_for_projected_attribution(self):
+        source = (ROOT / "scenarios/71-audience-reconciliation.sh").read_text()
+        start = source.index("for round in 1 2; do")
+        handoffs = source[start:source.index("RESTART_AT=", start)]
+        with tempfile.TemporaryDirectory() as directory:
+            script = "work=" + shlex.quote(directory) + "\n"
+            script += '''echo 0 >"$work/fence"
+echo 0 >"$work/metrics"
+owner() { n=$(cat "$work/fence"); printf 'owner-%s|foghorn-b:18029|%s\\n' "$n" "$n"; }
+stack_ctl() {
+  if [ "$1" = stop ]; then echo $(($(cat "$work/fence")+1)) >"$work/fence"; echo 0 >"$work/metrics"; fi
+}
+counts_match() { return 0; }
+network_matches() { n=$(cat "$work/metrics"); echo $((n+1)) >"$work/metrics"; [ "$n" -gt 0 ]; }
+check() { shift; "$@" || touch "$work/failed"; }
+eventually() { shift 2; for n in 1 2 3; do "$@" && return 0; done; return 1; }
+fail() { touch "$work/failed"; }
+finish() { exit 1; }
+'''
+            result = subprocess.run(["bash", "-c", script + handoffs + '\n[ ! -f "$work/failed" ]\n'],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0,
+                             "native and replica census can be current before the asynchronous Periscope projection: " + result.stderr)
+
+    def test_hls_restart_requires_zero_failures_and_fresh_media(self):
         source = (ROOT / "lib.sh").read_text()
         predicate = re.search(r"^hls_restart_continuity_state\(\) \{\n.*?^\}", source, re.M | re.S).group(0)
         cases = [
-            ("scoped-503", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n106 ok\n108 ok\n", "ok"),
+            ("continuous", "100 ok\n102 ok\n106 ok\n108 ok\n", "ok"),
+            ("scoped-503", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n106 ok\n108 ok\n", "fail"),
             ("authoritative-denial", "100 ok\n102 fail HTTPError:HTTP_Error_404:_Error_opening_stream\n108 ok\n", "fail"),
             ("unrelated-error", "100 ok\n102 fail HTTPError:HTTP_Error_500:_Server_Error\n108 ok\n", "fail"),
             ("before-outage", "100 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n108 ok\n", "fail"),
             ("after-outage", "106 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n108 ok\n", "fail"),
-            ("no-recovery", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n", "pending"),
+            ("no-recovery", "100 ok\n102 fail HTTPError:HTTP_Error_503:_Service_Unavailable\n", "fail"),
             ("stale-recovery", "106 ok\n", "pending"),
             ("empty", "", "pending"),
         ]

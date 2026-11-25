@@ -187,7 +187,15 @@ accounting applies. `USER_NEW` rechecks admission without preparing media again.
   owner's prepaid balance is spent". Sessions end only when the balance reaches
   the suspension threshold, where tenant suspension's `stop_sessions` drops the
   stream's grant.
-- **Restart.** Helmsman rebuilds the table from Mist's live session list (session
+- **Restart.** While Helmsman's local trigger handler is unavailable, Mist
+  reuses an existing live session's admitted requested-to-runtime stream mapping
+  for that viewer's address, token and origin, with protocol binding when the
+  configured session mode includes it. This requires a completed admission and
+  a fresh, running session process; pending, revoked or ended sessions cannot
+  use it, and a new viewer still needs a decision. A healthy handler's explicit
+  denial remains authoritative. The established HLS viewer keeps reading
+  playlists and segments throughout the restart.
+  Helmsman rebuilds the table from Mist's live session list (session
   id, address, stream, protocol) and fetches one grant per stream. Mist's list
   has no token, so a rebuilt session binds to the first request from its address
   on its stream and protocol (a JWT stream checks the token first). Several live
