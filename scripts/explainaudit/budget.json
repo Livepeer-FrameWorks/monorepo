@@ -987,6 +987,18 @@
     "read_requests": 1,
     "rows_scanned": 14129
   },
+  "foghorn:ListMediaRecoveryTenants@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "reason": "Media recovery tenant cursor walks idx_foghorn_artifacts_media_recovery from the previous page and stops at 20 tenants; the 30-day age filter compares against NOW() so it cannot sit in the partial index, and the fixture's artifacts are all recent, so it reads past every row.",
+    "rows_scanned": 7132
+  },
+  "foghorn:ListMediaRecoveryTenants@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "reason": "Media recovery tenant cursor walks idx_foghorn_artifacts_media_recovery from the previous page and stops at 20 tenants; the 30-day age filter compares against NOW() so it cannot sit in the partial index, and the fixture's artifacts are all recent, so it reads past every row.",
+    "rows_scanned": 7132
+  },
   "foghorn:ListNodeFinalizingDVRChapters@declared": {
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
     "read_requests": 6,
@@ -1439,6 +1451,12 @@
     "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
     "rows_scanned": 2400
   },
+  "purser:ListAutomaticTopupCandidates@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "reason": "Automatic top-up sweep every 5 minutes over enabled, unpaused tenants through idx_automatic_topups_enabled; the balance-threshold join reads the enabled set and returns at most 20.",
+    "rows_scanned": 3000
+  },
   "purser:ProviderWebhookInboxRepeatedFailures@declared": {
     "flags": ["READ_AMPLIFICATION"],
     "read_requests": 10,
@@ -1578,12 +1596,12 @@
     "rows_scanned": 5881
   },
   "purser:CountOpenMeteringAnomalies@declared": {
-    "flags": ["READ_AMPLIFICATION"],
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
     "read_requests": 1,
     "rows_scanned": 6121
   },
   "purser:CountOpenMeteringAnomalies@distributed": {
-    "flags": ["READ_AMPLIFICATION"],
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
     "read_requests": 1,
     "rows_scanned": 6121
   },
@@ -1969,12 +1987,24 @@
     "rows_scanned": 400
   },
   "purser:ReadPlacementUsageCoverage@declared": {
-    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "flags": [
+      "INDEX_SCAN_AMPLIFICATION",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SLOW"
+    ],
     "read_requests": 12,
     "rows_scanned": 29121
   },
   "purser:ReadPlacementUsageCoverage@distributed": {
-    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "flags": [
+      "INDEX_SCAN_AMPLIFICATION",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SLOW"
+    ],
     "read_requests": 12,
     "rows_scanned": 29121
   },
@@ -2023,6 +2053,12 @@
     "read_requests": 5,
     "rows_scanned": 2647
   },
+  "purser:hw:buildTenantPlan#2@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "reason": "One-time EUR ledger conversion data migration: reads one tenant's ledger rows to plan its conversion.",
+    "rows_scanned": 1499
+  },
   "purser:hw:readMovements@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
     "read_requests": 20,
@@ -2034,14 +2070,14 @@
     "rows_scanned": 19345
   },
   "purser:hw:scopes@declared": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
-    "read_requests": 34,
-    "rows_scanned": 91986
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 44,
+    "rows_scanned": 106828
   },
   "purser:hw:scopes@distributed": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
-    "read_requests": 34,
-    "rows_scanned": 91986
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 44,
+    "rows_scanned": 106828
   },
   "purser:shared:PruneCompleted@declared": {
     "flags": ["SEQ_SCAN_LARGE"],
