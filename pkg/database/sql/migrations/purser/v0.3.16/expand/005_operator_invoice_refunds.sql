@@ -1,3 +1,4 @@
+ALTER TABLE purser.billing_invoices DROP CONSTRAINT IF EXISTS chk_billing_invoices_status_refunds;
 ALTER TABLE purser.billing_invoices ADD CONSTRAINT chk_billing_invoices_status_refunds CHECK(status IN ('draft','pending','paid','overdue','failed','cancelled','manual_review','refunded')) NOT VALID;
 ALTER TABLE purser.billing_invoices DROP CONSTRAINT IF EXISTS chk_billing_invoices_status;
 CREATE TABLE IF NOT EXISTS purser.operator_invoice_refunds (
