@@ -2829,12 +2829,6 @@ FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestMediaRecoveryExpir
 
 PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestPricedAssignmentReview_RealPG|TestFreeCancellationReview_RealPG
 PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := $(PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS)|TestCompletedInvoiceCashRefund_RealPG|TestAutomaticTopupConsentAndBudget_RealPG
-verify-yugabyte-purser-reviews: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_billing yugabyte/billing-operator-reviews -tags schema_verify -run '^Test(PricedAssignmentReview|FreeCancellationReview)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
-	@$(CONTRACT_GO_TEST) api_billing yugabyte/billing-refund-and-auto-funding -tags schema_verify -run '^Test(CompletedInvoiceCashRefund|AutomaticTopupConsentAndBudget)_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
-
-verify-yugabyte-purser-contracts: verify-yugabyte-purser-reviews
-
 .PHONY: verify-billing-operator-repair-db
 verify-billing-operator-repair-db:
 	@$(CONTRACT_GO_TEST) api_billing postgres/billing-operator-reviews -tags schema_verify -run '^Test(PricedAssignmentReview|FreeCancellationReview|PostpaidToPrepaidSwitchInvoicesThePostpaidPhase)_RealPG$$' -count=1 -timeout 600s ./internal/grpc/

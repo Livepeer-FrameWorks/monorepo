@@ -153,6 +153,8 @@ vi.mock("$houdini", async () => {
     CreateMollieFirstPaymentStore: class {},
     CreateMollieSubscriptionStore: class {},
     ChangeBillingTierStore: class {},
+    PreviewFreeCancellationStore: class {},
+    ConfirmFreeCancellationStore: class {},
     PromoteToPaidStore: class {
       mutate = fixture.keepFree;
     },

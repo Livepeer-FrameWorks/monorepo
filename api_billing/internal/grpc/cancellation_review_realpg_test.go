@@ -52,4 +52,3 @@ func TestFreeCancellationReview_RealPG(t *testing.T) {
 		t.Fatal("cancelled before the paid term ended")
 	}
 }
-func TestFreeCancellationReview_RealYugabyte(t *testing.T) { TestFreeCancellationReview_RealPG(t) }

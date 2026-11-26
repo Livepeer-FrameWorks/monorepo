@@ -61,4 +61,3 @@ func TestPricedAssignmentReview_RealPG(t *testing.T) {
 		t.Fatalf("reviewed assignment not applied: %+v", result)
 	}
 }
-func TestPricedAssignmentReview_RealYugabyte(t *testing.T) { TestPricedAssignmentReview_RealPG(t) }

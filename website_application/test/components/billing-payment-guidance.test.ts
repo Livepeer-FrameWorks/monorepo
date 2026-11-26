@@ -8,6 +8,28 @@ let paymentError = {
 
 vi.mock("$lib/config", () => ({ getDocsSiteUrl: () => "https://docs.example.test" }));
 vi.mock("$houdini", () => ({
+  GetAutomaticTopupStore: class {
+    async fetch() {
+      return {
+        data: {
+          automaticTopup: {
+            enabled: false,
+            thresholdEurCents: 500,
+            netAmountMinor: 2000,
+            monthlyGrossLimitMinor: 10000,
+            currency: "EUR",
+            pausedReason: "",
+            monthlyReservedOrSpentMinor: 0,
+            available: false,
+            unavailableReason: "Automatic payments are not configured in this fixture.",
+            consentVersion: "",
+          },
+        },
+      };
+    }
+  },
+  SetAutomaticTopupStore: class {},
+
   GetPrepaidBalanceStore: class {
     async fetch() {
       return {

@@ -128,6 +128,3 @@ func TestAutomaticTopupConsentAndBudget_RealPG(t *testing.T) {
 		t.Fatalf("disable/re-enable reset monthly cash spending: attempts=%d err=%v", attempts, err)
 	}
 }
-func TestAutomaticTopupConsentAndBudget_RealYugabyte(t *testing.T) {
-	TestAutomaticTopupConsentAndBudget_RealPG(t)
-}

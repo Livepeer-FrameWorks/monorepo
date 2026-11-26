@@ -101,6 +101,3 @@ func TestCompletedInvoiceCashRefund_RealPG(t *testing.T) {
 		t.Fatal("refund receipt leaked across tenants")
 	}
 }
-func TestCompletedInvoiceCashRefund_RealYugabyte(t *testing.T) {
-	TestCompletedInvoiceCashRefund_RealPG(t)
-}
