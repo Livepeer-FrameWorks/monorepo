@@ -107,6 +107,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		unbalancedTenant  = "77777777-7777-4777-8777-777777777777"
 		fallbackTenant    = "88888888-8888-4888-8888-888888888888"
 		grantTenant       = "99999999-9999-4999-8999-999999999999"
+		graceTenant       = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	)
 	mustExec := func(db *sql.DB, query string, args ...any) {
 		t.Helper()
@@ -174,6 +175,32 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 	}
 	// A tenant with no balance row counts as €0 in both the count and the
 	// listing, so every counted tenant can be named.
+	mustExec(purser, `INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model) VALUES ($1,$2,'active','prepaid')`, graceTenant, lowerTier)
+	mustExec(purser, `INSERT INTO purser.prepaid_balances (tenant_id,balance_cents,currency,grace_started_at,grace_ends_at,grace_credit_cents)
+		VALUES ($1,-400,'EUR',NOW()-INTERVAL '1 hour',NOW()+INTERVAL '1 hour',500)`, graceTenant)
+	checkGraceHeld := func(held bool) {
+		t.Helper()
+		state := readAccountRecoverySQLState(t, purser, purserSpendHoldDoctorSQL)
+		want := "3"
+		if held {
+			want = "4"
+		}
+		_, listed := state["spend_held_tenant:"+graceTenant]
+		if state["spend_held"] != want || listed != held {
+			t.Fatalf("grace held=%v: count=%s listed=%v", held, state["spend_held"], listed)
+		}
+	}
+	checkGraceHeld(false)
+	mustExec(purser, `UPDATE purser.prepaid_balances SET grace_ends_at=NOW()-INTERVAL '1 minute' WHERE tenant_id=$1`, graceTenant)
+	checkGraceHeld(true)
+	mustExec(purser, `UPDATE purser.prepaid_balances SET grace_ends_at=NOW()+INTERVAL '1 hour',grace_credit_cents=400 WHERE tenant_id=$1`, graceTenant)
+	checkGraceHeld(true)
+	mustExec(purser, `UPDATE purser.prepaid_balances SET grace_credit_cents=500 WHERE tenant_id=$1`, graceTenant)
+	mustExec(purser, `INSERT INTO purser.usage_reservations(tenant_id,source_id,cluster_id,sequence,report_id,period_start,period_end,meters,reserved_amount_micro,currency)
+		VALUES ($1,'grace-doctor','test',1,'report',NOW()-INTERVAL '1 minute',NOW(),'{}',1000000,'EUR')`, graceTenant)
+	checkGraceHeld(true)
+	mustExec(purser, `UPDATE purser.usage_reservations SET updated_at=NOW()-INTERVAL '4 minutes' WHERE tenant_id=$1`, graceTenant)
+	checkGraceHeld(false)
 	report := evaluateAccountRecoveryDoctor([]string{"purser"}, map[string]map[string]string{"purser": readPurserRecoveryState(t, purser)})
 	if notes := strings.Join(report.notes, "; "); !strings.Contains(notes, "3 prepaid tenant(s) at or below €0") ||
 		!strings.Contains(notes, unsuspendedTenant+": €15.00 owed, "+spentTenant+": €4.00 owed, "+unbalancedTenant+": €0.00 owed") {
@@ -188,7 +215,12 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 // its key=value lines. The SQL makes the session read-only, so it runs last.
 func readPurserRecoveryState(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
-	rows, err := db.Query(purserAccountRecoveryDoctorSQL)
+	return readAccountRecoverySQLState(t, db, purserAccountRecoveryDoctorSQL)
+}
+
+func readAccountRecoverySQLState(t *testing.T, db *sql.DB, query string) map[string]string {
+	t.Helper()
+	rows, err := db.Query(query)
 	if err != nil {
 		t.Fatal(err)
 	}

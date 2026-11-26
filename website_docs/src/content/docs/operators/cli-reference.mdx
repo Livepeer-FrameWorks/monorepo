@@ -240,7 +240,7 @@ tenant below the -€10 suspension threshold that was not suspended. Each
 finding names up to ten tenants and points at `frameworks admin tenants get`,
 `frameworks admin clusters retire` or `frameworks admin billing recovery list`.
 Closures still synchronizing, recovery items waiting normally, and prepaid
-tenants at or below €0 (running sessions continue, new ones are refused) are
+tenants at or below €0 outside payment grace (running sessions continue, new ones are refused) are
 reported without failing the check.
 
 This is targeted binary-contract introspection, not a full physical-schema diff.
@@ -2358,7 +2358,9 @@ Billing tier and subscription management.
 - `promote` - Promote tenant from prepaid to postpaid billing (re-evaluates cluster subscriptions)
 - `set-cluster-pricing` - Set or update pricing config for a cluster
 - `credit` - Add (or with `--debit`, remove) EUR prepaid balance for a tenant
-- `set-tier` - Put a tenant on a billing tier as an operator decision
+- `set-tier` - Preview and confirm a priced billing arrangement change
+- `refund-invoice` - Preview, confirm or inspect a full original-payment refund
+- `automatic-topup inspect` / `automatic-topup disable` - Inspect customer consent or stop future automatic attempts
 - `grant set` / `grant show` / `grant revoke` / `grant list` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
 - `grant notice` - Requeue an abandoned grant ending or ended email
@@ -2524,60 +2526,105 @@ wallet credit and cancellation of an unfulfilled checkout are separate operation
 
 ### frameworks admin billing set-tier
 
-Assign a billing tier to a tenant as an operator decision. The change applies immediately in either
-direction, and unlike the self-serve tier change it does not require a Stripe or Mollie subscription
-or a complete billing profile. Purser refuses a tier that does not exist or is inactive, a billing
-model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
-postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
-assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
-invoice holds to it; moving from prepaid to postpaid keeps the balance, which each postpaid invoice
-takes as credit when it is finalized, and reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
-the prepaid part of the period with a prepaid statement, emailed to the tenant, and starts the
-postpaid period at the change, so the first postpaid invoice charges only usage from the change on,
-and the base fee for that part of the period.
-Moving from postpaid to prepaid ends the postpaid plan at the change: its invoice for the period
-up to the change is finalized then, with the usage reported until the change at the postpaid
-tier's prices and the base fee and monthly cluster fees for that part of the period, and collected
-like any invoice (off-session charge through the tenant's provider, or `record-payment` for a bank
-transfer). For an operator move to prepaid, the unused share of an already-paid advance fee
-is forfeited and recorded on the invoice; it creates no spendable balance or cash refund.
-The unpaid share of an open advance-fee invoice is reduced to the amount earned. The prepaid
-period starts at the change and the prepaid balance pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
-only for its own part of the period, also across several changes. Drafts hold no credit, so the
-balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
-to its total, when it is finalized. A scheduled downgrade is cleared. When the tenant keeps its
-Stripe or Mollie subscription through that, `set-tier` also queues the provider step that reprices
-the subscription to the assigned tier, so the provider charges what Purser now bills; its retries
-and errors appear as `tier_downgrade` work in `recovery list`.
+Preview an immediate billing arrangement change for an existing subscription. Review the closing
+invoice, wallet balance, carried usage and any retained unused advance fee before confirming.
+The preview rolls back its financial changes and does not consume issued document numbers.
+Apply within five minutes with the returned `--review` fingerprint and `--quoted-at` timestamp,
+using the same tenant, tier, billing model and reason. Changed billing, usage or pricing requires
+another preview.
 
-After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
-limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
-`--reason` and the calling identity. Assigning the tier and model the tenant already has changes
-nothing and records no event; cluster access is reconciled again. An active grant continues on
-the assigned tier, and a tier change clears its fallback.
+The reviewed path supports Purser-owned arrangements. Native Stripe/Mollie subscriptions use the
+provider recovery commands; operator grants use the grant commands. Initialize an account with no
+subscription before reviewing it. Inactive tiers, incompatible billing models and closed accounts
+are refused. The catalogue determines the billing model when `--billing-model` is omitted.
 
-A postpaid paid tier invoices its base price and usage when the period closes, and rated work is
-admitted only once those charges can be collected: the tenant's own Stripe or Mollie setup, or an
-operator arrangement from `grant set`. A tenant put on a paid postpaid tier with `set-tier` alone,
-without either, is refused rated work with `PAYMENT_SETUP_REQUIRED`. Use `grant set --tier` to
-assign the tier together with the arrangement.
+A confirmed change closes the existing billing phase. Reported usage remains payable at that
+phase's prices; the new phase uses the target arrangement's prices and allowances. An unused paid
+advance fee is forfeited, while an unpaid advance fee is reduced to the earned amount. The quote
+shows those effects. No cash refund is issued. Approved goodwill credit or an original-payment
+refund is a separate operation. Confirmation also reconciles cluster access, refreshes cached
+limits and records the actor and reason.
 
 **Flags:**
 
 - `--tenant-id` - Tenant UUID (this or `--email`)
-- `--email` - Email of a user in the tenant; resolving it needs a platform-operator session
-- `--tier` - Tier name from `frameworks admin billing tiers`, for example `payg` or `production`
-  (required)
-- `--billing-model` - `prepaid` or `postpaid`; defaults to the model the tier runs
-- `--reason` - Why the tier changes; recorded on the audit event (required)
+- `--email` - Email of a user in the tenant; requires a platform-operator session
+- `--tier` - Active catalogue tier name (required)
+- `--billing-model` - `prepaid` or `postpaid`; defaults to the tier's model
+- `--reason` - Audit reason (required)
+- `--review` - Exact fingerprint returned by the preview; omitted previews only
+- `--quoted-at` - Exact RFC3339 timestamp returned by that preview
 
 ```bash
-frameworks admin billing set-tier --email owner@example.com --tier production --reason "comped partner"
-frameworks admin billing set-tier --tenant-id <UUID> --tier payg --billing-model prepaid --reason "back to pay as you go"
+frameworks admin billing set-tier --tenant-id <UUID> --tier payg --billing-model prepaid --reason "end unwanted monthly arrangement"
+frameworks admin billing set-tier --tenant-id <UUID> --tier payg --billing-model prepaid --reason "end unwanted monthly arrangement" --review <FINGERPRINT> --quoted-at <RFC3339_TIMESTAMP>
 ```
 
-Both commands call Purser RPCs that accept only the manifest service token or a platform-operator
-session; tenant users and API tokens are refused.
+---
+
+### frameworks admin billing refund-invoice
+
+Preview a full refund of one completed invoice to its original Stripe or Mollie payment. Reuse one
+`--reference-id` for preview, confirmation, inspection and every retry. Confirm only the reviewed
+fingerprint. Pending refunds hold invoice collection; settlement issues a credit note using the
+original tax and FX evidence. The wallet and subscription remain unchanged. Partial, split,
+previously reversed or adjusted payments require manual reconciliation.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Email of a user in the tenant; requires a platform-operator session
+- `--invoice-id` - Paid invoice UUID; required for preview and confirmation
+- `--reference-id` - Stable refund request UUID (required)
+- `--reason` - Audit reason; required for preview and confirmation
+- `--confirm` - Exact preview fingerprint; omitted previews only
+- `--inspect` - Read the existing request; needs no invoice, reason or confirmation
+
+```bash
+frameworks admin billing refund-invoice --tenant-id <UUID> --invoice-id <INVOICE_UUID> --reference-id <REQUEST_UUID> --reason "approved original-payment refund"
+frameworks admin billing refund-invoice --tenant-id <UUID> --invoice-id <INVOICE_UUID> --reference-id <REQUEST_UUID> --reason "approved original-payment refund" --confirm <FINGERPRINT>
+frameworks admin billing refund-invoice --tenant-id <UUID> --reference-id <REQUEST_UUID> --inspect
+```
+
+After an interrupted response, inspect the same request before retrying. A pending bank outcome
+remains pending; a reconciliation hold must be resolved before another refund is attempted.
+
+---
+
+### frameworks admin billing automatic-topup
+
+Inspect or disable the tenant's explicitly consented saved-card automatic top-ups. Operators cannot
+enable them or supply customer consent. Monthly limits include tax and both reserved and settled
+cash payments in the selected currency's UTC calendar month.
+
+#### frameworks admin billing automatic-topup inspect
+
+Read settings, current monthly reserved/spent cash and any pause or reconciliation reason.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Email of a user in the tenant; requires a platform-operator session
+
+```bash
+frameworks admin billing automatic-topup inspect --tenant-id <UUID> --output json
+```
+
+#### frameworks admin billing automatic-topup disable
+
+Disable future automatic attempts with an audit reason. A reserved attempt is cancelled before
+dispatch; an already in-flight payment may still settle. Disabling does not erase the monthly
+spending record or a reconciliation hold.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Email of a user in the tenant; requires a platform-operator session
+- `--reason` - Audit reason (required)
+
+```bash
+frameworks admin billing automatic-topup disable --tenant-id <UUID> --reason "customer requested manual funding"
+```
 
 ---
 

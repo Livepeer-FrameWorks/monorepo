@@ -28,7 +28,7 @@ func TestAccountRecoveryDoctorPassesNormalWaits(t *testing.T) {
 	}
 	notes := strings.Join(report.notes, "; ")
 	if !strings.Contains(notes, "1 closure(s) synchronizing") || !strings.Contains(notes, "2 billing recovery item(s) waiting normally") ||
-		!strings.Contains(notes, "3 prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (tenant-f: €4.50 owed)") {
+		!strings.Contains(notes, "3 prepaid tenant(s) at or below €0 outside payment grace; running sessions continue, new ones are refused (tenant-f: €4.50 owed)") {
 		t.Fatalf("notes=%q", notes)
 	}
 }

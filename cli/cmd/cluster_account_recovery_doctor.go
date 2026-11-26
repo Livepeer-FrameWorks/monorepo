@@ -71,8 +71,9 @@ SELECT 'recovery_stuck_tenant:' || tenant_id || '=' || count(*)
 // purserSpendHoldDoctorSQL reports the tenants whose signed authority refuses
 // new sessions for a spent balance: Commodore's prepaid_balance_unavailable
 // decision is a prepaid current subscription, not suspended or closed, whose
-// EUR balance (absent counts as zero) is at or below zero. Below the
-// suspension threshold Purser suspends the tenant and running sessions stop,
+// EUR balance (absent counts as zero) is at or below zero without active grace.
+// Grace uses the same recent reservations, deadline and credit ceiling as Purser.
+// Below the suspension threshold Purser suspends the tenant and running sessions stop,
 // so a held tenant past it is a failed enforcement. Both listings read the
 // same held set as the counts.
 var purserSpendHoldDoctorSQL = fmt.Sprintf(`WITH current_subscription AS (
@@ -84,9 +85,19 @@ var purserSpendHoldDoctorSQL = fmt.Sprintf(`WITH current_subscription AS (
   FROM current_subscription
   LEFT JOIN purser.prepaid_balances balance
     ON balance.tenant_id = current_subscription.tenant_id AND balance.currency = 'EUR'
+  LEFT JOIN LATERAL (
+    SELECT CEIL(COALESCE(SUM(reserved_amount_micro), 0)::numeric / 10000)::bigint AS reserved_balance_cents
+    FROM purser.usage_reservations
+    WHERE tenant_id = current_subscription.tenant_id AND currency = 'EUR'
+      AND updated_at >= NOW() - INTERVAL '3 minutes'
+  ) reservations ON TRUE
   WHERE current_subscription.billing_model = 'prepaid' AND current_subscription.status <> 'suspended'
     AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = current_subscription.tenant_id)
     AND COALESCE(balance.balance_cents, 0) <= 0
+    AND NOT COALESCE((current_subscription.status = 'active'
+      AND balance.grace_ends_at > NOW() AND balance.grace_credit_cents > 0
+      AND balance.balance_cents - reservations.reserved_balance_cents <= 0
+      AND balance.balance_cents - reservations.reserved_balance_cents > -balance.grace_credit_cents), FALSE)
 ), listed AS (
   (SELECT 'spend_held_tenant:' AS prefix, tenant_id, balance_cents FROM held
     ORDER BY balance_cents, tenant_id LIMIT 10)
@@ -262,7 +273,7 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks cluster logs purser", Why: "Find why threshold enforcement did not suspend the tenant."})
 			}
 			if n := count("spend_held"); n > 0 {
-				report.notes = append(report.notes, fmt.Sprintf("purser: %d prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (%s)", n, listedTenants(state, "spend_held_tenant:", owed)))
+				report.notes = append(report.notes, fmt.Sprintf("purser: %d prepaid tenant(s) at or below €0 outside payment grace; running sessions continue, new ones are refused (%s)", n, listedTenants(state, "spend_held_tenant:", owed)))
 			}
 			if count("held_downgrades") > 0 || count("recovery_stuck") > 0 {
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks admin billing recovery list", Why: "Inspect held downgrades and recovery items with their errors and resolve them."})

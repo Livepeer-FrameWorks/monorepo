@@ -42,6 +42,7 @@ func TestAccountRecoveryDoctorMatchesServiceRules(t *testing.T) {
 	}
 
 	normalize := func(sql string) string {
+		sql = strings.ReplaceAll(sql, "current_subscription.", "")
 		sql = strings.ReplaceAll(sql, "subscription.", "")
 		return strings.Join(strings.Fields(sql), " ")
 	}
@@ -81,13 +82,24 @@ func TestAccountRecoveryDoctorMatchesServiceRules(t *testing.T) {
 		t.Fatal("service and deep doctor must read the same Purser-owned failure inventory")
 	}
 
-	// Commodore refuses new sessions for a prepaid balance at or below zero;
-	// the doctor's held set is the same rule.
+	// Commodore permits bounded grace at a spent balance; the doctor excludes
+	// the same live episode using Purser's reserved-balance calculation.
 	authority := read("api_control/internal/grpc/media_authority.go")
-	if !strings.Contains(authority, "model == mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID && billing.GetBalanceCents() <= 0:") {
+	if !strings.Contains(authority, "model == mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID && billing.GetBalanceCents() <= 0 && !billing.GetPaymentGrace().GetActive():") {
 		t.Fatal("Commodore's prepaid_balance_unavailable rule changed; update purserSpendHoldDoctorSQL")
 	}
 	if !strings.Contains(doctor, "billing_model = 'prepaid'") || !strings.Contains(doctor, "AND COALESCE(balance.balance_cents, 0) <= 0") {
 		t.Fatalf("doctor spend-hold rule drifted:\n%s", doctor)
+	}
+	grace := read("api_billing/internal/grpc/payment_grace.go")
+	for _, predicate := range []string{"status != \"active\"", "!ends.Time.After(time.Now())", "credit <= 0", "available <= -credit"} {
+		if !strings.Contains(grace, predicate) {
+			t.Fatalf("Purser payment grace changed at %q; update the doctor", predicate)
+		}
+	}
+	for _, predicate := range []string{"AND NOT COALESCE((status = 'active'", "balance.grace_ends_at > NOW()", "balance.grace_credit_cents > 0", "balance.balance_cents - reservations.reserved_balance_cents > -balance.grace_credit_cents", "updated_at >= NOW() - INTERVAL '3 minutes'"} {
+		if !strings.Contains(doctor, predicate) {
+			t.Fatalf("doctor grace predicate missing %q", predicate)
+		}
 	}
 }
