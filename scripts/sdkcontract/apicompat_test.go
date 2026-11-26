@@ -141,7 +141,7 @@ func parseSemverMust(t *testing.T, v string) semver {
 
 func TestDefaultSelectionsLeaveOutExperimentalFields(t *testing.T) {
 	schema := mustSchema(t, experimentalSchema)
-	files, _, err := generateDefaultOps(schema, nil)
+	files, _, err := generateDefaultOps(schema, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

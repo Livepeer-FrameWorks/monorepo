@@ -516,6 +516,15 @@ type defaultOp struct {
 	// Args holds, per path field, its arguments as name: $variable pairs.
 	Args      [][]string
 	Selection []*selNode
+	// InputDefaults lists the defaulted fields of every input object the variables reach.
+	InputDefaults []inputDefault
+}
+
+// inputDefault is one defaulted input object field, named Type.field.
+type inputDefault struct {
+	Field string
+	// Pointer makes the Go field a pointer so an explicit zero stays distinct from unset.
+	Pointer bool
 }
 
 type opVariable struct {
@@ -622,7 +631,8 @@ func opNames(schema *ast.Schema, targets []opTarget) map[string]string {
 
 // generateDefaultOps renders the default operations and their fragments for
 // every target that no hand-written operation replaces, keyed by output path.
-func generateDefaultOps(schema *ast.Schema, handWritten []operation) (map[string]string, []defaultOp, error) {
+// shipped names the input types a released SDK line already exposes; their Go field types stay as released.
+func generateDefaultOps(schema *ast.Schema, handWritten []operation, shipped map[string]bool) (map[string]string, []defaultOp, error) {
 	overridden := map[string]string{}
 	handFragments := map[string]*ast.FragmentDefinition{}
 	for _, op := range handWritten {
@@ -658,7 +668,7 @@ func generateDefaultOps(schema *ast.Schema, handWritten []operation) (map[string
 		if err != nil {
 			return nil, nil, err
 		}
-		ops = append(ops, defaultOp{Name: names[t.key()], Target: t, Vars: vars, Args: args, Selection: sel})
+		ops = append(ops, defaultOp{Name: names[t.key()], Target: t, Vars: vars, Args: args, Selection: sel, InputDefaults: inputDefaults(schema, vars, shipped)})
 	}
 
 	byKind := map[ast.Operation]*strings.Builder{}
@@ -707,9 +717,88 @@ func canonicalFragment(fragment *ast.FragmentDefinition) string {
 	return text.String()
 }
 
+// inputTypes returns the input object types reachable from the named types.
+func inputTypes(schema *ast.Schema, names []string) []*ast.Definition {
+	seen := map[string]bool{}
+	var out []*ast.Definition
+	var walk func(name string)
+	walk = func(name string) {
+		def := schema.Types[name]
+		if def == nil || def.Kind != ast.InputObject || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, def)
+		for _, f := range def.Fields {
+			walk(f.Type.Name())
+		}
+	}
+	for _, name := range names {
+		walk(name)
+	}
+	return out
+}
+
+// inputDefaults returns the defaulted fields of the input objects reachable from vars, sorted.
+// Every one is omitted when unset, so the server applies its default instead of a Go zero value.
+// A required scalar or enum field also becomes a pointer, unless a released line already ships
+// its type with a plain field.
+func inputDefaults(schema *ast.Schema, vars []opVariable, shipped map[string]bool) []inputDefault {
+	var names []string
+	for _, v := range vars {
+		names = append(names, v.Type.Name())
+	}
+	var fields []inputDefault
+	for _, def := range inputTypes(schema, names) {
+		for _, f := range def.Fields {
+			if f.DefaultValue == nil {
+				continue
+			}
+			pointer := f.Type.NonNull && f.Type.Elem == nil && !shipped[def.Name]
+			fields = append(fields, inputDefault{Field: def.Name + "." + f.Name, Pointer: pointer})
+		}
+	}
+	sort.Slice(fields, func(i, j int) bool { return fields[i].Field < fields[j].Field })
+	return fields
+}
+
+// shippedInputTypes returns the input types reachable from the operations of every released line.
+func shippedInputTypes(schema *ast.Schema, m *manifest, current string) (map[string]bool, error) {
+	var names []string
+	for line, entries := range m.Lines {
+		if line == current {
+			continue
+		}
+		for _, op := range entries.Operations {
+			doc, err := parser.ParseQuery(&ast.Source{Name: line + "/" + op.Name, Input: op.Document})
+			if err != nil {
+				return nil, err
+			}
+			for _, o := range doc.Operations {
+				for _, v := range o.VariableDefinitions {
+					names = append(names, v.Type.Name())
+				}
+			}
+		}
+	}
+	shipped := map[string]bool{}
+	for _, def := range inputTypes(schema, names) {
+		shipped[def.Name] = true
+	}
+	return shipped, nil
+}
+
 func printOperation(w *strings.Builder, op defaultOp) {
 	if op.Target.On != "" {
 		w.WriteString("# " + targetAnnotation + " " + op.Target.key() + "\n")
+	}
+	for _, field := range op.InputDefaults {
+		// A sent zero value replaces the schema default; omitempty leaves an unset field out.
+		if field.Pointer {
+			fmt.Fprintf(w, "# @genqlient(for: %q, omitempty: true, pointer: true)\n", field.Field)
+		} else {
+			fmt.Fprintf(w, "# @genqlient(for: %q, omitempty: true)\n", field.Field)
+		}
 	}
 	w.WriteString(string(op.Target.Kind) + " " + op.Name)
 	if len(op.Vars) > 0 {
@@ -795,7 +884,19 @@ func buildDefaultOps(repo string) (map[string]string, []defaultOp, []operation, 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	files, ops, err := generateDefaultOps(schema, handWritten)
+	support, err := loadSupport(repo)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	m, err := loadManifest(repo, majorOf(support.Current))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	shipped, err := shippedInputTypes(schema, m, support.Current)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	files, ops, err := generateDefaultOps(schema, handWritten, shipped)
 	if err != nil {
 		return nil, nil, nil, err
 	}

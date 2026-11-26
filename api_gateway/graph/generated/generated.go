@@ -26646,7 +26646,8 @@ Most connection fields are non-null, but some may be nullable when upstream data
 """
 type Query {
   automaticTopup: AutomaticTopupSettings!
-  platformAutomaticTopup(tenantId: ID!): AutomaticTopupSettings! @internal(reason: "Requires the platform_operator grant.")
+  platformAutomaticTopup(tenantId: ID!): AutomaticTopupSettings!
+    @internal(reason: "Requires the platform_operator grant.")
   "The signed-in user’s own interactive sessions, newest first. Supports first=1..100."
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
   "Your own security activity from the past 90 days."
@@ -28246,10 +28247,22 @@ type Mutation {
   "Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved."
   enablePrepaidUsage: EnablePrepaidUsagePayload!
   previewFreeCancellation(tierId: ID!): FreeCancellationReview!
-  confirmFreeCancellation(tierId: ID!, quotedAt: Time!, fingerprint: String!): ChangeBillingTierResult!
+  confirmFreeCancellation(
+    tierId: ID!
+    quotedAt: Time!
+    fingerprint: String!
+  ): ChangeBillingTierResult!
   setAutomaticTopup(input: SetAutomaticTopupInput!): AutomaticTopupSettings!
-  platformDisableAutomaticTopup(tenantId: ID!, reason: String!): AutomaticTopupSettings! @internal(reason: "Requires the platform_operator grant.")
-  platformRefundInvoice(tenantId: ID!, invoiceId: ID!, requestId: ID!, reason: String!, confirmed: Boolean! = false, fingerprint: String! = ""): PlatformInvoiceRefund! @internal(reason: "Requires the platform_operator grant.")
+  platformDisableAutomaticTopup(tenantId: ID!, reason: String!): AutomaticTopupSettings!
+    @internal(reason: "Requires the platform_operator grant.")
+  platformRefundInvoice(
+    tenantId: ID!
+    invoiceId: ID!
+    requestId: ID!
+    reason: String!
+    confirmed: Boolean! = false
+    fingerprint: String! = ""
+  ): PlatformInvoiceRefund! @internal(reason: "Requires the platform_operator grant.")
 
   "Record an audited EUR wallet adjustment. Reuse referenceId when retrying."
   platformAdjustBalance(
@@ -28259,9 +28272,19 @@ type Mutation {
     referenceId: ID!
   ): BalanceTransaction! @internal(reason: "Requires the platform_operator grant.")
   "Price an immediate arrangement change without committing it. The quote expires after five minutes."
-  platformPreviewBillingTier(tenantId: ID!, tierName: String!, reason: String!): PlatformBillingAssignmentQuote! @internal(reason: "Requires the platform_operator grant.")
+  platformPreviewBillingTier(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+  ): PlatformBillingAssignmentQuote! @internal(reason: "Requires the platform_operator grant.")
   "Apply the exact financial effects reviewed in an unexpired quote. Changed billing or usage requires another preview."
-  platformAssignBillingTierWithReview(tenantId: ID!, tierName: String!, reason: String!, quotedAt: Time!, fingerprint: String!): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
+  platformAssignBillingTierWithReview(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+    quotedAt: Time!
+    fingerprint: String!
+  ): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
   "Assign a billing arrangement immediately, closing its existing billing phase."
   platformAssignBillingTier(
     tenantId: ID!
@@ -36756,48 +36779,48 @@ type EnablePrepaidUsagePayload {
 
 "Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months."
 input SetAutomaticTopupInput {
- enabled: Boolean!
- thresholdEurCents: Int! = 500
- netAmountMinor: Int! = 2000
- monthlyGrossLimitMinor: Int! = 10000
- currency: String!
- consentVersion: String! = ""
+  enabled: Boolean!
+  thresholdEurCents: Int! = 500
+  netAmountMinor: Int! = 2000
+  monthlyGrossLimitMinor: Int! = 10000
+  currency: String!
+  consentVersion: String! = ""
 }
 type AutomaticTopupSettings {
- enabled: Boolean!
- thresholdEurCents: Int!
- netAmountMinor: Int!
- monthlyGrossLimitMinor: Int!
- currency: String!
- pausedReason: String!
- monthlyReservedOrSpentMinor: Int!
- available: Boolean!
- unavailableReason: String!
- consentVersion: String!
+  enabled: Boolean!
+  thresholdEurCents: Int!
+  netAmountMinor: Int!
+  monthlyGrossLimitMinor: Int!
+  currency: String!
+  pausedReason: String!
+  monthlyReservedOrSpentMinor: Int!
+  available: Boolean!
+  unavailableReason: String!
+  consentVersion: String!
 }
 type PlatformInvoiceRefund {
- requestId: ID!
- invoiceId: ID!
- provider: String!
- amountMinor: Int!
- currency: String!
- status: String!
- fingerprint: String!
- detail: String!
- providerRefundId: String!
+  requestId: ID!
+  invoiceId: ID!
+  provider: String!
+  amountMinor: Int!
+  currency: String!
+  status: String!
+  fingerprint: String!
+  detail: String!
+  providerRefundId: String!
 }
 
 "Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero."
 type FreeCancellationReview {
- quotedAt: Time!
- expiresAt: Time!
- effectiveAt: Time!
- fingerprint: String!
- dueNowMinor: Int!
- refundNowMinor: Int!
- walletCreditNowMinor: Int!
- currency: String!
- futureUsageMessage: String!
+  quotedAt: Time!
+  expiresAt: Time!
+  effectiveAt: Time!
+  fingerprint: String!
+  dueNowMinor: Int!
+  refundNowMinor: Int!
+  walletCreditNowMinor: Int!
+  currency: String!
+  futureUsageMessage: String!
 }
 `, BuiltIn: false},
 }

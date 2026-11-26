@@ -1207,7 +1207,20 @@ enum GQL {
   """
 
   static let GetAutomaticTopup = """
-  query GetAutomaticTopup { automaticTopup { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  query GetAutomaticTopup {
+    automaticTopup {
+      enabled
+      thresholdEurCents
+      netAmountMinor
+      monthlyGrossLimitMinor
+      currency
+      pausedReason
+      monthlyReservedOrSpentMinor
+      available
+      unavailableReason
+      consentVersion
+    }
+  }
   """
 
   static let GetBalanceTransactions = """
@@ -2780,7 +2793,20 @@ enum GQL {
   """
 
   static let GetPlatformAutomaticTopup = """
-  query GetPlatformAutomaticTopup($tenantId: ID!) { platformAutomaticTopup(tenantId:$tenantId) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  query GetPlatformAutomaticTopup($tenantId: ID!) {
+    platformAutomaticTopup(tenantId: $tenantId) {
+      enabled
+      thresholdEurCents
+      netAmountMinor
+      monthlyGrossLimitMinor
+      currency
+      pausedReason
+      monthlyReservedOrSpentMinor
+      available
+      unavailableReason
+      consentVersion
+    }
+  }
   """
 
   static let GetPlatformClusters = """
@@ -4605,7 +4631,14 @@ enum GQL {
     analytics {
       lifecycle {
         recordingEventsConnection(streamId: $streamId, page: { first: 20 }, noCache: true) {
-          edges { node { eventId type timestamp details } }
+          edges {
+            node {
+              eventId
+              type
+              timestamp
+              details
+            }
+          }
         }
       }
     }
@@ -5627,8 +5660,8 @@ enum GQL {
   """
 
   static let ConfirmFreeCancellation = """
-  mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt:Time!, $fingerprint:String!) {
-    confirmFreeCancellation(tierId: $tierId,quotedAt:$quotedAt,fingerprint:$fingerprint) {
+  mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {
+    confirmFreeCancellation(tierId: $tierId, quotedAt: $quotedAt, fingerprint: $fingerprint) {
       ... on ChangeBillingTierPayload {
         success
         message
@@ -6467,18 +6500,53 @@ enum GQL {
   """
 
   static let PlatformAssignBillingTierWithReview = """
-  mutation PlatformAssignBillingTierWithReview($tenantId: ID!, $tierName: String!, $reason: String!, $quotedAt: Time!, $fingerprint: String!) {
-   platformAssignBillingTierWithReview(tenantId:$tenantId,tierName:$tierName,reason:$reason,quotedAt:$quotedAt,fingerprint:$fingerprint) {subscriptionId tierName billingModel changed}
+  mutation PlatformAssignBillingTierWithReview(
+    $tenantId: ID!
+    $tierName: String!
+    $reason: String!
+    $quotedAt: Time!
+    $fingerprint: String!
+  ) {
+    platformAssignBillingTierWithReview(
+      tenantId: $tenantId
+      tierName: $tierName
+      reason: $reason
+      quotedAt: $quotedAt
+      fingerprint: $fingerprint
+    ) {
+      subscriptionId
+      tierName
+      billingModel
+      changed
+    }
   }
   """
 
   static let PlatformDisableAutomaticTopup = """
-  mutation PlatformDisableAutomaticTopup($tenantId: ID!, $reason:String!) { platformDisableAutomaticTopup(tenantId:$tenantId,reason:$reason) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  mutation PlatformDisableAutomaticTopup($tenantId: ID!, $reason: String!) {
+    platformDisableAutomaticTopup(tenantId: $tenantId, reason: $reason) {
+      enabled
+      thresholdEurCents
+      netAmountMinor
+      monthlyGrossLimitMinor
+      currency
+      pausedReason
+      monthlyReservedOrSpentMinor
+      available
+      unavailableReason
+      consentVersion
+    }
+  }
   """
 
   static let PlatformPreviewBillingTier = """
   mutation PlatformPreviewBillingTier($tenantId: ID!, $tierName: String!, $reason: String!) {
-   platformPreviewBillingTier(tenantId:$tenantId,tierName:$tierName,reason:$reason) { quotedAt expiresAt fingerprint effectsJson }
+    platformPreviewBillingTier(tenantId: $tenantId, tierName: $tierName, reason: $reason) {
+      quotedAt
+      expiresAt
+      fingerprint
+      effectsJson
+    }
   }
   """
 
@@ -6508,8 +6576,32 @@ enum GQL {
   """
 
   static let PlatformRefundInvoice = """
-  mutation PlatformRefundInvoice($tenantId:ID!, $invoiceId:ID!, $requestId:ID!, $reason:String!, $confirmed:Boolean!, $fingerprint:String!) {
-   platformRefundInvoice(tenantId:$tenantId,invoiceId:$invoiceId,requestId:$requestId,reason:$reason,confirmed:$confirmed,fingerprint:$fingerprint) { requestId invoiceId provider amountMinor currency status fingerprint detail providerRefundId }
+  mutation PlatformRefundInvoice(
+    $tenantId: ID!
+    $invoiceId: ID!
+    $requestId: ID!
+    $reason: String!
+    $confirmed: Boolean!
+    $fingerprint: String!
+  ) {
+    platformRefundInvoice(
+      tenantId: $tenantId
+      invoiceId: $invoiceId
+      requestId: $requestId
+      reason: $reason
+      confirmed: $confirmed
+      fingerprint: $fingerprint
+    ) {
+      requestId
+      invoiceId
+      provider
+      amountMinor
+      currency
+      status
+      fingerprint
+      detail
+      providerRefundId
+    }
   }
   """
 
@@ -6526,7 +6618,19 @@ enum GQL {
   """
 
   static let PreviewFreeCancellation = """
-  mutation PreviewFreeCancellation($tierId:ID!){previewFreeCancellation(tierId:$tierId){quotedAt expiresAt effectiveAt fingerprint dueNowMinor refundNowMinor walletCreditNowMinor currency futureUsageMessage}}
+  mutation PreviewFreeCancellation($tierId: ID!) {
+    previewFreeCancellation(tierId: $tierId) {
+      quotedAt
+      expiresAt
+      effectiveAt
+      fingerprint
+      dueNowMinor
+      refundNowMinor
+      walletCreditNowMinor
+      currency
+      futureUsageMessage
+    }
+  }
   """
 
   static let PromoteToPaid = """
@@ -6885,7 +6989,20 @@ enum GQL {
   """
 
   static let SetAutomaticTopup = """
-  mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) { setAutomaticTopup(input:$input) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) {
+    setAutomaticTopup(input: $input) {
+      enabled
+      thresholdEurCents
+      netAmountMinor
+      monthlyGrossLimitMinor
+      currency
+      pausedReason
+      monthlyReservedOrSpentMinor
+      available
+      unavailableReason
+      consentVersion
+    }
+  }
   """
 
   static let SetMediaRetentionPolicy = """

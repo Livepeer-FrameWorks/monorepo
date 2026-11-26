@@ -39,6 +39,7 @@ mutation AddIncidentNote(
   }
 }
 
+# @genqlient(for: "ApplyMediaCapacityConsentInput.acknowledgedWarningIds", omitempty: true)
 mutation ApplyClusterMediaConsentChange(
   $input: ApplyMediaCapacityConsentInput!
 ) {
@@ -51,6 +52,14 @@ mutation ApplyClusterMediaConsentChange(
   }
 }
 
+# @genqlient(for: "ApplyMediaPlacementChangeInput.acknowledgedWarningIds", omitempty: true)
+# @genqlient(for: "MediaPlacementConstraintsInput.deny", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.geoHoleDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.maxDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.minImprovementKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.order", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.spillover", omitempty: true)
+# @genqlient(for: "MediaPlacementRulesInput.schemaVersion", omitempty: true)
 mutation ApplyMediaPlacementChange(
   $input: ApplyMediaPlacementChangeInput!
 ) {
@@ -558,6 +567,10 @@ mutation SendMessage(
   }
 }
 
+# @genqlient(for: "SetAutomaticTopupInput.consentVersion", omitempty: true, pointer: true)
+# @genqlient(for: "SetAutomaticTopupInput.monthlyGrossLimitMinor", omitempty: true, pointer: true)
+# @genqlient(for: "SetAutomaticTopupInput.netAmountMinor", omitempty: true, pointer: true)
+# @genqlient(for: "SetAutomaticTopupInput.thresholdEurCents", omitempty: true, pointer: true)
 mutation SetAutomaticTopup(
   $input: SetAutomaticTopupInput!
 ) {

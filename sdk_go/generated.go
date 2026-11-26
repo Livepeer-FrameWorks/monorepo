@@ -2944,7 +2944,7 @@ type ApplyMediaCapacityConsentInput struct {
 	AllowExternalSource    bool     `json:"allowExternalSource"`
 	ReviewToken            string   `json:"reviewToken"`
 	IdempotencyKey         string   `json:"idempotencyKey"`
-	AcknowledgedWarningIds []string `json:"acknowledgedWarningIds"`
+	AcknowledgedWarningIds []string `json:"acknowledgedWarningIds,omitempty"`
 }
 
 // GetClusterId returns ApplyMediaCapacityConsentInput.ClusterId, and is useful for accessing the field via an interface.
@@ -3469,7 +3469,7 @@ type ApplyMediaPlacementChangeInput struct {
 	Updates                []MediaPlacementVerbUpdateInput `json:"updates"`
 	ReviewToken            string                          `json:"reviewToken"`
 	IdempotencyKey         string                          `json:"idempotencyKey"`
-	AcknowledgedWarningIds []string                        `json:"acknowledgedWarningIds"`
+	AcknowledgedWarningIds []string                        `json:"acknowledgedWarningIds,omitempty"`
 }
 
 // GetScope returns ApplyMediaPlacementChangeInput.Scope, and is useful for accessing the field via an interface.
@@ -80893,7 +80893,7 @@ var AllMediaPlacementClass = []MediaPlacementClass{
 type MediaPlacementConstraintsInput struct {
 	// Omitted means no additional restriction; an explicit empty any list allows nothing.
 	Allow *MediaPlacementAllowInput     `json:"allow"`
-	Deny  []MediaPlacementSelectorInput `json:"deny"`
+	Deny  []MediaPlacementSelectorInput `json:"deny,omitempty"`
 }
 
 // GetAllow returns MediaPlacementConstraintsInput.Allow, and is useful for accessing the field via an interface.
@@ -81372,13 +81372,13 @@ func (v *MediaPlacementErrorInMediaPlacementReviewResultDefaultFieldsFieldsMedia
 type MediaPlacementGroupInput struct {
 	Id        string                      `json:"id"`
 	Match     MediaPlacementSelectorInput `json:"match"`
-	Order     MediaPlacementOrder         `json:"order"`
-	Spillover MediaPlacementSpillover     `json:"spillover"`
+	Order     MediaPlacementOrder         `json:"order,omitempty"`
+	Spillover MediaPlacementSpillover     `json:"spillover,omitempty"`
 	// Hard maximum distance in km. Zero means unbounded.
-	MaxDistanceKm float64 `json:"maxDistanceKm"`
+	MaxDistanceKm float64 `json:"maxDistanceKm,omitempty"`
 	// Soft threshold for geographic spill; must be positive for GEO_HOLE modes.
-	GeoHoleDistanceKm float64 `json:"geoHoleDistanceKm"`
-	MinImprovementKm  float64 `json:"minImprovementKm"`
+	GeoHoleDistanceKm float64 `json:"geoHoleDistanceKm,omitempty"`
+	MinImprovementKm  float64 `json:"minImprovementKm,omitempty"`
 	PriceCurrency     *string `json:"priceCurrency"`
 	PriceUnit         *string `json:"priceUnit"`
 }
@@ -82255,7 +82255,7 @@ var AllMediaPlacementRolloutStatus = []MediaPlacementRolloutStatus{
 }
 
 type MediaPlacementRulesInput struct {
-	SchemaVersion int                            `json:"schemaVersion"`
+	SchemaVersion int                            `json:"schemaVersion,omitempty"`
 	Constraints   MediaPlacementConstraintsInput `json:"constraints"`
 	// Omitted inherits preference order; an explicit empty groups list denies all destinations.
 	Preferences *MediaPlacementPreferencesInput `json:"preferences"`
@@ -98604,31 +98604,31 @@ func (v *SessionQoeTimeSeriesBucketDefaultFields) GetAvgBitrateBps() float64 { r
 
 // Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months.
 type SetAutomaticTopupInput struct {
-	Enabled                bool   `json:"enabled"`
-	ThresholdEurCents      int    `json:"thresholdEurCents"`
-	NetAmountMinor         int    `json:"netAmountMinor"`
-	MonthlyGrossLimitMinor int    `json:"monthlyGrossLimitMinor"`
-	Currency               string `json:"currency"`
-	ConsentVersion         string `json:"consentVersion"`
+	Enabled                bool    `json:"enabled"`
+	ThresholdEurCents      *int    `json:"thresholdEurCents,omitempty"`
+	NetAmountMinor         *int    `json:"netAmountMinor,omitempty"`
+	MonthlyGrossLimitMinor *int    `json:"monthlyGrossLimitMinor,omitempty"`
+	Currency               string  `json:"currency"`
+	ConsentVersion         *string `json:"consentVersion,omitempty"`
 }
 
 // GetEnabled returns SetAutomaticTopupInput.Enabled, and is useful for accessing the field via an interface.
 func (v *SetAutomaticTopupInput) GetEnabled() bool { return v.Enabled }
 
 // GetThresholdEurCents returns SetAutomaticTopupInput.ThresholdEurCents, and is useful for accessing the field via an interface.
-func (v *SetAutomaticTopupInput) GetThresholdEurCents() int { return v.ThresholdEurCents }
+func (v *SetAutomaticTopupInput) GetThresholdEurCents() *int { return v.ThresholdEurCents }
 
 // GetNetAmountMinor returns SetAutomaticTopupInput.NetAmountMinor, and is useful for accessing the field via an interface.
-func (v *SetAutomaticTopupInput) GetNetAmountMinor() int { return v.NetAmountMinor }
+func (v *SetAutomaticTopupInput) GetNetAmountMinor() *int { return v.NetAmountMinor }
 
 // GetMonthlyGrossLimitMinor returns SetAutomaticTopupInput.MonthlyGrossLimitMinor, and is useful for accessing the field via an interface.
-func (v *SetAutomaticTopupInput) GetMonthlyGrossLimitMinor() int { return v.MonthlyGrossLimitMinor }
+func (v *SetAutomaticTopupInput) GetMonthlyGrossLimitMinor() *int { return v.MonthlyGrossLimitMinor }
 
 // GetCurrency returns SetAutomaticTopupInput.Currency, and is useful for accessing the field via an interface.
 func (v *SetAutomaticTopupInput) GetCurrency() string { return v.Currency }
 
 // GetConsentVersion returns SetAutomaticTopupInput.ConsentVersion, and is useful for accessing the field via an interface.
-func (v *SetAutomaticTopupInput) GetConsentVersion() string { return v.ConsentVersion }
+func (v *SetAutomaticTopupInput) GetConsentVersion() *string { return v.ConsentVersion }
 
 // SetAutomaticTopupResponse is returned by SetAutomaticTopup on success.
 type SetAutomaticTopupResponse struct {

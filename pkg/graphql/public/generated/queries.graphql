@@ -14,6 +14,7 @@ query GetAnalyticsInfraServiceInstancesHealth(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetApiUsageConnection(
   $page: ConnectionInput
   $authType: String
@@ -60,6 +61,7 @@ query GetApiUsageConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetArtifactEventsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -99,6 +101,7 @@ query GetArtifactNodeCopies(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetArtifactStatesConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -147,6 +150,7 @@ query GetAutomaticTopup {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetBalanceTransactionsConnection(
   $page: ConnectionInput
   $transactionType: String
@@ -190,6 +194,7 @@ query GetBillingTiers {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetBufferEventsConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -221,6 +226,7 @@ query GetCapabilities {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClientQoeConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -285,6 +291,7 @@ query GetClusterBootOps(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClusterInvitesConnection(
   $page: ConnectionInput
   $clusterId: ID!
@@ -328,6 +335,7 @@ query GetClusterMediaConsentChange(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClusterNodesConnection(
   $id: ID!
   $page: ConnectionInput
@@ -392,6 +400,7 @@ query GetClusterWorkload(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClustersAccessConnection(
   $page: ConnectionInput
 ) {
@@ -409,6 +418,7 @@ query GetClustersAccessConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClustersAvailableConnection(
   $page: ConnectionInput
 ) {
@@ -426,6 +436,7 @@ query GetClustersAvailableConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetClustersConnection(
   $page: ConnectionInput
 ) {
@@ -443,6 +454,7 @@ query GetClustersConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetConnectionEventsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -476,6 +488,7 @@ query GetConversation(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetConversationsConnection(
   $page: ConnectionInput
 ) {
@@ -507,6 +520,7 @@ query GetDailyStats(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetDiscoverServicesConnection(
   $page: ConnectionInput
   $discoverServicesConnectionType: String!
@@ -590,6 +604,7 @@ query GetIncident(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetIncidentsConnection(
   $page: ConnectionInput
   $filter: IncidentFilterInput
@@ -609,6 +624,7 @@ query GetIncidentsConnection(
 }
 
 # @target query.node.InfrastructureNode.metrics1hConnection
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetInfrastructureNodeMetrics1hConnection(
   $id: ID!
   $page: ConnectionInput
@@ -634,6 +650,7 @@ query GetInfrastructureNodeMetrics1hConnection(
 }
 
 # @target query.node.InfrastructureNode.metricsConnection
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetInfrastructureNodeMetricsConnection(
   $id: ID!
   $page: ConnectionInput
@@ -666,6 +683,7 @@ query GetInvoice(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetInvoicesConnection(
   $page: ConnectionInput
 ) {
@@ -691,6 +709,7 @@ query GetMarketplaceCluster(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetMarketplaceClustersConnection(
   $page: ConnectionInput
 ) {
@@ -755,6 +774,7 @@ query GetMediaRetentionPolicy {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetMessagesConnection(
   $conversationId: ID!
   $page: ConnectionInput
@@ -779,6 +799,7 @@ query GetMollieMandates {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetMyClusterInvitesConnection(
   $page: ConnectionInput
 ) {
@@ -796,6 +817,7 @@ query GetMyClusterInvitesConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetMySubscriptionsConnection(
   $page: ConnectionInput
 ) {
@@ -857,6 +879,7 @@ query GetNode(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetNodeMetrics1hConnection(
   $page: ConnectionInput
   $timeRange: TimeRangeInput
@@ -897,6 +920,7 @@ query GetNodeMetricsAggregated(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetNodeMetricsConnection(
   $page: ConnectionInput
   $nodeId: String
@@ -922,6 +946,7 @@ query GetNodeMetricsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetNodePerformance5mConnection(
   $page: ConnectionInput
   $nodeId: String
@@ -947,6 +972,7 @@ query GetNodePerformance5mConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetNodesConnection(
   $page: ConnectionInput
   $clusterId: String
@@ -1003,6 +1029,7 @@ query GetOrchestratorVantages(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetOrchestratorsConnection(
   $page: ConnectionInput
   $orchAddr: String
@@ -1030,6 +1057,7 @@ query GetPayment(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetPaymentsConnection(
   $page: ConnectionInput
   $invoiceId: ID
@@ -1050,6 +1078,7 @@ query GetPaymentsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetPendingSubscriptionsConnection(
   $page: ConnectionInput
   $clusterId: ID!
@@ -1108,6 +1137,13 @@ query GetPrepaidBalance {
   }
 }
 
+# @genqlient(for: "MediaPlacementConstraintsInput.deny", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.geoHoleDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.maxDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.minImprovementKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.order", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.spillover", omitempty: true)
+# @genqlient(for: "MediaPlacementRulesInput.schemaVersion", omitempty: true)
 query GetPreviewMediaPlacement(
   $input: PreviewMediaPlacementInput!
 ) {
@@ -1120,6 +1156,7 @@ query GetPreviewMediaPlacement(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetProcessingUsageConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1169,6 +1206,7 @@ query GetProcessingUsageConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetQualityTierDailyConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1196,6 +1234,7 @@ query GetQualityTierDailyConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetRebufferingEventsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1234,6 +1273,7 @@ query GetRecentPullSourceEvents(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetRecordingEventsConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -1271,6 +1311,13 @@ query GetReviewClusterMediaConsentChange(
   }
 }
 
+# @genqlient(for: "MediaPlacementConstraintsInput.deny", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.geoHoleDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.maxDistanceKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.minImprovementKm", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.order", omitempty: true)
+# @genqlient(for: "MediaPlacementGroupInput.spillover", omitempty: true)
+# @genqlient(for: "MediaPlacementRulesInput.schemaVersion", omitempty: true)
 query GetReviewMediaPlacementChange(
   $input: ReviewMediaPlacementChangeInput!
 ) {
@@ -1298,6 +1345,7 @@ query GetRoutingEfficiency(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetRoutingEventsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1343,6 +1391,7 @@ query GetSecurityActivityConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetServiceInstancesConnection(
   $page: ConnectionInput
   $clusterId: String
@@ -1447,6 +1496,7 @@ query GetSkipperUnreadReportCount {
   skipperUnreadReportCount
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStorageEventsConnection(
   $page: ConnectionInput
   $assetType: String
@@ -1473,6 +1523,7 @@ query GetStorageEventsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStorageUsageConnection(
   $page: ConnectionInput
   $nodeId: String
@@ -1501,6 +1552,7 @@ query GetStorageUsageConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamAnalyticsDailyConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1528,6 +1580,7 @@ query GetStreamAnalyticsDailyConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamAnalyticsSummariesConnection(
   $page: ConnectionInput
   $timeRange: TimeRangeInput!
@@ -1571,6 +1624,7 @@ query GetStreamAnalyticsSummary(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamConnectionHourlyConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1598,6 +1652,7 @@ query GetStreamConnectionHourlyConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamEventsConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -1623,6 +1678,7 @@ query GetStreamEventsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamHealth5mConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -1648,6 +1704,7 @@ query GetStreamHealth5mConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetStreamHealthConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1700,6 +1757,7 @@ query GetTenant {
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetTenantAnalyticsDailyConnection(
   $page: ConnectionInput
   $timeRange: TimeRangeInput
@@ -1740,6 +1798,7 @@ query GetTopAssets(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetTrackListConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -1779,6 +1838,7 @@ query GetValidateStreamKey(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetViewerGeoHourlyConnection(
   $page: ConnectionInput
   $timeRange: TimeRangeInput
@@ -1805,6 +1865,7 @@ query GetViewerGeoHourlyConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetViewerGeographicsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1830,6 +1891,7 @@ query GetViewerGeographicsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetViewerHoursHourlyConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1857,6 +1919,7 @@ query GetViewerHoursHourlyConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetViewerSessionsConnection(
   $page: ConnectionInput
   $streamId: ID
@@ -1882,6 +1945,7 @@ query GetViewerSessionsConnection(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetViewerTimeSeriesConnection(
   $page: ConnectionInput
   $streamId: ID!
@@ -1923,6 +1987,7 @@ query GetVodRetention(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetVodRetentionAssets(
   $page: ConnectionInput
   $timeRange: TimeRangeInput
@@ -1947,6 +2012,7 @@ query GetVodRetentionAssets(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetWebhookDeliveriesConnection(
   $endpointId: ID
   $statuses: [WebhookDeliveryStatus!]
@@ -1986,6 +2052,7 @@ query GetWebhookEndpoint(
   }
 }
 
+# @genqlient(for: "ConnectionInput.first", omitempty: true)
 query GetWebhookEndpointsConnection(
   $page: ConnectionInput
 ) {

@@ -53,7 +53,7 @@ func generateFixture(t *testing.T, handWritten string) (map[string]string, []ope
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, _, err := generateDefaultOps(schema, handOps)
+	files, _, err := generateDefaultOps(schema, handOps, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ fragment ValidationErrorDefaultFields on ValidationError { message code field }
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, _, err := generateDefaultOps(schema, ops)
+	files, _, err := generateDefaultOps(schema, ops, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ fragment ValidationErrorDefaultFields on ValidationError { message code field }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := generateDefaultOps(schema, ops); err == nil || !strings.Contains(err.Error(), "conflicts with its generated selection") {
+	if _, _, err := generateDefaultOps(schema, ops, nil); err == nil || !strings.Contains(err.Error(), "conflicts with its generated selection") {
 		t.Fatalf("a conflicting shared fragment must fail: %v", err)
 	}
 }
@@ -157,7 +157,7 @@ type Account { id: ID! token: String @internal(reason: "service token") }
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, _, err := generateDefaultOps(public, nil)
+	files, _, err := generateDefaultOps(public, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ query B($id: ID!) { stream(id: $id) { name } }`, "operations A and B both target
 			hand := []*ast.Source{{Name: "hand.graphql", Input: tc.doc}}
 			handOps, err := parseOperations(schema, hand)
 			if err == nil {
-				files, _, gerr := generateDefaultOps(schema, handOps)
+				files, _, gerr := generateDefaultOps(schema, handOps, nil)
 				if gerr != nil {
 					t.Fatal(gerr)
 				}
@@ -401,7 +401,7 @@ func TestNodeTypeArgumentFieldsTargetThroughNode(t *testing.T) {
 		t.Fatalf("list-only = %v", listOnly)
 	}
 
-	files, ops, err := generateDefaultOps(schema, nil)
+	files, ops, err := generateDefaultOps(schema, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,5 +489,43 @@ func TestRepoDefaultOperationsAreCurrent(t *testing.T) {
 	summary := opNamed(t, all, "GetStreamAnalyticsSummary")
 	if summary.Target != "query.analytics.usage.streaming.streamAnalyticsSummary" || !strings.Contains(summary.Document, "$streamId: ID!") {
 		t.Fatalf("GetStreamAnalyticsSummary = %s\n%s", summary.Target, summary.Document)
+	}
+}
+
+func TestInputDefaultsOmitUnsetFieldsAndKeepReleasedTypes(t *testing.T) {
+	schema := mustSchema(t, `
+type Query { ping: Boolean! }
+type Mutation { setTopup(input: TopupInput!): Boolean! setRules(input: RulesInput!): Boolean! }
+input TopupInput { enabled: Boolean! threshold: Int! = 500 note: String = "x" tags: [String!]! = [] }
+input RulesInput { version: Int! = 1 }
+`)
+	_, ops, err := generateDefaultOps(schema, nil, map[string]bool{"RulesInput": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, op := range ops {
+		for _, field := range op.InputDefaults {
+			got[field.Field] = field.Pointer
+		}
+	}
+	want := map[string]bool{
+		// A new required scalar keeps an explicit zero distinct from unset.
+		"TopupInput.threshold": true,
+		// Nullable fields are already pointers; lists keep their element type.
+		"TopupInput.note": false, "TopupInput.tags": false,
+		// A released type keeps its plain Go field and is only omitted when unset.
+		"RulesInput.version": false,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("input defaults = %v, want %v", got, want)
+	}
+	for field, pointer := range want {
+		if p, ok := got[field]; !ok || p != pointer {
+			t.Fatalf("input defaults = %v, want %v", got, want)
+		}
+	}
+	if _, ok := got["TopupInput.enabled"]; ok {
+		t.Fatal("a field without a default was marked omitempty")
 	}
 }
