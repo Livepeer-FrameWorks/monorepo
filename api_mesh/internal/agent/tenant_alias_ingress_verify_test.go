@@ -12,8 +12,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +45,14 @@ func TestTenantAliasPrivateerDockerIngressLifecycle(t *testing.T) {
 	agent, root, _ := newAliasTestAgent(t, foghornRegistry(), aliases, navigator)
 	agent.registryClient = stableAliasRegistry()
 	agent.aliasAppliedPath = filepath.Join(filepath.Dir(root), "applied")
+	// As on a host, Privateer grants the ingress worker access through the
+	// reader group; the worker below runs in this process's group. The TLS
+	// root's inherited group (a setgid workspace) must not decide access.
+	readerGroup, err := user.LookupGroupId(strconv.Itoa(os.Getegid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.ingressReaderGroup = readerGroup.Name
 	pending := func() {
 		t.Helper()
 		if err := agent.syncTenantAliasCertificates(); !errors.Is(err, ErrTenantAliasIngressPending) || agent.IsTenantAliasIngressApplied() {
