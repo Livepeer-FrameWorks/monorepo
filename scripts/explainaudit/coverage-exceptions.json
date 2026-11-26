@@ -63,6 +63,8 @@
   "purser:InsertCryptoReversalBalanceTransaction@distributed": "plan_only",
   "purser:InsertCryptoTopupInvoice@declared": "plan_only",
   "purser:InsertCryptoTopupInvoice@distributed": "plan_only",
+  "purser:InsertOperatorInvoiceRefund@declared": "plan_only",
+  "purser:InsertOperatorInvoiceRefund@distributed": "plan_only",
   "purser:InsertPreparedX402SettlementAttempt@declared": "plan_only",
   "purser:InsertPreparedX402SettlementAttempt@distributed": "plan_only",
   "purser:InsertProviderBillingPaymentAttempt@declared": "plan_only",
