@@ -59,7 +59,10 @@ if stack_ctl stop "$GATEWAY"; then
   eventually 60 "CPU fallback produces the same 360/480 ladder" ladder
   tallest=$(video_heights "$UUID" | tail -1)
   check "fallback never upscales (tallest ${tallest:-none} <= ${SOURCE_H})" [ "${tallest:-0}" -le "$SOURCE_H" ]
-  every_replica "fallback renditions play" "$PB" media_at
+  # A cross-cell replica picks the replacement renditions up from the origin after the switch.
+  for replica in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+    eventually 60 "fallback renditions play via $replica" media_at "$replica" "$PB"
+  done
   stack_ctl start "$GATEWAY" || true
 fi
 finish
