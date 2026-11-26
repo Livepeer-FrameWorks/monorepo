@@ -52,16 +52,26 @@ with urllib.request.urlopen(vtt, timeout=30) as response:
     assert response.headers.get_content_type() == 'text/vtt', response.headers
     body = response.read().decode()
 assert body.startswith('WEBVTT') and 'stack subtitle cue' in body, body
-# Remuxing the MP4 into Matroska shifts every track for AAC encoder priming.
-# Compare the stored cue with the uploaded container's clock, not the SRT's.
-probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 's',
-    '-show_entries', 'packet=pts_time,duration_time,size', '-of', 'json', sys.argv[2]], timeout=10))
-cue = next(packet for packet in probe['packets'] if int(packet['size']) > 2)
-start = int(Decimal(cue['pts_time']) * 1000)
-end = start + int(Decimal(cue['duration_time']) * 1000)
-def stamp(ms):
-    return f'{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02}.{ms % 1000:03}'
-assert stamp(start) + ' --> ' + stamp(end) in body, body
+# Mist may shift every track alike (container priming, Matroska CodecDelay), so the cue must keep
+# its offset from the first video frame and its duration, not the uploaded file's absolute clock.
+def packets(kind):
+    probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', kind,
+        '-show_entries', 'packet=pts_time,duration_time,size', '-of', 'json', sys.argv[2]], timeout=10))
+    return probe['packets']
+cue = next(packet for packet in packets('s') if int(packet['size']) > 2)
+source_offset = int((Decimal(cue['pts_time']) - min(Decimal(p['pts_time']) for p in packets('v'))) * 1000)
+duration = int(Decimal(cue['duration_time']) * 1000)
+info_url = urllib.parse.urlunsplit((url.scheme, url.netloc, '/json_' + stream + '.js', url.query, ''))
+with urllib.request.urlopen(info_url, timeout=30) as response:
+    tracks = json.loads(response.read().decode())['meta']['tracks']
+video_first = min(t['firstms'] for t in tracks.values() if t.get('type') == 'video')
+def ms(stamp):
+    h, m, s = stamp.split(':')
+    return int(h) * 3600000 + int(m) * 60000 + int(Decimal(s) * 1000)
+served = next(line for line in body.splitlines() if '-->' in line)
+served_start, served_end = (ms(part.strip()) for part in served.split('-->'))
+assert abs((served_start - video_first) - source_offset) <= 1, (served, video_first, source_offset)
+assert served_end - served_start == duration, (served, duration)
 PYVTT
 }
 
