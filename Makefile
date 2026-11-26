@@ -2216,7 +2216,6 @@ verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
 
 verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_balancing yugabyte/media-recovery-ownership -tags schema_verify -run '^TestMediaRecoveryExpiryOwnership_RealYugabyte$$' -count=1 -timeout 180s ./internal/jobs/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/free-footprint -tags schema_verify -run '^TestFreeTierMediaFootprint_RealYugabyte$$' -count=1 -timeout 180s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^($(FOGHORN_CONTROL_REALYB_TESTS))$$' -count=1 -timeout 300s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-a -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)' -count=1 -timeout 1200s ./internal/database/foghorndb/
@@ -2826,6 +2825,7 @@ PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|
 verify-media-recovery-ownership-db:
 	@$(CONTRACT_GO_TEST) api_balancing postgres/media-recovery-ownership -tags schema_verify -run '^TestMediaRecoveryExpiryOwnership_RealPG$$' -count=1 -timeout 180s ./internal/jobs/
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestMediaRecoveryExpiryOwnership_RealPG
+FOGHORN_JOBS_REALYB_TESTS := $(FOGHORN_JOBS_REALYB_TESTS)|TestMediaRecoveryExpiryOwnership_RealYugabyte
 
 PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestPricedAssignmentReview_RealPG|TestFreeCancellationReview_RealPG
 PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := $(PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS)|TestCompletedInvoiceCashRefund_RealPG|TestAutomaticTopupConsentAndBudget_RealPG
