@@ -98,7 +98,8 @@ mkfifo "$pressure"
 exec 9<> "$pressure"
 chunks=()
 printf -v chunk '%4194304s' ''
-for ((block=0; block<256; block++)); do
+# Twice the edge limit: reclaim of the edge's page cache throttles the writer long before OOM.
+for ((block=0; block<512; block++)); do
  [ -r "/proc/$pid/stat" ] && current_birth && [ "$current_stamp" = "$birth" ] || exit 1
  printf '%s %s %s %s %s\n' "$$" "$owner_birth" "$before" "$old_score" "$((block+1))" > "$state"
  chunks+=("$chunk")
@@ -124,7 +125,7 @@ def stop():
   except ProcessLookupError:pass
   except FileNotFoundError:pass
  pressure.unlink(missing_ok=True)
-deadline=time.monotonic()+35
+deadline=time.monotonic()+150
 try:
  while time.monotonic()<deadline:
   try:
@@ -158,7 +159,7 @@ finally:stop()
         worker.stdin = None
         observed = docker("run", "--rm", "--network", "none", "--cpus", "1", "--memory", "128m",
                           "--pid", "container:" + container, "--entrypoint", "python3", image,
-                          "-c", watch, state, pressure, timeout=45)
+                          "-c", watch, state, pressure, timeout=170)
         worker.communicate(timeout=10)
         evidence.update(json.loads(observed))
         evidence["pressure_kind"] = "retained_anonymous"
@@ -187,7 +188,11 @@ print("native processor killed; controller and sidecar stayed alive")
                 worker.terminate()
             output, errors = worker.communicate(timeout=10)
             print(json.dumps({"pressure_worker_exit":worker.returncode,"stdout":output,"stderr":errors}), file=sys.stderr)
-        subprocess.run(["docker", "exec", container, "rm", "-f", pressure, state], capture_output=True, timeout=10)
+        try:
+            subprocess.run(["docker", "exec", container, "rm", "-f", pressure, state], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            # A stalled cleanup must not replace the failure that led here.
+            print(json.dumps({"pressure_cleanup": "timed out", "files": [pressure, state]}), file=sys.stderr)
 
 
 if __name__ == "__main__":
