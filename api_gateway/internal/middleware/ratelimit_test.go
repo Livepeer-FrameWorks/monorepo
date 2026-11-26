@@ -750,6 +750,13 @@ func TestEvaluateAccessCatalogAllowsUnfundedControlAndRecovery(t *testing.T) {
 	}{
 		{operationType: "query", operation: "billingStatus"},
 		{operationType: "mutation", operation: "createDeveloperToken"},
+		{operationType: "mutation", operation: "setAutomaticTopup"},
+		{operationType: "mutation", operation: "previewFreeCancellation"},
+		{operationType: "mutation", operation: "confirmFreeCancellation"},
+		{operationType: "mutation", operation: "platformPreviewBillingTier"},
+		{operationType: "mutation", operation: "platformAssignBillingTierWithReview"},
+		{operationType: "mutation", operation: "platformRefundInvoice"},
+		{operationType: "mutation", operation: "platformDisableAutomaticTopup"},
 		{operationType: "query", operation: "developerTokensConnection"},
 		{operation: "mcp:tools/call:list_linked_wallets"},
 		{operation: "mcp:tools/call:link_wallet"},

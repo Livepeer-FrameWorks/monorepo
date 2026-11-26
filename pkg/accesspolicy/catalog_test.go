@@ -30,6 +30,23 @@ func TestOnlyRatedOperationsRequireFunds(t *testing.T) {
 	}
 }
 
+func TestBillingRecoveryAndOperatorMutationClasses(t *testing.T) {
+	for name, want := range map[string]Class{
+		"setAutomaticTopup":                   PaymentRecovery,
+		"previewFreeCancellation":             PaymentRecovery,
+		"confirmFreeCancellation":             PaymentRecovery,
+		"platformPreviewBillingTier":          Privileged,
+		"platformAssignBillingTierWithReview": Privileged,
+		"platformRefundInvoice":               Privileged,
+		"platformDisableAutomaticTopup":       Privileged,
+	} {
+		got, ok := GraphQLMutationClass(name)
+		if !ok || got != want || !got.UnfundedAllowed() {
+			t.Errorf("%s policy = %q (%v), want unfunded-allowed %q", name, got, ok, want)
+		}
+	}
+}
+
 func TestRepresentativeParity(t *testing.T) {
 	tests := []struct {
 		graphql string

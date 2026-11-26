@@ -32,8 +32,10 @@ func runAccessOperation(middleware graphql.OperationMiddleware, ctx context.Cont
 func TestGraphQLOperationAccessAllowsUnfundedControlAndBlocksRatedMutation(t *testing.T) {
 	middleware := GraphQLOperationAccess(fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true})
 
-	if reached, response := runAccessOperation(middleware, wsMutationContext("tenant-1", "createStream")); !reached || len(response.Errors) != 0 {
-		t.Fatalf("unfunded control mutation denied: reached=%v response=%+v", reached, response)
+	for _, name := range []string{"createStream", "setAutomaticTopup", "previewFreeCancellation", "confirmFreeCancellation"} {
+		if reached, response := runAccessOperation(middleware, wsMutationContext("tenant-1", name)); !reached || len(response.Errors) != 0 {
+			t.Fatalf("unfunded control/recovery mutation %s denied: reached=%v response=%+v", name, reached, response)
+		}
 	}
 	if reached, response := runAccessOperation(middleware, wsMutationContext("tenant-1", "createClip")); reached || len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "INSUFFICIENT_BALANCE" {
 		t.Fatalf("unfunded rated mutation not denied correctly: reached=%v response=%+v", reached, response)
