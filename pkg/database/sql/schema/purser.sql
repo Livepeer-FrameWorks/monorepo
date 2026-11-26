@@ -4668,7 +4668,9 @@ BEGIN
  RETURN NEW;
 END;
 $$;
-CREATE OR REPLACE TRIGGER operator_invoice_refund_collection_fence BEFORE UPDATE ON purser.billing_invoices FOR EACH ROW EXECUTE FUNCTION purser.fence_operator_invoice_refund_collection();
+-- A refund is only recorded against a paid invoice (HoldOperatorRefundInvoice), so only rows leaving
+-- paid, manual_review or refunded can carry one; bulk collection updates of other rows skip the lookup.
+CREATE OR REPLACE TRIGGER operator_invoice_refund_collection_fence BEFORE UPDATE ON purser.billing_invoices FOR EACH ROW WHEN (OLD.status IN ('paid','manual_review','refunded')) EXECUTE FUNCTION purser.fence_operator_invoice_refund_collection();
 
 CREATE OR REPLACE FUNCTION purser.fence_operator_invoice_refund_credit()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
