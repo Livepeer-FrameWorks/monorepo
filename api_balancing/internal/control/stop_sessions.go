@@ -24,7 +24,7 @@ type stopSessionsWaiter struct {
 	names      []string
 	result     chan error
 	ctx        context.Context
-	command    *ipcpb.StopSessionsRequest
+	authorize  chan string
 	authorized string
 }
 
@@ -58,23 +58,8 @@ func acceptStopSessionsResult(result *ipcpb.StopSessionsResult, session NodeSess
 		}
 		current.authorized = nonce
 		stopSessionsWaiters.byID[result.GetRequestId()] = current
+		current.authorize <- nonce
 		stopSessionsWaiters.Unlock()
-		go func() {
-			permit := proto.CloneOf(waiter.command)
-			deadline, _ := waiter.ctx.Deadline()
-			remaining := time.Until(deadline).Milliseconds()
-			if remaining <= 0 {
-				return
-			}
-			permit.AuthorizationNonce = nonce
-			permit.RemainingTimeoutMs = uint32(remaining)
-			if err := sendOnConnBounded(waiter.ctx, session.NodeID(), waiter.connection, &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: permit}}, 3*time.Second); err != nil {
-				select {
-				case waiter.result <- err:
-				default:
-				}
-			}
-		}()
 		return true
 	}
 	if waiter.authorized == "" {
@@ -173,7 +158,7 @@ func sendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 		}
 	}
 
-	waiter := stopSessionsWaiter{connection: c, tenant: command.TenantId, names: slices.Clone(command.StreamNames), result: make(chan error, 1), ctx: ctx, command: command}
+	waiter := stopSessionsWaiter{connection: c, tenant: command.TenantId, names: slices.Clone(command.StreamNames), result: make(chan error, 1), ctx: ctx, authorize: make(chan string, 1)}
 	stopSessionsWaiters.Lock()
 	stopSessionsWaiters.byID[command.RequestId] = waiter
 	stopSessionsWaiters.Unlock()
@@ -184,6 +169,23 @@ func sendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 	}()
 	if err := sendOnConnBounded(ctx, nodeID, c, &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: command}}, 3*time.Second); err != nil {
 		return err
+	}
+	// The request owns the permit send so an early effect acknowledgement cannot
+	// return and cancel its context while the authorization dispatch is still active.
+	select {
+	case nonce := <-waiter.authorize:
+		remaining = time.Until(deadline).Milliseconds()
+		if remaining <= 0 {
+			return context.DeadlineExceeded
+		}
+		permit := proto.CloneOf(command)
+		permit.AuthorizationNonce = nonce
+		permit.RemainingTimeoutMs = uint32(remaining)
+		if err := sendOnConnBounded(ctx, nodeID, c, &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: permit}}, 3*time.Second); err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return fmt.Errorf("session termination authorization: %w", ctx.Err())
 	}
 	select {
 	case err := <-waiter.result:

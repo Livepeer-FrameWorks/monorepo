@@ -101,6 +101,45 @@ type stopResultStream struct {
 	afterSend func(*ipcpb.StopSessionsRequest)
 }
 
+func TestStopSessionsWaitsForAuthorizationDispatchBeforeReturning(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stream := &stopResultStream{captureStream: &captureStream{}}
+		t.Cleanup(SetupTestRegistry("edge-stop", stream))
+		previousDB := db
+		db = nil
+		t.Cleanup(func() { db = previousDB })
+		effectSeen, releaseSend := make(chan struct{}), make(chan struct{})
+		stream.afterSend = func(request *ipcpb.StopSessionsRequest) {
+			if !CompleteTestStopSessions("edge-stop", request, "") {
+				t.Error("current stop result was rejected")
+			}
+			if request.GetAuthorizationNonce() != "" {
+				close(effectSeen)
+				<-releaseSend
+			}
+		}
+		finished := make(chan error, 1)
+		go func() {
+			finished <- SendStopSessionsContext(t.Context(), "edge-stop", &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}})
+		}()
+		<-effectSeen
+		synctest.Wait()
+		select {
+		case err := <-finished:
+			t.Errorf("stop returned before its authorization dispatch finished: %v", err)
+			close(releaseSend)
+			synctest.Wait()
+			return
+		default:
+		}
+		close(releaseSend)
+		if err := <-finished; err != nil {
+			t.Fatalf("confirmed stop failed after dispatch completed: %v", err)
+		}
+		synctest.Wait()
+	})
+}
+
 func (s *stopResultStream) Send(msg *ipcpb.ControlMessage) error {
 	if err := s.captureStream.Send(msg); err != nil {
 		return err
