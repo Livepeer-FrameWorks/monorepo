@@ -194,7 +194,7 @@ func TestGetBlockersReportsSuspendedAccounts(t *testing.T) {
 	}
 }
 
-func TestInsufficientBalanceStatesTheSpentBalanceRule(t *testing.T) {
+func TestInsufficientBalanceExplainsGraceAndFreeRecovery(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: prepaidBillingStatus,
 		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
@@ -208,9 +208,25 @@ func TestInsufficientBalanceStatesTheSpentBalanceRule(t *testing.T) {
 	if err != nil || b == nil {
 		t.Fatalf("zero balance → (%v,%v)", b, err)
 	}
-	for _, want := range []string{"€0", "-€10", "continue"} {
+	for _, want := range []string{"0 cents", "grace limit", "Top up", "Free limits", "without erasing unpaid usage"} {
 		if !strings.Contains(b.Message, want) {
 			t.Fatalf("blocker %q does not state %q", b.Message, want)
+		}
+	}
+}
+
+func TestBalanceAllowsAuthoritativePaymentGrace(t *testing.T) {
+	for _, available := range []int64{0, -500} {
+		c := checkerWith(&clientstest.FakePurser{
+			GetTenantAdmissionStatusFn: func(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+				return &purserpb.GetTenantAdmissionStatusResponse{BillingModel: "prepaid", PaymentGrace: &purserpb.PaymentGrace{Active: true}}, nil
+			},
+			GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
+				return &purserpb.PrepaidBalance{AvailableBalanceCents: available}, nil
+			},
+		})
+		if blocker, err := c.CheckBalance(ctxTenant("t1")); err != nil || blocker != nil {
+			t.Fatalf("available %d with authoritative grace was blocked: %v %v", available, blocker, err)
 		}
 	}
 }

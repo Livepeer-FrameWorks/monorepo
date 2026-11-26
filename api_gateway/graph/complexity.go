@@ -209,6 +209,9 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.AnalyticsLifecycle.ConnectionEventsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.TimeRangeInput, _ *bool) int {
 		return connectionComplexity(childComplexity, page)
 	}
+	c.AnalyticsLifecycle.RecordingEventsConnection = func(childComplexity int, page *model.ConnectionInput, _ string, _ *model.TimeRangeInput, _ *bool) int {
+		return connectionComplexity(childComplexity, page)
+	}
 	c.AnalyticsLifecycle.StorageEventsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *string, _ *model.TimeRangeInput, _ *bool) int {
 		return connectionComplexity(childComplexity, page)
 	}
