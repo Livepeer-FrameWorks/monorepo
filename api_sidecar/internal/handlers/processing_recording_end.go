@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,6 +104,9 @@ func (h *ProcessingJobHandler) reportRecordingOutputVanished(log *logrus.Entry, 
 		"grace":         processingRecordingEndGrace.String(),
 	}).Error("Processing recording output ended without RECORDING_END; reporting the attempt retryable")
 	h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+	if h.reportPendingProcessingOOM(log, mistClient, send, jobID, streamName) {
+		return
+	}
 	if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
 		log.Warn("Processing stream still active after cleanup; the retry may attach to it")
 	}
@@ -123,6 +127,44 @@ func (h *ProcessingJobHandler) reportFailedPushWithRecording(log *logrus.Entry, 
 		"exit_reason":   recEnd.ExitReason,
 	}).Error("Processing push ended with failure")
 	h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+	if h.reportPendingProcessingOOM(log, mistClient, send, jobID, streamName) {
+		return
+	}
 	status := failedRecordingStatus(log, mistClient, streamName, recEnd)
 	h.sendResult(send, jobID, status, processingPushFailureMessage(evt), nil, "", 0)
+}
+
+// processingExitGrace bounds the wait for the PROCESS_EXIT of a processor whose death ended the push.
+// Mist posts that trigger asynchronously, so it can land after the push failure is handled.
+var processingExitGrace = 3 * time.Second
+
+// pendingProcessingOOM returns the stream's OOM-killed processor exit once it is routed, or nil when
+// none arrives within grace. Other exits keep the push failure's own classification.
+func pendingProcessingOOM(streamName string, grace time.Duration) error {
+	deadline := time.Now().Add(grace)
+	for {
+		var oom *processingOOMError
+		if err := processingResourceFailure(streamName, nil); errors.As(err, &oom) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// reportPendingProcessingOOM settles a failed attempt as memory pressure when a processor was
+// OOM-killed: the job requeues with a larger memory floor and spends no tenant retry.
+func (h *ProcessingJobHandler) reportPendingProcessingOOM(log *logrus.Entry, mistClient *mist.Client, send func(*ipcpb.ControlMessage), jobID, streamName string) bool {
+	err := pendingProcessingOOM(streamName, processingExitGrace)
+	if err == nil {
+		return false
+	}
+	log.WithError(err).Warn("Processing output ended after an OOM-killed processor; requeueing for memory")
+	if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
+		log.Warn("Processing stream still active after cleanup; the retry may attach to it")
+	}
+	h.sendResult(send, jobID, processingResultRetryable, err.Error(), processingReadinessFailureOutputs(err), "", 0)
+	return true
 }
