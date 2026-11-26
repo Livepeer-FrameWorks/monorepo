@@ -10,8 +10,9 @@ ALTER TABLE purser.prepaid_balances
  ADD COLUMN IF NOT EXISTS free_recovery_until TIMESTAMPTZ;
 ALTER TABLE purser.prepaid_balances DROP CONSTRAINT IF EXISTS prepaid_grace_policy_valid;
 ALTER TABLE purser.prepaid_balances ADD CONSTRAINT prepaid_grace_policy_valid CHECK (
- grace_duration_seconds BETWEEN 0 AND 604800 AND grace_limit_cents BETWEEN 0 AND 1000
- AND grace_rearm_seconds BETWEEN 2592000 AND 31536000 AND grace_credit_cents >= 0
+ grace_duration_seconds >= 0 AND grace_duration_seconds <= 604800
+ AND grace_limit_cents >= 0 AND grace_limit_cents <= 1000
+ AND grace_rearm_seconds >= 2592000 AND grace_rearm_seconds <= 31536000 AND grace_credit_cents >= 0
  AND ((grace_started_at IS NULL AND grace_ends_at IS NULL) OR
       (grace_started_at IS NOT NULL AND grace_ends_at >= grace_started_at))) NOT VALID;
 
