@@ -52,16 +52,17 @@ class QualificationGuards(unittest.TestCase):
                     result = subprocess.run(["bash", "-c", script + predicate + "\nsession_ended"], capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
 
-    def test_webvtt_uses_uploaded_cue_clock_and_duration(self):
+    def test_webvtt_keeps_cue_offset_from_first_video_frame_and_duration(self):
         predicate = scenario_function("78-vod-upload-formats.sh", "subtitles_play")
-        body = {"text": ""}
+        served = {"vtt": "", "info": ""}
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                info = self.path.startswith("/json_")
                 self.send_response(200)
-                self.send_header("Content-Type", "text/vtt")
+                self.send_header("Content-Type", "application/javascript" if info else "text/vtt")
                 self.end_headers()
-                self.wfile.write(body["text"].encode())
+                self.wfile.write((served["info"] if info else served["vtt"]).encode())
 
             def log_message(self, *_args):
                 pass
@@ -73,25 +74,35 @@ class QualificationGuards(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 probe = root / "ffprobe"
-                probe.write_text("#!/usr/bin/env python3\nimport os\nprint(os.environ['SOURCE_PACKETS'])\n")
+                probe.write_text("#!/usr/bin/env python3\nimport os,sys\n"
+                                 "kind=sys.argv[sys.argv.index('-select_streams')+1]\n"
+                                 "print(os.environ['SOURCE_' + kind.upper()])\n")
                 probe.chmod(0o755)
                 url = f"http://127.0.0.1:{server.server_port}/hls/fixture/index.m3u8"
                 script = "location_at() { printf '%s\\n' " + shlex.quote(url) + "; }\n" + predicate
                 script += "\nsubtitles_play source.mkv http://foghorn fixture\n"
+                # (case, source video start, source cue start, served video firstms, served cue timing, expected)
                 cases = (
-                    ("mp4", "0.500000", "00:00:00.500 --> 00:00:02.000", True),
-                    ("remuxed-mkv", "0.521000", "00:00:00.521 --> 00:00:02.021", True),
-                    ("wrong-origin", "0.521000", "00:00:00.500 --> 00:00:02.000", False),
-                    ("wrong-duration", "0.521000", "00:00:00.521 --> 00:00:02.121", False),
+                    ("aligned", "0.000000", "0.500000", 0, "00:00:00.500 --> 00:00:02.000", True),
+                    ("every-track-shifted", "0.000000", "0.500000", 6, "00:00:00.506 --> 00:00:02.006", True),
+                    ("primed-source", "0.021000", "0.521000", 0, "00:00:00.500 --> 00:00:02.000", True),
+                    ("subtitle-only-shifted", "0.000000", "0.500000", 0, "00:00:00.506 --> 00:00:02.006", False),
+                    ("wrong-duration", "0.000000", "0.500000", 0, "00:00:00.500 --> 00:00:02.100", False),
                 )
-                for name, start, timing, expected in cases:
+                for name, video_start, cue_start, video_first, timing, expected in cases:
                     with self.subTest(case=name):
-                        body["text"] = "WEBVTT\n\n" + timing + "\nstack subtitle cue\n"
-                        packets = [
+                        served["vtt"] = "WEBVTT\n\n" + timing + "\nstack subtitle cue\n"
+                        served["info"] = json.dumps({"meta": {"tracks": {
+                            "video_H264_960x540_1": {"type": "video", "firstms": video_first},
+                            "subtitle_subtitle_2": {"type": "meta", "firstms": video_first},
+                        }}})
+                        subtitles = [
                             {"pts_time": "0.000000", "duration_time": "0.500000", "size": "2"},
-                            {"pts_time": start, "duration_time": "1.500000", "size": "22"},
+                            {"pts_time": cue_start, "duration_time": "1.500000", "size": "22"},
                         ]
-                        env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"], SOURCE_PACKETS=json.dumps({"packets": packets}))
+                        video = [{"pts_time": video_start, "duration_time": "0.100000", "size": "900"}]
+                        env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                                   SOURCE_S=json.dumps({"packets": subtitles}), SOURCE_V=json.dumps({"packets": video}))
                         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=10)
                         self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         finally:
