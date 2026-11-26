@@ -1966,11 +1966,22 @@ the response unfinished, and JSON status does not emit the expected pre-source r
 source did not start. These are functional failures, not first-frame timing targets.
 
 `make verify-mist-current-source` exports a clean local Mist commit without changing its checkout,
-builds in a temporary Docker context with network disabled and no dependency fallback, then runs
+builds in a temporary Docker context with network and dependency downloads disabled, then runs
 the same contract against the resulting immutable image ID. Set `MIST_SOURCE_DIR` and
 `MIST_CONTRACT_BUILD_IMAGE` to the source checkout and an already cached Linux builder containing
 Meson, installed dependencies and ffmpeg. Source revision and builder ID are retained in image
-labels; the export and images remain available for diagnosis. This debug contract build disables
+labels. The script retains its export for diagnosis, subject to the runner's temporary-directory
+cleanup. If the builder lacks the pinned non-processing wraps, `MIST_PREFETCH_SUBPROJECTS=1`
+downloads MbedTLS, SRTP, SCTP, SRT and RIST into the export as the invoking user before the isolated
+build. Meson uses the export's wrap revisions, hashes and patches; missing downloads fail rather
+than reaching the network during compilation. The image refreshes its shared-library cache and
+checks that the installed input and controller load. Native Meson tests then run with four workers in
+an owned container on Docker's bridge network. This gives socket fixtures the non-loopback
+interface required by `AI_ADDRCONFIG` and the multicast route used by WebRTC relays. The test
+container is removed after testing. `make verify-large-vod-playback` additionally accepts
+`MIST_LARGE_SOURCE_FILE` and the resulting `MIST_CONTRACT_IMAGE` to index a protected MKV larger
+than 2 GiB and decode HLS audio/video at its beginning, middle and end. It binds the media read-only
+and writes its index only inside the disposable fixture. This debug contract build disables
 libav/ONNX processing and is explicitly not release certification.
 
 The fresh build of Mist `68e5b9c962f643edfabfc061aef638e3e8626c09`, image

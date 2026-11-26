@@ -49,6 +49,12 @@ func (jm *JobManager) runProviderSettlementRetry(ctx context.Context) {
 			if jm.billing == nil {
 				continue
 			}
+			intentCtx, cancel := context.WithTimeout(ctx, time.Minute)
+			intentErr := jm.billing.reconcileConfirmedInvoiceIntents(intentCtx)
+			cancel()
+			if intentErr != nil {
+				jm.logger.WithError(intentErr).Warn("Confirmed invoice intent reconciliation failed")
+			}
 			now := time.Now()
 			if err := jm.billing.retryRecordedProviderSettlements(ctx, now); err != nil {
 				jm.logger.WithError(err).Warn("Recorded provider settlement valuation failed")

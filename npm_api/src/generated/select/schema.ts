@@ -225,6 +225,8 @@ export interface AnalyticsInfra {
  * `streamId` arguments accept Stream.id (Relay global ID).
  */
 export interface AnalyticsLifecycle {
+    /** Latest recording outcomes and broadcast boundaries, without buffer/track noise. */
+    recordingEventsConnection: StreamEventsConnection
     streamEventsConnection: StreamEventsConnection
     bufferEventsConnection: BufferEventsConnection
     artifactEventsConnection: ArtifactEventsConnection
@@ -431,6 +433,20 @@ export interface AuthSessionEdge {
     cursor: Scalars['String']
     node: AuthSession
     __typename: 'AuthSessionEdge'
+}
+
+export interface AutomaticTopupSettings {
+    enabled: Scalars['Boolean']
+    thresholdEurCents: Scalars['Int']
+    netAmountMinor: Scalars['Int']
+    monthlyGrossLimitMinor: Scalars['Int']
+    currency: Scalars['String']
+    pausedReason: Scalars['String']
+    monthlyReservedOrSpentMinor: Scalars['Int']
+    available: Scalars['Boolean']
+    unavailableReason: Scalars['String']
+    consentVersion: Scalars['String']
+    __typename: 'AutomaticTopupSettings'
 }
 
 export interface AvailableCluster {
@@ -1860,6 +1876,16 @@ export interface EffectiveRetention {
 }
 
 
+/** The funded-usage arrangement after opting into PAYG. */
+export interface EnablePrepaidUsagePayload {
+    activated: Scalars['Boolean']
+    awaitingFunds: Scalars['Boolean']
+    tierName: Scalars['String']
+    billingModel: Scalars['String']
+    __typename: 'EnablePrepaidUsagePayload'
+}
+
+
 /** A key-value entitlement entry. Values are JSON-encoded for type flexibility. */
 export interface EntitlementEntry {
     key: Scalars['String']
@@ -1968,6 +1994,21 @@ export interface FederationSummary {
     overallAvgLatencyMs: Scalars['Float']
     overallFailureRate: Scalars['Float']
     __typename: 'FederationSummary'
+}
+
+
+/** Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero. */
+export interface FreeCancellationReview {
+    quotedAt: Scalars['Time']
+    expiresAt: Scalars['Time']
+    effectiveAt: Scalars['Time']
+    fingerprint: Scalars['String']
+    dueNowMinor: Scalars['Int']
+    refundNowMinor: Scalars['Int']
+    walletCreditNowMinor: Scalars['Int']
+    currency: Scalars['String']
+    futureUsageMessage: Scalars['String']
+    __typename: 'FreeCancellationReview'
 }
 
 
@@ -2351,7 +2392,7 @@ export interface InvoicePaymentsConnection {
 
 
 /** Invoice lifecycle status. */
-export type InvoiceStatus = 'DRAFT' | 'PENDING' | 'PAID' | 'OVERDUE' | 'FAILED' | 'MANUAL_REVIEW' | 'CANCELLED'
+export type InvoiceStatus = 'DRAFT' | 'PENDING' | 'PAID' | 'OVERDUE' | 'FAILED' | 'MANUAL_REVIEW' | 'REFUNDED' | 'CANCELLED'
 
 export interface InvoicesConnection {
     edges: InvoiceEdge[]
@@ -3155,6 +3196,11 @@ export interface Mutation {
      * Required before any payment for VAT invoicing.
      */
     updateBillingDetails: BillingDetails
+    /** Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved. */
+    enablePrepaidUsage: EnablePrepaidUsagePayload
+    previewFreeCancellation: FreeCancellationReview
+    confirmFreeCancellation: ChangeBillingTierResult
+    setAutomaticTopup: AutomaticTopupSettings
     /** Update the current tenant's profile. */
     updateTenant: UpdateTenantResult
     /** Subscribe to a cluster for streaming access. */
@@ -3866,6 +3912,19 @@ export interface PaymentFailed {
 }
 
 
+/**
+ * Prepaid balance for wallet-based accounts.
+ * Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+ */
+export interface PaymentGrace {
+    active: Scalars['Boolean']
+    endsAt: (Scalars['Time'] | null)
+    remainingCreditCents: Scalars['Int']
+    mediaRecoveryUntil: (Scalars['Time'] | null)
+    __typename: 'PaymentGrace'
+}
+
+
 /** Supported payment methods. */
 export type PaymentMethod = 'CARD' | 'CRYPTO_ETH' | 'CRYPTO_USDC'
 
@@ -4089,12 +4148,9 @@ export interface PlayerBootTimeSeriesBucket {
     __typename: 'PlayerBootTimeSeriesBucket'
 }
 
-
-/**
- * Prepaid balance for wallet-based accounts.
- * Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
- */
 export interface PrepaidBalance {
+    /** Temporary paid continuity and any media recovery deadline. */
+    paymentGrace: (PaymentGrace | null)
     /** Unique balance record identifier. */
     id: Scalars['ID']
     /** Owning tenant identifier. */
@@ -4398,6 +4454,7 @@ export interface QualityTierSummary {
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
  */
 export interface Query {
+    automaticTopup: AutomaticTopupSettings
     /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
     authSessionsConnection: AuthSessionConnection
     /** Your own security activity from the past 90 days. */
@@ -5753,7 +5810,7 @@ export interface StreamEventEdge {
 
 export type StreamEventSource = 'HISTORICAL' | 'LIVE'
 
-export type StreamEventType = 'STREAM_LIFECYCLE_UPDATE' | 'STREAM_START' | 'STREAM_END' | 'BUFFER_UPDATE' | 'TRACK_LIST_UPDATE' | 'PLAY_REWRITE' | 'STREAM_SOURCE'
+export type StreamEventType = 'RECORDING_REFUSED' | 'RECORDING_ACTIVE' | 'STREAM_LIFECYCLE_UPDATE' | 'STREAM_START' | 'STREAM_END' | 'BUFFER_UPDATE' | 'TRACK_LIST_UPDATE' | 'PLAY_REWRITE' | 'STREAM_SOURCE'
 
 export interface StreamEventsConnection {
     edges: StreamEventEdge[]
@@ -6332,6 +6389,8 @@ export interface TenantStorageUsage {
 }
 
 export interface TenantSubscription {
+    /** Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it. */
+    automaticPrepaidUsage: Scalars['Boolean']
     id: Scalars['ID']
     tenantId: Scalars['ID']
     tierId: Scalars['String']
@@ -7478,6 +7537,8 @@ export interface AnalyticsInfraGenqlSelection{
  * `streamId` arguments accept Stream.id (Relay global ID).
  */
 export interface AnalyticsLifecycleGenqlSelection{
+    /** Latest recording outcomes and broadcast boundaries, without buffer/track noise. */
+    recordingEventsConnection?: (StreamEventsConnectionGenqlSelection & { __args: {page?: (ConnectionInput | null), streamId: Scalars['ID'], timeRange?: (TimeRangeInput | null), noCache?: (Scalars['Boolean'] | null)} })
     streamEventsConnection?: (StreamEventsConnectionGenqlSelection & { __args: {page?: (ConnectionInput | null), streamId: Scalars['ID'], timeRange?: (TimeRangeInput | null), noCache?: (Scalars['Boolean'] | null)} })
     bufferEventsConnection?: (BufferEventsConnectionGenqlSelection & { __args: {page?: (ConnectionInput | null), streamId: Scalars['ID'], timeRange?: (TimeRangeInput | null), noCache?: (Scalars['Boolean'] | null)} })
     artifactEventsConnection?: (ArtifactEventsConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null), streamId?: (Scalars['ID'] | null), stage?: (Scalars['String'] | null), contentType?: (Scalars['String'] | null), timeRange?: (TimeRangeInput | null), noCache?: (Scalars['Boolean'] | null)} })
@@ -7695,6 +7756,21 @@ export interface AuthSessionConnectionGenqlSelection{
 export interface AuthSessionEdgeGenqlSelection{
     cursor?: boolean | number
     node?: AuthSessionGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface AutomaticTopupSettingsGenqlSelection{
+    enabled?: boolean | number
+    thresholdEurCents?: boolean | number
+    netAmountMinor?: boolean | number
+    monthlyGrossLimitMinor?: boolean | number
+    currency?: boolean | number
+    pausedReason?: boolean | number
+    monthlyReservedOrSpentMinor?: boolean | number
+    available?: boolean | number
+    unavailableReason?: boolean | number
+    consentVersion?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -9567,6 +9643,17 @@ export interface EffectiveRetentionGenqlSelection{
 }
 
 
+/** The funded-usage arrangement after opting into PAYG. */
+export interface EnablePrepaidUsagePayloadGenqlSelection{
+    activated?: boolean | number
+    awaitingFunds?: boolean | number
+    tierName?: boolean | number
+    billingModel?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
 /** A key-value entitlement entry. Values are JSON-encoded for type flexibility. */
 export interface EntitlementEntryGenqlSelection{
     key?: boolean | number
@@ -9662,6 +9749,22 @@ export interface FederationSummaryGenqlSelection{
     totalEvents?: boolean | number
     overallAvgLatencyMs?: boolean | number
     overallFailureRate?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero. */
+export interface FreeCancellationReviewGenqlSelection{
+    quotedAt?: boolean | number
+    expiresAt?: boolean | number
+    effectiveAt?: boolean | number
+    fingerprint?: boolean | number
+    dueNowMinor?: boolean | number
+    refundNowMinor?: boolean | number
+    walletCreditNowMinor?: boolean | number
+    currency?: boolean | number
+    futureUsageMessage?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -11064,6 +11167,11 @@ export interface MutationGenqlSelection{
      * Required before any payment for VAT invoicing.
      */
     updateBillingDetails?: (BillingDetailsGenqlSelection & { __args: {input: UpdateBillingDetailsInput} })
+    /** Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved. */
+    enablePrepaidUsage?: EnablePrepaidUsagePayloadGenqlSelection
+    previewFreeCancellation?: (FreeCancellationReviewGenqlSelection & { __args: {tierId: Scalars['ID']} })
+    confirmFreeCancellation?: (ChangeBillingTierResultGenqlSelection & { __args: {tierId: Scalars['ID'], quotedAt: Scalars['Time'], fingerprint: Scalars['String']} })
+    setAutomaticTopup?: (AutomaticTopupSettingsGenqlSelection & { __args: {input: SetAutomaticTopupInput} })
     /** Update the current tenant's profile. */
     updateTenant?: (UpdateTenantResultGenqlSelection & { __args: {
     /** Updated tenant configuration. */
@@ -11936,6 +12044,20 @@ export interface PaymentFailedGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/**
+ * Prepaid balance for wallet-based accounts.
+ * Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+ */
+export interface PaymentGraceGenqlSelection{
+    active?: boolean | number
+    endsAt?: boolean | number
+    remainingCreditCents?: boolean | number
+    mediaRecoveryUntil?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 export interface PlatformOverviewGenqlSelection{
     totalStreams?: boolean | number
     activeStreams?: boolean | number
@@ -12195,12 +12317,9 @@ export interface PlayerBootTimeSeriesBucketGenqlSelection{
     __scalar?: boolean | number
 }
 
-
-/**
- * Prepaid balance for wallet-based accounts.
- * Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
- */
 export interface PrepaidBalanceGenqlSelection{
+    /** Temporary paid continuity and any media recovery deadline. */
+    paymentGrace?: PaymentGraceGenqlSelection
     /** Unique balance record identifier. */
     id?: boolean | number
     /** Owning tenant identifier. */
@@ -12572,6 +12691,7 @@ export interface QualityTierSummaryGenqlSelection{
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
  */
 export interface QueryGenqlSelection{
+    automaticTopup?: AutomaticTopupSettingsGenqlSelection
     /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
     authSessionsConnection?: (AuthSessionConnectionGenqlSelection & { __args?: {first?: (Scalars['Int'] | null), after?: (Scalars['String'] | null)} })
     /** Your own security activity from the past 90 days. */
@@ -13474,6 +13594,10 @@ export interface SessionQoeTimeSeriesBucketGenqlSelection{
     __typename?: boolean | number
     __scalar?: boolean | number
 }
+
+
+/** Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months. */
+export interface SetAutomaticTopupInput {enabled: Scalars['Boolean'],thresholdEurCents?: Scalars['Int'],netAmountMinor?: Scalars['Int'],monthlyGrossLimitMinor?: Scalars['Int'],currency: Scalars['String'],consentVersion?: Scalars['String']}
 
 export interface SetMediaRetentionPolicyInput {
 /** Which class to write: VOD, DVR, or CLIP. */
@@ -14972,6 +15096,8 @@ export interface TenantStorageUsageGenqlSelection{
 }
 
 export interface TenantSubscriptionGenqlSelection{
+    /** Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it. */
+    automaticPrepaidUsage?: boolean | number
     id?: boolean | number
     tenantId?: boolean | number
     tierId?: boolean | number
@@ -16406,6 +16532,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const AutomaticTopupSettings_possibleTypes: string[] = ['AutomaticTopupSettings']
+    export const isAutomaticTopupSettings = (obj?: { __typename?: any } | null): obj is AutomaticTopupSettings => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isAutomaticTopupSettings"')
+      return AutomaticTopupSettings_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const AvailableCluster_possibleTypes: string[] = ['AvailableCluster']
     export const isAvailableCluster = (obj?: { __typename?: any } | null): obj is AvailableCluster => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isAvailableCluster"')
@@ -17278,6 +17412,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const EnablePrepaidUsagePayload_possibleTypes: string[] = ['EnablePrepaidUsagePayload']
+    export const isEnablePrepaidUsagePayload = (obj?: { __typename?: any } | null): obj is EnablePrepaidUsagePayload => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isEnablePrepaidUsagePayload"')
+      return EnablePrepaidUsagePayload_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const EntitlementEntry_possibleTypes: string[] = ['EntitlementEntry']
     export const isEntitlementEntry = (obj?: { __typename?: any } | null): obj is EntitlementEntry => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isEntitlementEntry"')
@@ -17346,6 +17488,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isFederationSummary = (obj?: { __typename?: any } | null): obj is FederationSummary => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationSummary"')
       return FederationSummary_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const FreeCancellationReview_possibleTypes: string[] = ['FreeCancellationReview']
+    export const isFreeCancellationReview = (obj?: { __typename?: any } | null): obj is FreeCancellationReview => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isFreeCancellationReview"')
+      return FreeCancellationReview_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -18282,6 +18432,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isPaymentFailed = (obj?: { __typename?: any } | null): obj is PaymentFailed => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isPaymentFailed"')
       return PaymentFailed_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const PaymentGrace_possibleTypes: string[] = ['PaymentGrace']
+    export const isPaymentGrace = (obj?: { __typename?: any } | null): obj is PaymentGrace => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isPaymentGrace"')
+      return PaymentGrace_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -20478,6 +20636,7 @@ export const enumInvoiceStatus = {
    OVERDUE: 'OVERDUE' as const,
    FAILED: 'FAILED' as const,
    MANUAL_REVIEW: 'MANUAL_REVIEW' as const,
+   REFUNDED: 'REFUNDED' as const,
    CANCELLED: 'CANCELLED' as const
 }
 
@@ -20714,6 +20873,8 @@ export const enumStreamEventSource = {
 }
 
 export const enumStreamEventType = {
+   RECORDING_REFUSED: 'RECORDING_REFUSED' as const,
+   RECORDING_ACTIVE: 'RECORDING_ACTIVE' as const,
    STREAM_LIFECYCLE_UPDATE: 'STREAM_LIFECYCLE_UPDATE' as const,
    STREAM_START: 'STREAM_START' as const,
    STREAM_END: 'STREAM_END' as const,

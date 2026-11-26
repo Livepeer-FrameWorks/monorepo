@@ -566,3 +566,31 @@ func TestHandleChangeBillingTier(t *testing.T) {
 		t.Fatal("missing tenant must return a jsonrpc auth error")
 	}
 }
+
+func TestEnablePrepaidUsageOwnTenantAndTypedPendingResult(t *testing.T) {
+	p := &clientstest.FakePurser{EnablePrepaidUsageFn: func(_ context.Context, tenant string) (*purserpb.EnablePrepaidUsageResponse, error) {
+		if tenant != "own-tenant" {
+			t.Fatalf("unexpected funding target %q", tenant)
+		}
+		return &purserpb.EnablePrepaidUsageResponse{Activated: true, TierName: "payg", BillingModel: "prepaid"}, nil
+	}}
+	r := &resolvers.Resolver{Clients: clientstest.Clients(clientstest.WithPurser(p)), Logger: clientstest.DiscardLogger()}
+	if _, _, authErr := handleEnablePrepaidUsage(context.Background(), r); authErr == nil {
+		t.Fatal("unauthenticated funding request accepted")
+	}
+	result, output, err := handleEnablePrepaidUsage(billingOwnerToolsCtx("own-tenant"), r)
+	if err != nil || result.IsError || output.(map[string]any)["activated"] != true {
+		t.Fatalf("funding result=%+v output=%+v error=%v", result, output, err)
+	}
+	p.EnablePrepaidUsageFn = func(context.Context, string) (*purserpb.EnablePrepaidUsageResponse, error) {
+		st, detailErr := status.New(codes.FailedPrecondition, "database private host").WithDetails(&errdetails.ErrorInfo{Domain: "billing.frameworks.network", Reason: "PREPAID_ACTIVATION_PENDING", Metadata: map[string]string{"public_message": "Your PAYG choice is saved. Refresh billing."}})
+		if detailErr != nil {
+			t.Fatal(detailErr)
+		}
+		return nil, st.Err()
+	}
+	result, _, err = handleEnablePrepaidUsage(billingOwnerToolsCtx("own-tenant"), r)
+	if err != nil || !result.IsError || result.StructuredContent.(map[string]any)["code"] != "PREPAID_ACTIVATION_PENDING" || strings.Contains(extractToolText(result), "private") {
+		t.Fatalf("unsafe funding refusal=%+v err=%v", result, err)
+	}
+}

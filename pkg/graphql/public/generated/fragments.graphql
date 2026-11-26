@@ -383,6 +383,19 @@ fragment AuthSessionDefaultFields on AuthSession {
   current
 }
 
+fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+  enabled
+  thresholdEurCents
+  netAmountMinor
+  monthlyGrossLimitMinor
+  currency
+  pausedReason
+  monthlyReservedOrSpentMinor
+  available
+  unavailableReason
+  consentVersion
+}
+
 fragment AvailableClusterDefaultFields on AvailableCluster {
   clusterId
   clusterName
@@ -511,6 +524,7 @@ fragment BillingStatusDefaultFields on BillingStatus {
     isEnterprise
   }
   subscription {
+    automaticPrepaidUsage
     id
     tenantId
     tierId
@@ -1683,6 +1697,13 @@ fragment EffectiveRetentionDefaultFields on EffectiveRetention {
   source
 }
 
+fragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {
+  activated
+  awaitingFunds
+  tierName
+  billingModel
+}
+
 fragment FederationEventDefaultFields on FederationEvent {
   timestamp
   eventType
@@ -1718,6 +1739,18 @@ fragment FederationSummaryDefaultFields on FederationSummary {
   totalEvents
   overallAvgLatencyMs
   overallFailureRate
+}
+
+fragment FreeCancellationReviewDefaultFields on FreeCancellationReview {
+  quotedAt
+  expiresAt
+  effectiveAt
+  fingerprint
+  dueNowMinor
+  refundNowMinor
+  walletCreditNowMinor
+  currency
+  futureUsageMessage
 }
 
 fragment GeographicDistributionDefaultFields on GeographicDistribution {
@@ -2811,6 +2844,12 @@ fragment PlayerBootTimeSeriesBucketDefaultFields on PlayerBootTimeSeriesBucket {
 }
 
 fragment PrepaidBalanceDefaultFields on PrepaidBalance {
+  paymentGrace {
+    active
+    endsAt
+    remainingCreditCents
+    mediaRecoveryUntil
+  }
   id
   tenantId
   balanceCents

@@ -93,6 +93,7 @@ LIMIT 100;
 -- settlement can still activate the paid tier.
 UPDATE purser.tenant_subscriptions
 SET tier_id = sqlc.arg(tier_id)::text::uuid, status = 'active', billing_model = 'postpaid',
+    automatic_prepaid_usage = CASE WHEN free_fallback_reason='cancelled' THEN FALSE ELSE automatic_prepaid_usage END,
     stripe_subscription_id = NULL, stripe_subscription_status = NULL, stripe_current_period_end = NULL,
     mollie_subscription_id = NULL, mollie_next_payment_date = NULL, cancelled_at = NULL,
     pending_tier_id = CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,

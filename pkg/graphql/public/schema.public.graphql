@@ -264,6 +264,10 @@ Lifecycle analytics for streams and artifacts.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type AnalyticsLifecycle {
+  """
+  Latest recording outcomes and broadcast boundaries, without buffer/track noise.
+  """
+  recordingEventsConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): StreamEventsConnection!
   streamEventsConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): StreamEventsConnection!
   bufferEventsConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): BufferEventsConnection!
   artifactEventsConnection(page: ConnectionInput, streamId: ID, stage: String, contentType: String, timeRange: TimeRangeInput, noCache: Boolean = false): ArtifactEventsConnection!
@@ -504,6 +508,19 @@ type AuthSessionConnection {
 type AuthSessionEdge {
   cursor: String!
   node: AuthSession!
+}
+
+type AutomaticTopupSettings {
+  enabled: Boolean!
+  thresholdEurCents: Int!
+  netAmountMinor: Int!
+  monthlyGrossLimitMinor: Int!
+  currency: String!
+  pausedReason: String!
+  monthlyReservedOrSpentMinor: Int!
+  available: Boolean!
+  unavailableReason: String!
+  consentVersion: String!
 }
 
 type AvailableCluster {
@@ -2825,6 +2842,16 @@ type EffectiveRetention {
 }
 
 """
+The funded-usage arrangement after opting into PAYG.
+"""
+type EnablePrepaidUsagePayload {
+  activated: Boolean!
+  awaitingFunds: Boolean!
+  tierName: String!
+  billingModel: String!
+}
+
+"""
 A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 """
 type EntitlementEntry {
@@ -2982,6 +3009,21 @@ type FederationSummary {
   totalEvents: Int!
   overallAvgLatencyMs: Float!
   overallFailureRate: Float!
+}
+
+"""
+Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero.
+"""
+type FreeCancellationReview {
+  quotedAt: Time!
+  expiresAt: Time!
+  effectiveAt: Time!
+  fingerprint: String!
+  dueNowMinor: Int!
+  refundNowMinor: Int!
+  walletCreditNowMinor: Int!
+  currency: String!
+  futureUsageMessage: String!
 }
 
 """
@@ -3640,6 +3682,10 @@ enum InvoiceStatus {
   Invoice requires operator review and cannot be paid.
   """
   MANUAL_REVIEW
+  """
+  The original payment was returned with an original-tax credit note.
+  """
+  REFUNDED
   """
   Invoice cancelled.
   """
@@ -4919,6 +4965,13 @@ type Mutation {
   """
   updateBillingDetails(input: UpdateBillingDetailsInput!): BillingDetails!
   """
+  Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved.
+  """
+  enablePrepaidUsage: EnablePrepaidUsagePayload!
+  previewFreeCancellation(tierId: ID!): FreeCancellationReview!
+  confirmFreeCancellation(tierId: ID!, quotedAt: Time!, fingerprint: String!): ChangeBillingTierResult!
+  setAutomaticTopup(input: SetAutomaticTopupInput!): AutomaticTopupSettings!
+  """
   Update the current tenant's profile.
   """
   updateTenant(
@@ -5927,6 +5980,17 @@ type PaymentFailed {
 }
 
 """
+Prepaid balance for wallet-based accounts.
+Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+"""
+type PaymentGrace {
+  active: Boolean!
+  endsAt: Time
+  remainingCreditCents: Int!
+  mediaRecoveryUntil: Time
+}
+
+"""
 Supported payment methods.
 """
 enum PaymentMethod {
@@ -6288,11 +6352,11 @@ type PlayerBootTimeSeriesBucket {
   p99TtfMs: Float!
 }
 
-"""
-Prepaid balance for wallet-based accounts.
-Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
-"""
 type PrepaidBalance {
+  """
+  Temporary paid continuity and any media recovery deadline.
+  """
+  paymentGrace: PaymentGrace
   """
   Unique balance record identifier.
   """
@@ -6681,6 +6745,7 @@ enabling graceful degradation when individual services are unavailable.
 Most connection fields are non-null, but some may be nullable when upstream data is optional.
 """
 type Query {
+  automaticTopup: AutomaticTopupSettings!
   """
   The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
   """
@@ -7805,6 +7870,18 @@ type SessionQoeTimeSeriesBucket {
   avgBitrateBps: Float!
 }
 
+"""
+Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months.
+"""
+input SetAutomaticTopupInput {
+  enabled: Boolean!
+  thresholdEurCents: Int! = 500
+  netAmountMinor: Int! = 2000
+  monthlyGrossLimitMinor: Int! = 10000
+  currency: String!
+  consentVersion: String! = ""
+}
+
 input SetMediaRetentionPolicyInput {
   """
   Which class to write: VOD, DVR, or CLIP.
@@ -8723,6 +8800,8 @@ enum StreamEventSource {
 }
 
 enum StreamEventType {
+  RECORDING_REFUSED
+  RECORDING_ACTIVE
   STREAM_LIFECYCLE_UPDATE
   STREAM_START
   STREAM_END
@@ -9416,6 +9495,10 @@ type TenantStorageUsage {
 }
 
 type TenantSubscription {
+  """
+  Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it.
+  """
+  automaticPrepaidUsage: Boolean!
   id: ID!
   tenantId: ID!
   tierId: String!

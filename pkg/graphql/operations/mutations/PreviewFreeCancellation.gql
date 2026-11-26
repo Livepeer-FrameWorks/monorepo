@@ -1,0 +1,13 @@
+mutation PreviewFreeCancellation($tierId: ID!) {
+  previewFreeCancellation(tierId: $tierId) {
+    quotedAt
+    expiresAt
+    effectiveAt
+    fingerprint
+    dueNowMinor
+    refundNowMinor
+    walletCreditNowMinor
+    currency
+    futureUsageMessage
+  }
+}

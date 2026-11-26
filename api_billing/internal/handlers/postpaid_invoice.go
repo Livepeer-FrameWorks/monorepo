@@ -512,6 +512,11 @@ func PreparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, time.Time{}, true, false)
 }
 
+// PreparePostpaidPhaseCloseAt prices an operator-reviewed switch at its fixed boundary.
+func PreparePostpaidPhaseCloseAt(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PostpaidPhaseClose, error) {
+	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, at, true, false)
+}
+
 // PrepareProviderBillingBoundary rates usage received by preparation time for a
 // provider tier/model change. It commits only after the provider lock confirms
 // there is no outstanding grant; delayed usage for the closing phase is included.

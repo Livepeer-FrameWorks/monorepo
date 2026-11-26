@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 
 const fixture = vi.hoisted(() => ({
   provider: "stripe",
+  free: false,
+  payg: false,
+  automaticPrepaidUsage: false,
+  enableUsage: vi.fn(),
+  keepFree: vi.fn(),
   paymentMethod: "",
   complete: false,
   taxReview: false,
@@ -53,12 +58,24 @@ vi.mock("$houdini", async () => {
         return query(() => ({
           billingStatus: {
             billingStatus: "active",
+            currentTier:
+              fixture.free || fixture.payg
+                ? {
+                    id: fixture.free ? "free" : "payg",
+                    tierName: fixture.free ? "free" : "payg",
+                    displayName: fixture.free ? "Free" : "Pay As You Go",
+                    tierLevel: 1,
+                    basePrice: 0,
+                    currency: "EUR",
+                  }
+                : null,
             collectionReady: fixture.ready,
             collectionProvider: fixture.provider,
             setupProviders: ["stripe", "mollie"],
             subscription: {
               status: fixture.status,
-              billingModel: "postpaid",
+              automaticPrepaidUsage: fixture.automaticPrepaidUsage,
+              billingModel: fixture.payg ? "prepaid" : "postpaid",
               paymentMethod: fixture.paymentMethod,
             },
           },
@@ -81,7 +98,52 @@ vi.mock("$houdini", async () => {
       }
     },
     GetBillingLifecycleStore: EmptyQuery,
-    GetBillingTiersStore: EmptyQuery,
+    GetBillingTiersStore: class {
+      constructor() {
+        return query(() => ({
+          billingTiers:
+            fixture.free || fixture.payg
+              ? [
+                  {
+                    id: "free",
+                    tierName: "free",
+                    displayName: "Free",
+                    tierLevel: 1,
+                    basePrice: 0,
+                    currency: "EUR",
+                  },
+                  {
+                    id: "payg",
+                    tierName: "payg",
+                    displayName: "Pay As You Go",
+                    pricingRules: [
+                      {
+                        meter: "delivered_minutes",
+                        model: "tiered_graduated",
+                        currency: "EUR",
+                        unitPrice: "0.00055",
+                        includedQuantity: "0",
+                        configJson: "{}",
+                      },
+                      {
+                        meter: "storage_gb_seconds_cold",
+                        model: "all_usage",
+                        currency: "EUR",
+                        unitPrice: "0.035",
+                        includedQuantity: "0",
+                        configJson:
+                          '{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}',
+                      },
+                    ],
+                    tierLevel: 0,
+                    basePrice: 0,
+                    currency: "EUR",
+                  },
+                ]
+              : [],
+        }));
+      }
+    },
     GetInvoicesStore: EmptyQuery,
     GetPaymentsStore: EmptyQuery,
     GetMollieMandatesStore: EmptyQuery,
@@ -91,7 +153,12 @@ vi.mock("$houdini", async () => {
     CreateMollieFirstPaymentStore: class {},
     CreateMollieSubscriptionStore: class {},
     ChangeBillingTierStore: class {},
-    PromoteToPaidStore: class {},
+    PromoteToPaidStore: class {
+      mutate = fixture.keepFree;
+    },
+    EnablePrepaidUsageStore: class {
+      mutate = fixture.enableUsage;
+    },
     CreateStripeBillingPortalStore: class {},
     BillingTierFieldsStore: class {},
     PaymentMethod: { CARD: "CARD", CRYPTO_USDC: "CRYPTO_USDC", CRYPTO_ETH: "CRYPTO_ETH" },
@@ -102,6 +169,25 @@ const { default: BillingPage } = await import("../../src/routes/account/billing/
 
 beforeEach(() => {
   fixture.provider = "stripe";
+  fixture.free = false;
+  fixture.payg = false;
+  fixture.automaticPrepaidUsage = false;
+  fixture.keepFree.mockReset();
+  fixture.keepFree.mockImplementation(async () => {
+    fixture.automaticPrepaidUsage = false;
+    return { data: { promoteToPaid: { __typename: "PromoteToPaidPayload" } } };
+  });
+  fixture.enableUsage.mockReset();
+  fixture.enableUsage.mockResolvedValue({
+    data: {
+      enablePrepaidUsage: {
+        activated: true,
+        awaitingFunds: false,
+        tierName: "payg",
+        billingModel: "prepaid",
+      },
+    },
+  });
   fixture.paymentMethod = "";
   fixture.complete = false;
   fixture.taxReview = false;
@@ -194,4 +280,58 @@ describe("recurring collection billing profile", () => {
     await screen.findByText("Prepaid Balance");
     expect(screen.queryByText("Complete your billing profile")).toBeNull();
   });
+});
+
+describe("explicit Free funding preference", () => {
+  it("explains retained funds and enables PAYG through the funding action", async () => {
+    fixture.free = true;
+    fixture.complete = true;
+    render(BillingPage);
+    const action = await screen.findByRole("button", { name: "Use balance for PAYG" });
+    expect(screen.getByTestId("funding-preference").textContent).toContain(
+      "Your credit is retained"
+    );
+    expect(screen.getByText("Pay for usage from your balance")).toBeTruthy();
+    const prices = screen.getByTestId("payg-usage-prices");
+    expect(prices.textContent).toContain("€0.000550 per delivered minute");
+    expect(prices.textContent).toContain("€0.035 per GiB-month");
+    expect(screen.getByRole("link", { name: "Review all usage prices" }).getAttribute("href")).toBe(
+      "https://example.test/pricing"
+    );
+    await fireEvent.click(action);
+    await waitFor(() => expect(fixture.enableUsage).toHaveBeenCalledExactlyOnceWith(null));
+  });
+  it("explains automatic activation without promising Free allowances under PAYG", async () => {
+    fixture.free = true;
+    fixture.automaticPrepaidUsage = true;
+    fixture.complete = true;
+    render(BillingPage);
+    expect((await screen.findByTestId("funding-preference")).textContent).toContain(
+      "Free allowances stay with the Free phase"
+    );
+  });
+});
+
+it("can retain Free before its first funding without pretending to switch plans", async () => {
+  fixture.free = true;
+  fixture.automaticPrepaidUsage = true;
+  fixture.complete = true;
+  render(BillingPage);
+  await fireEvent.click(await screen.findByRole("button", { name: "Keep Free limits" }));
+  await waitFor(() => expect(fixture.keepFree).toHaveBeenCalledExactlyOnceWith({ tierId: "free" }));
+  await waitFor(() =>
+    expect(screen.getByTestId("funding-preference").textContent).toContain(
+      "Free and its usage limits remain active"
+    )
+  );
+  expect(screen.queryByRole("button", { name: "Keep Free limits" })).toBeNull();
+});
+
+it("explains exhausted PAYG fallback without promising to change existing recordings", async () => {
+  fixture.payg = true;
+  render(BillingPage);
+  const policy = await screen.findByTestId("payg-exhaustion-policy");
+  expect(policy.textContent).toContain("eligible verified accounts return to Free");
+  expect(policy.textContent).toContain("Existing recordings keep their expiry");
+  expect(policy.textContent?.replace(/\s+/g, " ")).toContain("unless you explicitly choose Free");
 });

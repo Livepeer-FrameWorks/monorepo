@@ -16,23 +16,18 @@ func TestGetTenantPrimaryUserPrioritizesOwner(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, COALESCE(email::text, '')::text AS email, first_name, last_name
-		FROM commodore.users
-		WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
-		ORDER BY
-			CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
-			created_at ASC
-		LIMIT 1
-	`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`-- name: GetTenantPrimaryUser :one`)).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "first_name", "last_name"}).
-			AddRow("user-owner", "info@frameworks.network", "FrameWorks", "Operator"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "first_name", "last_name", "free_tier_eligible"}).
+			AddRow("user-owner", "info@frameworks.network", "FrameWorks", "Operator", true))
 
 	server := &CommodoreServer{db: db, logger: logging.NewLogger()}
 	resp, err := server.GetTenantPrimaryUser(serviceCtx(), &commodorepb.GetTenantPrimaryUserRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetTenantPrimaryUser: %v", err)
+	}
+	if !resp.GetFreeTierEligible() {
+		t.Fatal("verified billing identity eligibility was lost")
 	}
 	if resp.GetEmail() != "info@frameworks.network" {
 		t.Fatalf("email = %q, want info@frameworks.network", resp.GetEmail())

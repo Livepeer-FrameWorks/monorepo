@@ -787,7 +787,7 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 
 // DoGetStreamEventsConnection returns a connection-style payload for stream events.
 // NOTE: stream filter already supported by client method
-func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamEventsConnection, error) {
+func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool, recordingOnly ...bool) (*model.StreamEventsConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -829,7 +829,7 @@ func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId str
 	skipCache := noCache != nil && *noCache
 
 	// Fetch from datafetcher with pagination and optional cache bypass
-	response, err := r.loadStreamEvents(ctx, streamId, startTime, endTime, opts, skipCache)
+	response, err := r.loadStreamEvents(ctx, streamId, startTime, endTime, opts, skipCache, len(recordingOnly) > 0 && recordingOnly[0])
 	if err != nil {
 		return nil, err
 	}
@@ -4809,4 +4809,8 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		HealthyNodes:     healthyNodes,
 		UpdatedAt:        time.Now(),
 	}, nil
+}
+
+func (r *Resolver) DoGetStreamRecordingEventsConnection(ctx context.Context, streamID string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamEventsConnection, error) {
+	return r.DoGetStreamEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache, true)
 }

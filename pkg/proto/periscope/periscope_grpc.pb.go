@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StreamAnalyticsService_GetStreamEvents_FullMethodName        = "/periscope.StreamAnalyticsService/GetStreamEvents"
-	StreamAnalyticsService_GetBufferEvents_FullMethodName        = "/periscope.StreamAnalyticsService/GetBufferEvents"
-	StreamAnalyticsService_GetStreamHealthMetrics_FullMethodName = "/periscope.StreamAnalyticsService/GetStreamHealthMetrics"
-	StreamAnalyticsService_GetStreamStatus_FullMethodName        = "/periscope.StreamAnalyticsService/GetStreamStatus"
-	StreamAnalyticsService_GetStreamsStatus_FullMethodName       = "/periscope.StreamAnalyticsService/GetStreamsStatus"
+	StreamAnalyticsService_GetStreamEvents_FullMethodName          = "/periscope.StreamAnalyticsService/GetStreamEvents"
+	StreamAnalyticsService_GetStreamRecordingEvents_FullMethodName = "/periscope.StreamAnalyticsService/GetStreamRecordingEvents"
+	StreamAnalyticsService_GetBufferEvents_FullMethodName          = "/periscope.StreamAnalyticsService/GetBufferEvents"
+	StreamAnalyticsService_GetStreamHealthMetrics_FullMethodName   = "/periscope.StreamAnalyticsService/GetStreamHealthMetrics"
+	StreamAnalyticsService_GetStreamStatus_FullMethodName          = "/periscope.StreamAnalyticsService/GetStreamStatus"
+	StreamAnalyticsService_GetStreamsStatus_FullMethodName         = "/periscope.StreamAnalyticsService/GetStreamsStatus"
 )
 
 // StreamAnalyticsServiceClient is the client API for StreamAnalyticsService service.
@@ -31,6 +32,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamAnalyticsServiceClient interface {
 	GetStreamEvents(ctx context.Context, in *GetStreamEventsRequest, opts ...grpc.CallOption) (*GetStreamEventsResponse, error)
+	// Recording state excludes noisy buffer/track events so a failure remains discoverable.
+	GetStreamRecordingEvents(ctx context.Context, in *GetStreamEventsRequest, opts ...grpc.CallOption) (*GetStreamEventsResponse, error)
 	GetBufferEvents(ctx context.Context, in *GetBufferEventsRequest, opts ...grpc.CallOption) (*GetBufferEventsResponse, error)
 	GetStreamHealthMetrics(ctx context.Context, in *GetStreamHealthMetricsRequest, opts ...grpc.CallOption) (*GetStreamHealthMetricsResponse, error)
 	// Stream status for Control/Data plane separation
@@ -50,6 +53,16 @@ func (c *streamAnalyticsServiceClient) GetStreamEvents(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetStreamEventsResponse)
 	err := c.cc.Invoke(ctx, StreamAnalyticsService_GetStreamEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *streamAnalyticsServiceClient) GetStreamRecordingEvents(ctx context.Context, in *GetStreamEventsRequest, opts ...grpc.CallOption) (*GetStreamEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStreamEventsResponse)
+	err := c.cc.Invoke(ctx, StreamAnalyticsService_GetStreamRecordingEvents_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +114,8 @@ func (c *streamAnalyticsServiceClient) GetStreamsStatus(ctx context.Context, in 
 // for forward compatibility.
 type StreamAnalyticsServiceServer interface {
 	GetStreamEvents(context.Context, *GetStreamEventsRequest) (*GetStreamEventsResponse, error)
+	// Recording state excludes noisy buffer/track events so a failure remains discoverable.
+	GetStreamRecordingEvents(context.Context, *GetStreamEventsRequest) (*GetStreamEventsResponse, error)
 	GetBufferEvents(context.Context, *GetBufferEventsRequest) (*GetBufferEventsResponse, error)
 	GetStreamHealthMetrics(context.Context, *GetStreamHealthMetricsRequest) (*GetStreamHealthMetricsResponse, error)
 	// Stream status for Control/Data plane separation
@@ -118,6 +133,9 @@ type UnimplementedStreamAnalyticsServiceServer struct{}
 
 func (UnimplementedStreamAnalyticsServiceServer) GetStreamEvents(context.Context, *GetStreamEventsRequest) (*GetStreamEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStreamEvents not implemented")
+}
+func (UnimplementedStreamAnalyticsServiceServer) GetStreamRecordingEvents(context.Context, *GetStreamEventsRequest) (*GetStreamEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamRecordingEvents not implemented")
 }
 func (UnimplementedStreamAnalyticsServiceServer) GetBufferEvents(context.Context, *GetBufferEventsRequest) (*GetBufferEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBufferEvents not implemented")
@@ -167,6 +185,24 @@ func _StreamAnalyticsService_GetStreamEvents_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StreamAnalyticsServiceServer).GetStreamEvents(ctx, req.(*GetStreamEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StreamAnalyticsService_GetStreamRecordingEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStreamEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamAnalyticsServiceServer).GetStreamRecordingEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamAnalyticsService_GetStreamRecordingEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamAnalyticsServiceServer).GetStreamRecordingEvents(ctx, req.(*GetStreamEventsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -253,6 +289,10 @@ var StreamAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStreamEvents",
 			Handler:    _StreamAnalyticsService_GetStreamEvents_Handler,
+		},
+		{
+			MethodName: "GetStreamRecordingEvents",
+			Handler:    _StreamAnalyticsService_GetStreamRecordingEvents_Handler,
 		},
 		{
 			MethodName: "GetBufferEvents",

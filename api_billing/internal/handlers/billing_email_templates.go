@@ -16,6 +16,10 @@ type billingEmailMeta struct {
 }
 
 var billingEmailMetaByName = map[string]billingEmailMeta{
+	"prepaid_payment_grace":  {Preheader: "Top up to keep paid broadcasting and recording available.", Eyebrow: "Prepaid balance", Title: "Payment grace is active"},
+	"prepaid_low_balance":    {Preheader: "Your prepaid balance is running low.", Eyebrow: "Prepaid balance", Title: "Top up before your balance runs out"},
+	"prepaid_media_recovery": {Preheader: "Your account has returned to Free limits.", Eyebrow: "Media recovery", Title: "Review your stored recordings"},
+
 	"invoice_created": {
 		Preheader: "A new FrameWorks invoice is ready to review.",
 		Eyebrow:   "Billing",
@@ -79,6 +83,10 @@ var billingEmailMetaByName = map[string]billingEmailMeta{
 }
 
 var billingEmailTemplates = map[string]string{
+	"prepaid_low_balance":    `<p>Your prepaid balance is EUR {{printf "%.2f" .Balance}}. Top up before it runs out to avoid restrictions. The balance page shows your current usage and estimated runway.</p>{{template "action" (action .LoginURL "Top up balance")}}`,
+	"prepaid_payment_grace":  `<p>Your prepaid balance has run out. Paid broadcasts and recording remain available until {{.DueDate.UTC.Format "January 2, 2006 15:04 UTC"}} or the episode's EUR {{printf "%.2f" .Amount}} credit ceiling is used, whichever comes first.</p><p>Usage continues at PAYG rates and remains payable. The balance page shows the current remaining allowance. Top up to continue funded service. If grace ends, eligible accounts return to Free limits; existing paid usage is retained. If that change is temporarily unavailable, existing broadcasts continue while new paid work is blocked. The existing below-minus-EUR-10 settled-balance suspension threshold still applies.</p>{{template "action" (action .LoginURL "Review balance and top up")}}`,
+	"prepaid_media_recovery": `<p>Your account has returned to Free limits. Existing paid media has a recovery window until {{.DueDate.UTC.Format "January 2, 2006 15:04 UTC"}}. Existing recording expiry dates still apply.</p><p>Top up to restore paid storage, or export and remove excess media. Excess storage blocks new recordings and uploads. Previous unpaid usage is retained.</p>{{template "action" (action .LoginURL "Review recovery and top up")}}`,
+
 	"payment_grace_started": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Your payment provider stopped collecting for your FrameWorks subscription. Your plan and your streams keep running until {{.DueDate.UTC.Format "January 2, 2006"}}.</p>

@@ -297,6 +297,8 @@ service InternalService {
 
   // Get primary user info for a tenant (for billing notifications/invoices)
   rpc GetTenantPrimaryUser(GetTenantPrimaryUserRequest) returns (GetTenantPrimaryUserResponse);
+  // Fail-closed identity and owning-cell resource proof for Free transitions.
+  rpc GetTenantFreeEligibility(GetTenantFreeEligibilityRequest) returns (GetTenantFreeEligibilityResponse);
 
   // Create a user in an existing tenant (bootstrap/admin provisioning)
   // Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
@@ -1596,6 +1598,17 @@ message GetTenantUserCountResponse {
 }
 
 // Request for tenant primary user info (for billing notifications)
+message GetTenantFreeEligibilityRequest {
+  string tenant_id = 1;
+  int64 storage_limit_bytes = 2;
+  int32 retention_limit_days = 3;
+}
+message GetTenantFreeEligibilityResponse {
+  bool eligible = 1;
+  string reason = 2; // Bounded policy identifier, never a node or provider error.
+  int64 storage_bytes = 3;
+}
+
 message GetTenantPrimaryUserRequest {
   string tenant_id = 1;
 }
@@ -1605,6 +1618,8 @@ message GetTenantPrimaryUserResponse {
   string user_id = 1;                   // UUID of primary user
   string email = 2;                     // Email address (for billing notifications)
   string name = 3;                      // Display name (first_name + last_name)
+  // A currently active owner/admin has a verified email. False on older servers.
+  bool free_tier_eligible = 4;
 }
 
 // ============================================================================

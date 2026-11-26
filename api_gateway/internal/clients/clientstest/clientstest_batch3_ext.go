@@ -462,3 +462,7 @@ func (f *FakeQuartermaster) ValidateBootstrapToken(ctx context.Context, token st
 	}
 	return f.ValidateBootstrapTokenFn(ctx, token)
 }
+
+func (f *FakePurser) UpdateSubscriptionWithEntitlementReview(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
+	return f.UpdateSubscription(ctx, req)
+}

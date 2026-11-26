@@ -884,7 +884,7 @@ func (q *Queries) InsertPendingStripeDispute(ctx context.Context, arg InsertPend
 const insertPrepaidAdvanceRefundCreditNote = `-- name: InsertPrepaidAdvanceRefundCreditNote :one
 INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,
  reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
-SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),invoice.tenant_id,'invoice',invoice.id,
+SELECT purser.next_billing_document_number('CN'),invoice.tenant_id,'invoice',invoice.id,
  'payment_reversal',$1::text,$2::bigint,$3::text,
  'Prepaid advance refunded',jsonb_build_object('provider_reversal_id',$4::text)
 FROM purser.billing_invoices invoice

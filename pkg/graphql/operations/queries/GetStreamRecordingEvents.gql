@@ -1,0 +1,16 @@
+query GetStreamRecordingEvents($streamId: ID!) {
+  analytics {
+    lifecycle {
+      recordingEventsConnection(streamId: $streamId, page: { first: 20 }, noCache: true) {
+        edges {
+          node {
+            eventId
+            type
+            timestamp
+            details
+          }
+        }
+      }
+    }
+  }
+}

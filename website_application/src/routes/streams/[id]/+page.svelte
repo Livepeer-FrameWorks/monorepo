@@ -32,6 +32,7 @@
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
+  import RecordingNotice from "$lib/components/stream-details/RecordingNotice.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Tabs, TabsContent, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
@@ -1001,6 +1002,12 @@
       <!-- Main Content (scrollable) -->
       <div class="flex-1 overflow-y-auto">
         <div class="flex flex-col">
+          <RecordingNotice
+            streamId={stream.streamId}
+            enabled={stream.record}
+            isLive={stream.ingest?.isLive ?? false}
+            connectedAt={stream.ingest?.liveSince ?? stream.ingest?.connectedAt ?? null}
+          />
           <!-- Stream Overview Cards -->
           <div
             class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background"

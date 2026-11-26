@@ -313,6 +313,8 @@ func TestMapStreamEventType(t *testing.T) {
 		{"track_list_update", model.StreamEventTypeTrackListUpdate},
 		{"play_rewrite", model.StreamEventTypePlayRewrite},
 		{"stream_source", model.StreamEventTypeStreamSource},
+		{"recording_refused", model.StreamEventType("RECORDING_REFUSED")},
+		{"recording_active", model.StreamEventType("RECORDING_ACTIVE")},
 		{"totally-unknown", model.StreamEventTypeStreamLifecycleUpdate},
 	}
 	for _, tt := range tests {
@@ -410,5 +412,18 @@ func TestDoUpdateTenantRejectsMalformedSettings(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid settings JSON") {
 		t.Fatalf("expected error to mention invalid settings JSON, got %q", err.Error())
+	}
+}
+
+func TestRecordingHistoryUsesSafeMessages(t *testing.T) {
+	for _, tc := range []struct{ kind, payload, want string }{
+		{"recording_refused", `{"code":"STORAGE_LIMIT_REACHED","message":"s3://secret/key"}`, "Recording failed because the storage limit was reached. Review storage and billing."},
+		{"recording_refused", `{"code":"OTHER","message":"rpc error: secret"}`, "Recording failed. Contact support if this continues."},
+		{"recording_active", `{invalid`, "Recording is capturing media."},
+	} {
+		got := mapPeriscopeStreamEvent(&periscopepb.StreamEvent{EventType: tc.kind, EventData: tc.payload})
+		if got.Details == nil || *got.Details != tc.want || got.Status != nil {
+			t.Fatalf("unsafe or misleading recording history: %+v", got)
+		}
 	}
 }

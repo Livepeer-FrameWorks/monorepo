@@ -3205,3 +3205,49 @@ func TestPushRewriteAcceptsSanitizedEvent(t *testing.T) {
 		t.Fatalf("internal_name = %#v, want %q", got, "internal-name")
 	}
 }
+
+func TestRecordingStartRefusalIsVisibleWithoutInventingArtifact(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID, streamID := uuid.NewString(), uuid.NewString()
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{StreamId: &streamID, TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{DvrLifecycleData: &ipcpb.DVRLifecycleData{TenantId: &tenantID, StreamId: &streamID, Status: ipcpb.DVRLifecycleData_STATUS_FAILED, Error: proto.String("rpc error: code = ResourceExhausted desc = storage limit reached")}}})
+	event := kafka.AnalyticsEvent{EventID: uuid.NewString(), EventType: "dvr_lifecycle", Timestamp: time.Now(), Source: "decklog", TenantID: tenantID, Data: data}
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	batch := conn.batches["stream_event_log"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatal("pre-artifact recording refusal is missing from the tenant stream event log")
+	}
+	if got := batch.rows[0][7]; got != "recording_refused" {
+		t.Fatalf("event type=%v", got)
+	}
+	if conn.batches["artifact_state_current"] != nil {
+		t.Fatal("refused recording invented an empty-hash artifact")
+	}
+	if payload := batch.rows[0][23].(string); !strings.Contains(payload, "STORAGE_LIMIT_REACHED") || strings.Contains(payload, "rpc error") {
+		t.Fatalf("public refusal payload=%s", payload)
+	}
+}
+
+func TestRecordingAdmissionUsesHeaderTenantAndSafePayload(t *testing.T) {
+	for _, state := range []ipcpb.DVRLifecycleData_Status{ipcpb.DVRLifecycleData_STATUS_FAILED, ipcpb.DVRLifecycleData_STATUS_RECORDING} {
+		conn := newFakeClickhouseConn()
+		handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+		tenantID, foreignTenant, streamID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		data := mustMistTriggerData(t, &ipcpb.MistTrigger{StreamId: &streamID, TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{DvrLifecycleData: &ipcpb.DVRLifecycleData{TenantId: &foreignTenant, StreamId: &streamID, DvrHash: "recording-hash", Status: state, Error: proto.String("rpc error: s3://private/key")}}})
+		if err := handler.HandleAnalyticsEvent(kafka.AnalyticsEvent{EventID: uuid.NewString(), EventType: "dvr_lifecycle", Timestamp: time.Now(), TenantID: tenantID, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+		row := conn.batches["stream_event_log"].rows[0]
+		if row[2] != uuid.MustParse(tenantID) || strings.Contains(row[23].(string), "private") {
+			t.Fatalf("unsafe recording history: %#v", row)
+		}
+		if state == ipcpb.DVRLifecycleData_STATUS_RECORDING && row[7] != "recording_active" {
+			t.Fatalf("confirmed recording did not clear admission refusal: %#v", row)
+		}
+		if conn.batches["artifact_state_current"] == nil {
+			t.Fatal("identified recording lost its artifact projection")
+		}
+	}
+}

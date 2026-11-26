@@ -9980,9 +9980,8 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 	return processSyncCompleteAt(complete, nodeID, 0, logger)
 }
 
-// processSyncCompleteAt applies one sync completion. commitErr is set only when the completion's
-// transaction did not commit, so the report must be delivered again. Every other exit is final or leaves
-// the durable sync attempt to stale recovery, which re-drives it without this report.
+// processSyncCompleteAt retains a durable completion on transient verification,
+// publication or commit failure. Attempt fences make its replay safe after reconnect.
 func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeClockCompletedAtMs int64, logger logging.Logger) (commitErr error) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
@@ -10007,7 +10006,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 
 	if artifactRepo == nil {
 		logger.Warn("Artifact repository not configured, cannot update sync status")
-		return
+		return fmt.Errorf("sync completion repository unavailable")
 	}
 
 	// Bounded: the completion does S3 HEAD + a promote (server-side copy) and a short DB transaction. An
@@ -10020,11 +10019,20 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 	// Resolve the artifact OWNER tenant through the identity facade (the sanctioned hash→tenant authority)
 	// so EVERY completion query below is tenant-scoped, per the repository invariant. A completion that
 	// cannot be attributed to an owner tenant is refused (the tenant-scoped guards match zero rows).
-	ownerTenant := ""
-	if resolver := identity.Default(); resolver != nil {
-		if id, rErr := resolver.ResolveArtifact(ctx, assetHash, ""); rErr == nil {
-			ownerTenant = strings.TrimSpace(id.TenantID)
+	resolver := identity.Default()
+	if resolver == nil {
+		return fmt.Errorf("resolve sync completion owner: identity service unavailable")
+	}
+	owner, ownerErr := resolver.ResolveArtifact(ctx, assetHash, "")
+	if ownerErr != nil {
+		if errors.Is(ownerErr, identity.ErrUnknown) && !errors.Is(ownerErr, identity.ErrUnavailable) {
+			return nil
 		}
+		return fmt.Errorf("resolve sync completion owner: %w", ownerErr)
+	}
+	ownerTenant := strings.TrimSpace(owner.TenantID)
+	if ownerTenant == "" {
+		return fmt.Errorf("resolve sync completion owner: missing tenant")
 	}
 
 	// A completion that arrives after its artifact was deleted ends here, before any object-storage work: the
@@ -10062,8 +10070,11 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 				syncObjectKey, syncStatusRow, previousActiveKey, previousActiveDtshKey, previousS3URL, previousDtshReq = attempt.SyncObjectKey, attempt.SyncStatus, attempt.ActiveObjectKey, attempt.ActiveDtshKey, attempt.S3Url, attempt.DtshSyncRequestID
 			} else if !errors.Is(idErr, sql.ErrNoRows) {
 				logger.WithError(idErr).WithField("asset_hash", assetHash).Error("sync completion: attempt-scoped identity pre-read failed; refusing to apply")
-				return
+				return fmt.Errorf("read sync completion attempt: %w", idErr)
 			}
+		}
+		if tenantID == "" {
+			return nil
 		}
 		// LEGACY ROWS (synced before version-addressing) carry no active_object_key/active_dtsh_key: the durable
 		// object lives at the key encoded in s3_url and any .dtsh co-located at <media>.dtsh. A non-empty s3_url on
@@ -10109,7 +10120,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 				if hErr != nil {
 					logger.WithError(hErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
 						Warn("Sync completion staging HEAD failed (transient); leaving attempt in_progress for retry")
-					return
+					return fmt.Errorf("verify staged sync object: %w", hErr)
 				}
 				if !exists {
 					logger.WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
@@ -10126,6 +10137,9 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 						Warn("Sync completion: staged object HEAD returned no ETag; leaving attempt in_progress for retry")
 					return
 				}
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), freezePublicationTimeout(size))
+				defer cancel()
 				candidate := FreezePublishKey(syncObjectKey, requestID)
 				// Re-assert the main staging + candidate ledger rows (idempotent). The AUTHORITATIVE record was
 				// written at claim time (RecordFreezePublicationLedgerTx), so a failure here is non-fatal — the
@@ -10141,7 +10155,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 					// identity first, then derives + enqueues this exact candidate) — no reuse hazard.
 					logger.WithError(pErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey, "candidate_key": candidate}).
 						Warn("Sync completion publication failed (overwrite race or transient); leaving attempt in_progress for retry")
-					return
+					return fmt.Errorf("publish staged sync object: %w", pErr)
 				}
 				publishMainKey = candidate
 				stagingToCleanup = stagingKey
@@ -10162,7 +10176,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 				if dErr != nil {
 					logger.WithError(dErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
 						Warn("Sync completion .dtsh staging HEAD failed (transient); leaving attempt in_progress for retry")
-					return
+					return fmt.Errorf("verify staged index: %w", dErr)
 				}
 				if dExists {
 					// The node UPLOADED a .dtsh staging object. Schedule it for cleanup NOW — regardless of whether
@@ -10220,8 +10234,8 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 			}
 		}
 		if s3URL == "" {
-			logger.WithField("asset_hash", assetHash).Warn("Refusing sync completion: could not derive a usable canonical S3 URL (S3 unavailable/misconfigured); leaving attempt for stale recovery")
-			return
+			logger.WithField("asset_hash", assetHash).Warn("Refusing sync completion: could not derive a usable canonical S3 URL (S3 unavailable/misconfigured); retaining completion for retry")
+			return fmt.Errorf("sync completion storage unavailable")
 		}
 
 		if db == nil {
@@ -10235,6 +10249,11 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 		// the attempt-scoped read above). When no main-upload attempt matches, the UPDATE affects zero rows
 		// and the code falls through to the incremental .dtsh path below.
 		guardTenant := tenantID
+
+		// Provider copies have their own size budget; database work remains bounded independently.
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
 
 		// Read-only work BEFORE the guarded transaction: the chapter this artifact finalized (if any)
 		// and the canonical VOD S3 key to persist. Doing the lookups here keeps the transaction short.

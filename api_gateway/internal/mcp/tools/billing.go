@@ -74,6 +74,9 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 		},
 	)
 
+	addTool(server, &mcp.Tool{Name: "enable_prepaid_usage", Description: "Enable balance-funded PAYG usage for a Free account, including after explicitly choosing Free. Uses PAYG prices without carrying Free allowances. Existing paid monthly plans and operator arrangements are preserved. With no funds, records the choice and waits for a settled top-up."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ EnablePrepaidUsageInput) (*mcp.CallToolResult, any, error) {
+		return handleEnablePrepaidUsage(ctx, resolver)
+	})
 	addTool(server,
 		&mcp.Tool{
 			Name:        "change_billing_tier",
@@ -522,4 +525,17 @@ func toolErrorWithResolution(blocker preflight.Blocker) (*mcp.CallToolResult, an
 		},
 		IsError: true,
 	}, blocker, nil
+}
+
+type EnablePrepaidUsageInput struct{}
+
+func handleEnablePrepaidUsage(ctx context.Context, resolver *resolvers.Resolver) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	out, err := resolver.DoEnablePrepaidUsage(ctx)
+	if err != nil {
+		return toolRPCError(err, "Could not enable PAYG usage")
+	}
+	return toolSuccess(map[string]any{"activated": out.Activated, "awaiting_funds": out.AwaitingFunds, "tier_name": out.TierName, "billing_model": out.BillingModel})
 }

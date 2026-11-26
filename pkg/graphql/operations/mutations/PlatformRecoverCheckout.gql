@@ -1,0 +1,22 @@
+mutation PlatformRecoverCheckout(
+  $tenantId: ID!
+  $reservationId: ID!
+  $reason: String!
+  $confirmed: Boolean!
+) {
+  platformRecoverCheckout(
+    tenantId: $tenantId
+    reservationId: $reservationId
+    reason: $reason
+    confirmed: $confirmed
+  ) {
+    provider
+    status
+    amountCents
+    currency
+    amountKnown
+    outcome
+    detail
+    auditId
+  }
+}

@@ -2123,7 +2123,7 @@ verify-yugabyte-commodore-contracts-c: verify-yugabyte-shared-fixture
 
 .PHONY: verify-yugabyte-commodore-operator-accounts
 verify-yugabyte-commodore-operator-accounts: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-operator-accounts -tags schema_verify -run '^(TestOperatorAccountLifecycle_RealYugabyte|TestAccountIngestRevocationWorkerRequiresConfirmedStop_RealYugabyte|TestDeleteStreamWaitsForDurableIngestRevocation_RealYugabyte|TestDeleteStreamRevocationFailureRollsBackDeletion_RealYugabyte|TestStreamKeysListCurrentPrimaryAfterRotation_RealYugabyte|TestIngestStopDurability_RealYugabyte|TestRotateAndEndAtomicity_RealYugabyte)$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-operator-accounts -tags schema_verify -run '^(TestOperatorAccountLifecycle_RealYugabyte|TestAccountIngestRevocationWorkerRequiresConfirmedStop_RealYugabyte|TestDeleteStreamWaitsForDurableIngestRevocation_RealYugabyte|TestDeleteStreamRevocationFailureRollsBackDeletion_RealYugabyte|TestStreamKeysListCurrentPrimaryAfterRotation_RealYugabyte|TestIngestStopDurability_RealYugabyte|TestRotateAndEndAtomicity_RealYugabyte|TestTenantFreeEligibility_RealYugabyte|TestFreeEligibilityOwnerCellsAndPendingCreation_RealYugabyte)$$' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-commodore-contracts-d: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-media-authority-d -tags schema_verify -run '^($(COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_D))$$' -count=1 -timeout 900s ./internal/grpc/
@@ -2155,6 +2155,7 @@ verify-placement-db:
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-media-authority -tags schema_verify -run '^($(COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-funded-free -tags schema_verify -run '^TestFundedFreePolicy_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-settlement-identity -tags schema_verify -run '^TestProviderSettlementIdentityBackfill_RealYugabyte$$' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-free-fallback-mollie -tags schema_verify -run '^TestFreeFallbackLifecycle_RealYugabyte$$/^($(subst _RealPG,,$(PURSER_FREE_FALLBACK_GRPC_MOLLIE_TESTS)))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-free-fallback-fence -tags schema_verify -run '^TestFreeFallbackLifecycle_RealYugabyte$$/^($(subst _RealPG,,$(PURSER_FREE_FALLBACK_GRPC_FENCE_TESTS)))$$' -count=1 -timeout 600s ./internal/grpc/
@@ -2169,7 +2170,7 @@ verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-reservation-recovery -tags schema_verify -run '^TestProviderReservationRecovery_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-reservation-deadlines -tags schema_verify -run '^TestProviderReservationDeadlines_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-webhook-recovery -tags schema_verify -run '^TestProviderWebhookRecovery_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
-	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-webhook-retry -tags schema_verify -run '^TestProviderWebhookRetryIsAuditedTenantScopedAndFenced_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-webhook-retry -tags schema_verify -run '^Test(ProviderWebhookRetryIsAuditedTenantScopedAndFenced|PrepaidPaymentGrace|MediaRecoveryExpiry)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-navigator-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/navigatordb/
@@ -2215,6 +2216,8 @@ verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
 
 verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/media-recovery-ownership -tags schema_verify -run '^TestMediaRecoveryExpiryOwnership_RealYugabyte$$' -count=1 -timeout 180s ./internal/jobs/
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/free-footprint -tags schema_verify -run '^TestFreeTierMediaFootprint_RealYugabyte$$' -count=1 -timeout 180s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^($(FOGHORN_CONTROL_REALYB_TESTS))$$' -count=1 -timeout 300s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-a -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)' -count=1 -timeout 1200s ./internal/database/foghorndb/
 
@@ -2736,3 +2739,103 @@ FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestKeptSourceIs
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestDVRAndThumbnailCutoffsPreserveElapsedTime_RealPG
 
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestRetainedOriginalIsBilledAndCountedOnceWhileStillActive_RealPG
+
+.PHONY: verify-freeze-retry-db
+verify-freeze-retry-db:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/freeze-retry -tags schema_verify -run '^TestFreezeRetryAgesAttemptInsteadOfInventory_RealPG$$' -count=1 -timeout 180s ./internal/jobs/
+
+FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestFreezeRetryAgesAttemptInsteadOfInventory_RealPG
+
+.PHONY: verify-operator-credit-reference-db
+verify-operator-credit-reference-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/operator-credit-reference -tags schema_verify -run '^TestOperatorCreditReferenceRejectsChangedMoney_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+
+PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestOperatorCreditReferenceRejectsChangedMoney_RealPG
+
+.PHONY: verify-funded-free-db
+verify-funded-free-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/funded-free -tags schema_verify -run '^TestFundedFree.*_RealPG$$' -count=1 -timeout 180s ./internal/handlers/
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestFundedFreeActivatesCanonicalPAYG_RealPG
+
+.PHONY: verify-subscription-terms-db
+verify-subscription-terms-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/subscription-terms -tags schema_verify -run '^TestSubscriptionLifecycleRepository_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestFundedFreePreservesNonEligibleAccounts_RealPG
+.PHONY: test-billing-repair-ui
+test-billing-repair-ui:
+	pnpm --filter frameworks-frontend test src/lib/components/admin/billing-repair.test.ts
+
+.PHONY: verify-prepaid-preference-db
+verify-prepaid-preference-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/prepaid-preference -tags schema_verify -run '^TestExplicitFreeRetainsCreditUntilPAYGOptIn_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestExplicitFreeRetainsCreditUntilPAYGOptIn_RealPG
+
+.PHONY: verify-large-vod-playback
+verify-large-vod-playback:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestLargeVODPlayback_RealMist -v -timeout 600s'
+
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestFundedFreeMigrationActivatesLegacyCredit_RealPG
+
+.PHONY: verify-invoice-intent-outcome-db
+verify-invoice-intent-outcome-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/invoice-intent-outcome -tags schema_verify -run '^Test.*InvoiceIntent.*_RealPG$$' -count=1 -timeout 180s ./internal/handlers/
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestConfirmedInvoiceIntentCannotReopen_RealPG
+
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestInvoiceIntentReconciliationRequiresExactConfirmedEvidence_RealPG
+
+PURSER_HANDLERS_REALPG_TESTS := $(PURSER_HANDLERS_REALPG_TESTS)|TestFundedFreeExhaustionReturnsEligibleAccount_RealPG|TestFundedFreeExhaustionPreservesIneligibleAccounts_RealPG|TestFundedFreeAllowanceSurvivesFundingCycle_RealPG
+
+COMMODORE_ACCOUNT_LIFECYCLE_REALPG_TESTS := $(COMMODORE_ACCOUNT_LIFECYCLE_REALPG_TESTS)|TestTenantFreeEligibility_RealPG
+.PHONY: verify-funded-account-policy-db
+verify-funded-account-policy-db: verify-funded-free-db
+	@$(CONTRACT_GO_TEST) api_control postgres/free-eligibility -tags schema_verify -run '^Test(TenantFreeEligibility|FreeEligibilityOwnerCellsAndPendingCreation)_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+
+.PHONY: verify-funded-account-policy-yugabyte verify-funded-account-policy-yugabyte-contracts
+verify-funded-account-policy-yugabyte:
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-funded-account-policy-yugabyte-contracts
+verify-funded-account-policy-yugabyte-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/media-recovery-ownership -tags schema_verify -run '^TestMediaRecoveryExpiryOwnership_RealYugabyte$$' -count=1 -timeout 180s ./internal/jobs/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/payment-grace-focused -tags schema_verify -run '^Test(PrepaidPaymentGrace|MediaRecoveryExpiry)_RealYugabyte$$' -count=1 -timeout 180s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/free-footprint-focused -tags schema_verify -run '^TestFreeTierMediaFootprint_RealYugabyte$$' -count=1 -timeout 180s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/funded-free-focused -tags schema_verify -run '^TestFundedFreePolicy_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/free-eligibility-focused -tags schema_verify -run '^Test(TenantFreeEligibility|FreeEligibilityOwnerCellsAndPendingCreation)_RealYugabyte$$' -count=1 -timeout 180s ./internal/grpc/
+
+.PHONY: verify-free-resource-footprint-db
+verify-free-resource-footprint-db:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/free-footprint -tags schema_verify -run '^TestFreeTierMediaFootprint_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+FOGHORN_GRPC_REALPG_TESTS := $(FOGHORN_GRPC_REALPG_TESTS)|TestFreeTierMediaFootprint_RealPG
+
+COMMODORE_ACCOUNT_LIFECYCLE_REALPG_TESTS := $(COMMODORE_ACCOUNT_LIFECYCLE_REALPG_TESTS)|TestFreeEligibilityOwnerCellsAndPendingCreation_RealPG
+
+.PHONY: verify-payment-grace-db
+verify-payment-grace-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/payment-grace -tags schema_verify -run '^TestPrepaidPaymentGrace_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestPrepaidPaymentGrace_RealPG
+
+.PHONY: test-payment-grace-ui
+test-payment-grace-ui:
+	pnpm --filter frameworks-frontend test:components test/components/prepaid-balance-widget.test.ts
+
+.PHONY: verify-media-recovery-db
+verify-media-recovery-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/media-recovery -tags schema_verify -run '^TestMediaRecoveryExpiry_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestMediaRecoveryExpiry_RealPG
+
+.PHONY: verify-media-recovery-ownership-db
+verify-media-recovery-ownership-db:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/media-recovery-ownership -tags schema_verify -run '^TestMediaRecoveryExpiryOwnership_RealPG$$' -count=1 -timeout 180s ./internal/jobs/
+FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestMediaRecoveryExpiryOwnership_RealPG
+
+PURSER_PRESENTMENT_GRPC_REALPG_TESTS := $(PURSER_PRESENTMENT_GRPC_REALPG_TESTS)|TestPricedAssignmentReview_RealPG|TestFreeCancellationReview_RealPG
+PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := $(PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS)|TestCompletedInvoiceCashRefund_RealPG|TestAutomaticTopupConsentAndBudget_RealPG
+verify-yugabyte-purser-reviews: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/billing-operator-reviews -tags schema_verify -run '^Test(PricedAssignmentReview|FreeCancellationReview)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/billing-refund-and-auto-funding -tags schema_verify -run '^Test(CompletedInvoiceCashRefund|AutomaticTopupConsentAndBudget)_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
+
+verify-yugabyte-purser-contracts: verify-yugabyte-purser-reviews
+
+.PHONY: verify-billing-operator-repair-db
+verify-billing-operator-repair-db:
+	@$(CONTRACT_GO_TEST) api_billing postgres/billing-operator-reviews -tags schema_verify -run '^Test(PricedAssignmentReview|FreeCancellationReview|PostpaidToPrepaidSwitchInvoicesThePostpaidPhase)_RealPG$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_billing postgres/billing-refund-and-auto-funding -tags schema_verify -run '^Test(CompletedInvoiceCashRefund|AutomaticTopupConsentAndBudget)_RealPG$$' -count=1 -timeout 600s ./internal/handlers/

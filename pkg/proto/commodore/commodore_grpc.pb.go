@@ -70,6 +70,7 @@ const (
 	InternalService_InvalidateTenantCache_FullMethodName              = "/commodore.InternalService/InvalidateTenantCache"
 	InternalService_GetTenantUserCount_FullMethodName                 = "/commodore.InternalService/GetTenantUserCount"
 	InternalService_GetTenantPrimaryUser_FullMethodName               = "/commodore.InternalService/GetTenantPrimaryUser"
+	InternalService_GetTenantFreeEligibility_FullMethodName           = "/commodore.InternalService/GetTenantFreeEligibility"
 	InternalService_CreateUserInTenant_FullMethodName                 = "/commodore.InternalService/CreateUserInTenant"
 	InternalService_GetMediaRetentionPolicy_FullMethodName            = "/commodore.InternalService/GetMediaRetentionPolicy"
 	InternalService_SetVodOriginalPolicy_FullMethodName               = "/commodore.InternalService/SetVodOriginalPolicy"
@@ -302,6 +303,8 @@ type InternalServiceClient interface {
 	GetTenantUserCount(ctx context.Context, in *GetTenantUserCountRequest, opts ...grpc.CallOption) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
 	GetTenantPrimaryUser(ctx context.Context, in *GetTenantPrimaryUserRequest, opts ...grpc.CallOption) (*GetTenantPrimaryUserResponse, error)
+	// Fail-closed identity and owning-cell resource proof for Free transitions.
+	GetTenantFreeEligibility(ctx context.Context, in *GetTenantFreeEligibilityRequest, opts ...grpc.CallOption) (*GetTenantFreeEligibilityResponse, error)
 	// Create a user in an existing tenant (bootstrap/admin provisioning)
 	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
 	CreateUserInTenant(ctx context.Context, in *CreateUserInTenantRequest, opts ...grpc.CallOption) (*CreateUserInTenantResponse, error)
@@ -836,6 +839,16 @@ func (c *internalServiceClient) GetTenantPrimaryUser(ctx context.Context, in *Ge
 	return out, nil
 }
 
+func (c *internalServiceClient) GetTenantFreeEligibility(ctx context.Context, in *GetTenantFreeEligibilityRequest, opts ...grpc.CallOption) (*GetTenantFreeEligibilityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantFreeEligibilityResponse)
+	err := c.cc.Invoke(ctx, InternalService_GetTenantFreeEligibility_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) CreateUserInTenant(ctx context.Context, in *CreateUserInTenantRequest, opts ...grpc.CallOption) (*CreateUserInTenantResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateUserInTenantResponse)
@@ -1273,6 +1286,8 @@ type InternalServiceServer interface {
 	GetTenantUserCount(context.Context, *GetTenantUserCountRequest) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
 	GetTenantPrimaryUser(context.Context, *GetTenantPrimaryUserRequest) (*GetTenantPrimaryUserResponse, error)
+	// Fail-closed identity and owning-cell resource proof for Free transitions.
+	GetTenantFreeEligibility(context.Context, *GetTenantFreeEligibilityRequest) (*GetTenantFreeEligibilityResponse, error)
 	// Create a user in an existing tenant (bootstrap/admin provisioning)
 	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
 	CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error)
@@ -1484,6 +1499,9 @@ func (UnimplementedInternalServiceServer) GetTenantUserCount(context.Context, *G
 }
 func (UnimplementedInternalServiceServer) GetTenantPrimaryUser(context.Context, *GetTenantPrimaryUserRequest) (*GetTenantPrimaryUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantPrimaryUser not implemented")
+}
+func (UnimplementedInternalServiceServer) GetTenantFreeEligibility(context.Context, *GetTenantFreeEligibilityRequest) (*GetTenantFreeEligibilityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantFreeEligibility not implemented")
 }
 func (UnimplementedInternalServiceServer) CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateUserInTenant not implemented")
@@ -2403,6 +2421,24 @@ func _InternalService_GetTenantPrimaryUser_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_GetTenantFreeEligibility_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantFreeEligibilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetTenantFreeEligibility(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetTenantFreeEligibility_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetTenantFreeEligibility(ctx, req.(*GetTenantFreeEligibilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_CreateUserInTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateUserInTenantRequest)
 	if err := dec(in); err != nil {
@@ -3007,6 +3043,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantPrimaryUser",
 			Handler:    _InternalService_GetTenantPrimaryUser_Handler,
+		},
+		{
+			MethodName: "GetTenantFreeEligibility",
+			Handler:    _InternalService_GetTenantFreeEligibility_Handler,
 		},
 		{
 			MethodName: "CreateUserInTenant",

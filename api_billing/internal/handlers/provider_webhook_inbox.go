@@ -181,6 +181,26 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 	if d.service == nil {
 		return []string{"reconciliation"}, errors.New("provider webhook service is not configured")
 	}
+	if payload.Provider == "operator_refund" {
+		var request struct{ TenantID, RequestID string }
+		if err := json.Unmarshal(payload.Body, &request); err != nil {
+			return nil, err
+		}
+		if request.TenantID == "" || request.RequestID != payload.EventKey {
+			return nil, errors.New("invalid operator refund queue record")
+		}
+		return []string{"operator_refund"}, d.service.processOperatorInvoiceRefund(ctx, request.TenantID, request.RequestID)
+	}
+	if payload.Provider == "automatic_topup" {
+		var request struct{ TenantID, AttemptID string }
+		if err := json.Unmarshal(payload.Body, &request); err != nil {
+			return nil, err
+		}
+		if request.TenantID == "" || request.AttemptID != payload.EventKey {
+			return nil, errors.New("invalid automatic top-up queue record")
+		}
+		return []string{"automatic_topup"}, d.service.processAutomaticTopup(ctx, request.TenantID, request.AttemptID)
+	}
 	if payload.Provider == "refund_settlement" {
 		var plan billing.RefundSettlement
 		if err := json.Unmarshal(payload.Body, &plan); err != nil {

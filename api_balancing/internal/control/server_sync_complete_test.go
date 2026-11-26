@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"frameworks/api_balancing/internal/identity"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -357,7 +359,9 @@ func TestProcessSyncComplete_PublicationFailureRetryable(t *testing.T) {
 	// retry re-publishes to the same candidate without a cleanup race.
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/s-int/clips/hash-1.mp4", "req-1"))
 
-	processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-1", Status: "success", RequestId: "req-1"}, "node-1", logger)
+	if err := processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-1", Status: "success", RequestId: "req-1"}, "node-1", logger); err == nil {
+		t.Error("transient publication failure was acknowledged; the durable completion must be retried")
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -1012,6 +1016,66 @@ func TestProcessSyncComplete_KeepsOriginalMKVAfterPublishingProcessedVideo(t *te
 		AssetHash: "vod-hash", Status: "success",
 	}, "node-1", logger)
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_LargePublicationKeepsCompletion(t *testing.T) {
+	mock, s3Mock, _ := setupArtifactTestDeps(t)
+	const size = int64(3068515312)
+	s3Mock.headObjectInfoFn = stagingHead(size, false, 0)
+	s3Mock.promoteObjectFn = func(ctx context.Context, _, _, _ string) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 2*time.Minute {
+			t.Errorf("large publication budget=%v; a multi-GiB copy must exceed the failed 60-second budget", time.Until(deadline))
+		}
+		return context.DeadlineExceeded
+	}
+	expectMetadata(mock, "hash-1", "req-1", "node-1", "vod", "vod-int", "mkv", "tenant-1", "", "", "in_progress", "tenant-1/vods/hash-1/hash-1.mkv")
+	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mkv", "req-1"))
+	if err := processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-1", Status: "success", RequestId: "req-1"}, "node-1", logging.NewLogger()); err == nil {
+		t.Error("publication timeout acknowledged instead of retaining the completion")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_DtshVerificationRetainsCompletion(t *testing.T) {
+	mock, s3Mock, _ := setupArtifactTestDeps(t)
+	s3Mock.headObjectInfoFn = func(context.Context, string) (bool, int64, string, error) {
+		return false, 0, "", context.DeadlineExceeded
+	}
+	expectMetadata(mock, "hash-1", "req-1", "node-1", "vod", "vod-int", "mkv", "tenant-1", "", "tenant-1/vods/hash-1/hash-1.mkv.version.old", "synced", "tenant-1/vods/hash-1/hash-1.mkv")
+	if err := processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-1", Status: "success", RequestId: "req-1", DtshIncluded: true}, "node-1", logging.NewLogger()); err == nil {
+		t.Error("transient index verification was acknowledged instead of retained")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_IdentityUnavailableRetainsCompletion(t *testing.T) {
+	_, s3Mock, _ := setupArtifactTestDeps(t)
+	identity.SetDefault(identity.NewResolver(identity.Config{RegistryArtifact: func(context.Context, string) (identity.ArtifactIdentity, error) {
+		return identity.ArtifactIdentity{}, identity.ErrUnavailable
+	}}))
+	if err := processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-owner", Status: "success", RequestId: "req-owner"}, "node-1", logging.NewLogger()); err == nil || !strings.Contains(err.Error(), "resolve sync completion owner") {
+		t.Fatal("temporary owner lookup failure acknowledged the durable completion")
+	}
+	if len(s3Mock.promoteCalls) != 0 {
+		t.Fatal("unattributed completion published bytes")
+	}
+}
+
+func TestProcessSyncComplete_StorageUnavailableRetainsCompletion(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	s3Client = nil
+	expectMetadata(mock, "hash-1", "req-1", "node-1", "vod", "vod-int", "mkv", "tenant-1", "", "", "in_progress", "tenant-1/vods/hash-1/hash-1.mkv")
+	if err := processSyncComplete(&ipcpb.SyncComplete{AssetHash: "hash-1", Status: "success", RequestId: "req-1"}, "node-1", logging.NewLogger()); err == nil {
+		t.Fatal("unavailable object storage acknowledged the durable completion")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

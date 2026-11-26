@@ -7,6 +7,21 @@ sidebar:
 
 [GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Billing and usage](/builders/api-schema/billing/)
 
+## AutomaticTopupSettings
+
+**object**
+
+- **enabled**: `Boolean!`
+- **thresholdEurCents**: `Int!`
+- **netAmountMinor**: `Int!`
+- **monthlyGrossLimitMinor**: `Int!`
+- **currency**: `String!`
+- **pausedReason**: `String!`
+- **monthlyReservedOrSpentMinor**: `Int!`
+- **available**: `Boolean!`
+- **unavailableReason**: `String!`
+- **consentVersion**: `String!`
+
 ## BalanceTransaction
 
 **object**
@@ -333,6 +348,17 @@ Conversion of a payment into the EUR prepaid ledger and invoice currency. EUR am
 - **source**: `String!` — Rate source: identity (EUR), ecb (ECB reference rate), or legacy_quote (USD rate quoted before ECB rates were stored).
 - **referenceDate**: `String!` — ECB reference date of the rate (YYYY-MM-DD).
 
+## EnablePrepaidUsagePayload
+
+**object**
+
+The funded-usage arrangement after opting into PAYG.
+
+- **activated**: `Boolean!`
+- **awaitingFunds**: `Boolean!`
+- **tierName**: `String!`
+- **billingModel**: `String!`
+
 ## EntitlementEntry
 
 **object**
@@ -341,6 +367,22 @@ A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 
 - **key**: `String!`
 - **value**: `String!`
+
+## FreeCancellationReview
+
+**object**
+
+Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero.
+
+- **quotedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **effectiveAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **fingerprint**: `String!`
+- **dueNowMinor**: `Int!`
+- **refundNowMinor**: `Int!`
+- **walletCreditNowMinor**: `Int!`
+- **currency**: `String!`
+- **futureUsageMessage**: `String!`
 
 ## FreeFallback
 
@@ -452,6 +494,7 @@ Invoice lifecycle status.
 - `OVERDUE` — Payment past due date.
 - `FAILED` — Payment processing failed.
 - `MANUAL_REVIEW` — Invoice requires operator review and cannot be paid.
+- `REFUNDED` — The original payment was returned with an original-tax credit note.
 - `CANCELLED` — Invoice cancelled.
 
 ## InvoicesConnection
@@ -612,6 +655,17 @@ Mollie Subscription - recurring subscription created after mandate is valid.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation.
 
+## PaymentGrace
+
+**object**
+
+Prepaid balance for wallet-based accounts. Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+
+- **active**: `Boolean!`
+- **endsAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **remainingCreditCents**: `Int!`
+- **mediaRecoveryUntil**: `Time` ([Time](/builders/api-schema/shared/#time))
+
 ## PaymentMethod
 
 **enum**
@@ -656,8 +710,7 @@ Progress of a scheduled downgrade.
 
 **object**
 
-Prepaid balance for wallet-based accounts. Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
-
+- **paymentGrace**: `PaymentGrace` ([PaymentGrace](/builders/api-schema/billing-types/#paymentgrace)) — Temporary paid continuity and any media recovery deadline.
 - **id**: `ID!` — Unique balance record identifier.
 - **tenantId**: `String!` — Owning tenant identifier.
 - **balanceCents**: `Int!` — Settled ledger balance in cents before active usage reservations.
@@ -702,6 +755,19 @@ Successful promotion to postpaid billing.
 - Member: [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## SetAutomaticTopupInput
+
+**input_object**
+
+Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months.
+
+- **enabled**: `Boolean!`
+- **thresholdEurCents**: `Int!`
+- **netAmountMinor**: `Int!`
+- **monthlyGrossLimitMinor**: `Int!`
+- **currency**: `String!`
+- **consentVersion**: `String!`
 
 ## StripeBillingPortalResult
 
@@ -751,6 +817,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 
 **object**
 
+- **automaticPrepaidUsage**: `Boolean!` — Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it.
 - **id**: `ID!`
 - **tenantId**: `ID!`
 - **tierId**: `String!`

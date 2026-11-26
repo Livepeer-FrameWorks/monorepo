@@ -103,7 +103,7 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to start DVR")
-		return toolError(fmt.Sprintf("Failed to start DVR: %v", err))
+		return toolRPCError(err, "Failed to start DVR")
 	}
 
 	result := StartDVRResult{

@@ -1206,6 +1206,10 @@ enum GQL {
   }
   """
 
+  static let GetAutomaticTopup = """
+  query GetAutomaticTopup { automaticTopup { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  """
+
   static let GetBalanceTransactions = """
   query GetBalanceTransactions($page: ConnectionInput, $transactionType: String) {
     balanceTransactionsConnection(page: $page, transactionType: $transactionType) {
@@ -1324,6 +1328,7 @@ enum GQL {
         ...BillingTierFields
       }
       subscription {
+        automaticPrepaidUsage
         id
         tenantId
         tierId
@@ -2774,6 +2779,10 @@ enum GQL {
   }
   """
 
+  static let GetPlatformAutomaticTopup = """
+  query GetPlatformAutomaticTopup($tenantId: ID!) { platformAutomaticTopup(tenantId:$tenantId) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  """
+
   static let GetPlatformClusters = """
   # Platform-operator cluster pivot: every cluster with live stats and
   # resident tenants. Requires the platform_operator grant.
@@ -2876,6 +2885,16 @@ enum GQL {
       tenant(id: $id) {
         tenantId
         billing {
+          subscription {
+            automaticPrepaidUsage
+            id
+            tierId
+            billingModel
+            entitlementOverrides {
+              key
+              value
+            }
+          }
           snapshot {
             billingModel
             status
@@ -2933,6 +2952,12 @@ enum GQL {
           prepaidBalance {
             balanceCents
             currency
+            paymentGrace {
+              active
+              endsAt
+              remainingCreditCents
+              mediaRecoveryUntil
+            }
           }
           balanceTransactions(page: { first: 25 }, timeRange: $timeRange) {
             nodes {
@@ -3126,6 +3151,13 @@ enum GQL {
       currency
       lowBalanceThresholdCents
       isLowBalance
+      drainRateCentsPerHour
+      paymentGrace {
+        active
+        endsAt
+        remainingCreditCents
+        mediaRecoveryUntil
+      }
       createdAt
       updatedAt
     }
@@ -4568,6 +4600,18 @@ enum GQL {
   }
   """
 
+  static let GetStreamRecordingEvents = """
+  query GetStreamRecordingEvents($streamId: ID!) {
+    analytics {
+      lifecycle {
+        recordingEventsConnection(streamId: $streamId, page: { first: 20 }, noCache: true) {
+          edges { node { eventId type timestamp details } }
+        }
+      }
+    }
+  }
+  """
+
   static let GetStreamRecordings = """
   query GetStreamRecordings($id: ID!, $first: Int = 25, $after: String) {
     stream(id: $id) {
@@ -5582,6 +5626,39 @@ enum GQL {
   }
   """
 
+  static let ConfirmFreeCancellation = """
+  mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt:Time!, $fingerprint:String!) {
+    confirmFreeCancellation(tierId: $tierId,quotedAt:$quotedAt,fingerprint:$fingerprint) {
+      ... on ChangeBillingTierPayload {
+        success
+        message
+        appliedTier {
+          id
+          tierName
+          displayName
+          tierLevel
+        }
+        pendingTier {
+          id
+          tierName
+          displayName
+          tierLevel
+        }
+        effectiveAt
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let CreateAPIToken = """
   # Create a new developer API token for programmatic access
   mutation CreateAPIToken($input: CreateDeveloperTokenInput!) {
@@ -6195,6 +6272,17 @@ enum GQL {
   }
   """
 
+  static let EnablePrepaidUsage = """
+  mutation EnablePrepaidUsage {
+    enablePrepaidUsage {
+      activated
+      awaitingFunds
+      tierName
+      billingModel
+    }
+  }
+  """
+
   static let EnableWebhookEndpoint = """
   # Enable a disabled webhook endpoint
   mutation EnableWebhookEndpoint($id: ID!) {
@@ -6344,6 +6432,101 @@ enum GQL {
       }
     }
   }
+  """
+
+  static let PlatformAdjustBalance = """
+  mutation PlatformAdjustBalance(
+    $tenantId: ID!
+    $amountCents: Int!
+    $reason: String!
+    $referenceId: ID!
+  ) {
+    platformAdjustBalance(
+      tenantId: $tenantId
+      amountCents: $amountCents
+      reason: $reason
+      referenceId: $referenceId
+    ) {
+      id
+      amountCents
+      balanceAfterCents
+      description
+    }
+  }
+  """
+
+  static let PlatformAssignBillingTier = """
+  mutation PlatformAssignBillingTier($tenantId: ID!, $tierName: String!, $reason: String!) {
+    platformAssignBillingTier(tenantId: $tenantId, tierName: $tierName, reason: $reason) {
+      subscriptionId
+      tierName
+      billingModel
+      changed
+    }
+  }
+  """
+
+  static let PlatformAssignBillingTierWithReview = """
+  mutation PlatformAssignBillingTierWithReview($tenantId: ID!, $tierName: String!, $reason: String!, $quotedAt: Time!, $fingerprint: String!) {
+   platformAssignBillingTierWithReview(tenantId:$tenantId,tierName:$tierName,reason:$reason,quotedAt:$quotedAt,fingerprint:$fingerprint) {subscriptionId tierName billingModel changed}
+  }
+  """
+
+  static let PlatformDisableAutomaticTopup = """
+  mutation PlatformDisableAutomaticTopup($tenantId: ID!, $reason:String!) { platformDisableAutomaticTopup(tenantId:$tenantId,reason:$reason) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
+  """
+
+  static let PlatformPreviewBillingTier = """
+  mutation PlatformPreviewBillingTier($tenantId: ID!, $tierName: String!, $reason: String!) {
+   platformPreviewBillingTier(tenantId:$tenantId,tierName:$tierName,reason:$reason) { quotedAt expiresAt fingerprint effectsJson }
+  }
+  """
+
+  static let PlatformRecoverCheckout = """
+  mutation PlatformRecoverCheckout(
+    $tenantId: ID!
+    $reservationId: ID!
+    $reason: String!
+    $confirmed: Boolean!
+  ) {
+    platformRecoverCheckout(
+      tenantId: $tenantId
+      reservationId: $reservationId
+      reason: $reason
+      confirmed: $confirmed
+    ) {
+      provider
+      status
+      amountCents
+      currency
+      amountKnown
+      outcome
+      detail
+      auditId
+    }
+  }
+  """
+
+  static let PlatformRefundInvoice = """
+  mutation PlatformRefundInvoice($tenantId:ID!, $invoiceId:ID!, $requestId:ID!, $reason:String!, $confirmed:Boolean!, $fingerprint:String!) {
+   platformRefundInvoice(tenantId:$tenantId,invoiceId:$invoiceId,requestId:$requestId,reason:$reason,confirmed:$confirmed,fingerprint:$fingerprint) { requestId invoiceId provider amountMinor currency status fingerprint detail providerRefundId }
+  }
+  """
+
+  static let PlatformSetEntitlements = """
+  mutation PlatformSetEntitlements($tenantId: ID!, $input: UpdateSubscriptionCustomTermsInput!) {
+    updateSubscriptionCustomTerms(tenantId: $tenantId, input: $input) {
+      id
+      entitlementOverrides {
+        key
+        value
+      }
+    }
+  }
+  """
+
+  static let PreviewFreeCancellation = """
+  mutation PreviewFreeCancellation($tierId:ID!){previewFreeCancellation(tierId:$tierId){quotedAt expiresAt effectiveAt fingerprint dueNowMinor refundNowMinor walletCreditNowMinor currency futureUsageMessage}}
   """
 
   static let PromoteToPaid = """
@@ -6699,6 +6882,10 @@ enum GQL {
       }
     }
   }
+  """
+
+  static let SetAutomaticTopup = """
+  mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) { setAutomaticTopup(input:$input) { enabled thresholdEurCents netAmountMinor monthlyGrossLimitMinor currency pausedReason monthlyReservedOrSpentMinor available unavailableReason consentVersion } }
   """
 
   static let SetMediaRetentionPolicy = """

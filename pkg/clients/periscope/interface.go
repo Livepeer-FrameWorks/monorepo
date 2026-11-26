@@ -15,6 +15,7 @@ type Interface interface {
 	GetStreamAnalyticsSummary(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts) (*periscopepb.GetStreamAnalyticsSummaryResponse, error)
 	GetLiveUsageSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetLiveUsageSummaryResponse, error)
 	GetStreamEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
+	GetStreamRecordingEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
 	GetBufferEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetBufferEventsResponse, error)
 	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error)
 	GetStreamStatus(ctx context.Context, tenantID string, streamID string) (*periscopepb.StreamStatusResponse, error)

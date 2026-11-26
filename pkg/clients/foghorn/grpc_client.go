@@ -742,3 +742,10 @@ func (c *GRPCClient) TerminateClaimedTenantStream(ctx context.Context, tenantID,
 	response, err := c.tenant.TerminateClaimedStreamSessions(ctx, &foghorncontrolpb.TerminateStreamSessionsRequest{TenantId: tenantID, StreamId: streamID, Reason: reason, StreamNames: []string{internalName}, ClaimFences: map[string]string{internalName: claimID}}, grpc.Trailer(&trailers))
 	return response, trailers, err
 }
+
+// GetTenantMediaFootprint reads the owning cell under service authentication.
+func (c *GRPCClient) GetTenantMediaFootprint(ctx context.Context, tenantID string, retentionLimitDays int32) (*foghornpb.TenantMediaFootprint, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.tenant.GetTenantMediaFootprint(ctx, &foghornpb.GetTenantMediaFootprintRequest{TenantId: tenantID, RetentionLimitDays: retentionLimitDays})
+}

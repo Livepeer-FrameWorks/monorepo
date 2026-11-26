@@ -65,21 +65,25 @@ else
   fail 'billing tenant completed its legal billing profile'
   finish
 fi
-if set_prepaid=$(cli_json admin billing set-tier --tenant-id "$tenant" --tier payg --billing-model prepaid \
-  --reason 'stack billing switch test' --output json); then
-  pass 'operator assigned prepaid tier'
-else
-  fail 'operator assigned prepaid tier'
-  finish
-fi
-check 'prepaid assignment returned a JSON tier' json_has "$set_prepaid" '.tier_name == "payg" and .billing_model == "prepaid" and .primary_cluster_id != "central-primary"'
-
+initial_tier=$(pg purser "SELECT tier.tier_name FROM purser.tenant_subscriptions sub JOIN purser.billing_tiers tier ON tier.id=sub.tier_id WHERE sub.tenant_id='$tenant'")
+check 'new verified account starts with Free limits' [ "$initial_tier" = free ]
+credit_reference=$(python3 -c 'import uuid; print(uuid.uuid4())')
 if credit=$(cli_json admin billing credit --tenant-id "$tenant" --amount 10.00 \
-  --reason 'stack billing switch test credit' --output json); then
-  pass 'operator credited prepaid balance'
+  --reference-id "$credit_reference" --reason 'stack billing switch test credit' --output json); then
+  pass 'operator credited Free balance'
 else
   fail "operator credit failed: $credit"
 fi
+funded_usage_active() {
+  local canonical
+  canonical=$(pg purser "SELECT tier.tier_name || '/' || sub.billing_model FROM purser.tenant_subscriptions sub JOIN purser.billing_tiers tier ON tier.id=sub.tier_id WHERE sub.tenant_id='$tenant'")
+  [ "$canonical" = payg/prepaid ]
+}
+eventually 90 'settled Free funding activates canonical PAYG without operator assignment' funded_usage_active
+replayed_credit=$(cli_json admin billing credit --tenant-id "$tenant" --amount 10.00 \
+  --reference-id "$credit_reference" --reason 'stack billing switch test credit' --output json)
+check 'same credit retry returns the original receipt' [ "$(printf '%s' "$credit" | jq -r .id)" = "$(printf '%s' "$replayed_credit" | jq -r .id)" ]
+
 balance_before=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
 check 'prepaid credit is exactly EUR 10' [ "$balance_before" = 1000 ]
 period_end=$(pg purser "SELECT billing_period_end AT TIME ZONE 'UTC' FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'")

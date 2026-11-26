@@ -33,15 +33,16 @@ import (
 // CryptoMonitor manages cryptocurrency payment monitoring for both
 // invoice payments and prepaid top-ups. Supports ETH, Base, and Arbitrum networks.
 type CryptoMonitor struct {
-	db              *sql.DB
-	logger          logging.Logger
-	decklogClient   *decklogclient.BatchedClient
-	priceFeed       *PriceFeed
-	stopCh          chan struct{}
-	includeTestnets bool
-	rpc             *RPCClient
-	metrics         *PurserMetrics
-	taxInvoices     *X402Handler
+	convergeFundedAccount func(context.Context, string) error
+	db                    *sql.DB
+	logger                logging.Logger
+	decklogClient         *decklogclient.BatchedClient
+	priceFeed             *PriceFeed
+	stopCh                chan struct{}
+	includeTestnets       bool
+	rpc                   *RPCClient
+	metrics               *PurserMetrics
+	taxInvoices           *X402Handler
 	// scanState is the last logged scanner inactive reason ("" = active);
 	// nil until the first tick. Only the monitor goroutine touches it.
 	scanState *string
@@ -576,6 +577,11 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	if err != nil {
 		logFailure(err)
 		return
+	}
+	if (creditedCents > 0 || overpaymentCents > 0) && cm.convergeFundedAccount != nil {
+		if convergeErr := cm.convergeFundedAccount(ctx, wallet.TenantID); convergeErr != nil {
+			cm.logger.WithError(convergeErr).WithField("tenant_id", wallet.TenantID).Warn("Crypto funded account activation pending")
+		}
 	}
 	if wallet.Purpose == "prepaid" && cm.taxInvoices != nil {
 		if _, invoiceErr := cm.taxInvoices.generateCryptoTopupInvoice(

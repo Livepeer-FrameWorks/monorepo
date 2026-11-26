@@ -47,6 +47,9 @@ var operationCalls = map[string]operationCall{
 	"CompleteVodUpload": {CompleteVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CompleteVodUpload(ctx, c, arg[CompleteVodUploadInput](v, "input"))
 	}},
+	"ConfirmFreeCancellation": {ConfirmFreeCancellation_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ConfirmFreeCancellation(ctx, c, arg[string](v, "tierId"), arg[time.Time](v, "quotedAt"), arg[string](v, "fingerprint"))
+	}},
 	"CreateCardTopup": {CreateCardTopup_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CreateCardTopup(ctx, c, arg[CreateCardTopupInput](v, "input"))
 	}},
@@ -137,6 +140,9 @@ var operationCalls = map[string]operationCall{
 	"DisconnectIngest": {DisconnectIngest_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return DisconnectIngest(ctx, c, arg[string](v, "streamId"))
 	}},
+	"EnablePrepaidUsage": {EnablePrepaidUsage_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
+		return EnablePrepaidUsage(ctx, c)
+	}},
 	"EnableWebhookEndpoint": {EnableWebhookEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return EnableWebhookEndpoint(ctx, c, arg[string](v, "id"))
 	}},
@@ -157,6 +163,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"GetAuthSessionsConnection": {GetAuthSessionsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetAuthSessionsConnection(ctx, c, arg[*int](v, "first"), arg[*string](v, "after"))
+	}},
+	"GetAutomaticTopup": {GetAutomaticTopup_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
+		return GetAutomaticTopup(ctx, c)
 	}},
 	"GetBalanceTransactionsConnection": {GetBalanceTransactionsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetBalanceTransactionsConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "transactionType"), arg[*TimeRangeInput](v, "timeRange"))
@@ -374,6 +383,9 @@ var operationCalls = map[string]operationCall{
 	"GetRecentPullSourceEvents": {GetRecentPullSourceEvents_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetRecentPullSourceEvents(ctx, c, arg[string](v, "id"), arg[*int](v, "limit"))
 	}},
+	"GetRecordingEventsConnection": {GetRecordingEventsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetRecordingEventsConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[string](v, "streamId"), arg[*TimeRangeInput](v, "timeRange"), arg[*bool](v, "noCache"))
+	}},
 	"GetReviewClusterMediaConsentChange": {GetReviewClusterMediaConsentChange_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetReviewClusterMediaConsentChange(ctx, c, arg[ReviewMediaCapacityConsentInput](v, "input"))
 	}},
@@ -581,6 +593,9 @@ var operationCalls = map[string]operationCall{
 	"OpenMistAdminSession": {OpenMistAdminSession_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return OpenMistAdminSession(ctx, c, arg[OpenMistAdminSessionInput](v, "input"))
 	}},
+	"PreviewFreeCancellation": {PreviewFreeCancellation_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return PreviewFreeCancellation(ctx, c, arg[string](v, "tierId"))
+	}},
 	"PromoteToPaid": {PromoteToPaid_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return PromoteToPaid(ctx, c, arg[string](v, "tierId"))
 	}},
@@ -637,6 +652,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"ServerInfo": {ServerInfo_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
 		return ServerInfo(ctx, c)
+	}},
+	"SetAutomaticTopup": {SetAutomaticTopup_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return SetAutomaticTopup(ctx, c, arg[SetAutomaticTopupInput](v, "input"))
 	}},
 	"SetMediaRetentionPolicy": {SetMediaRetentionPolicy_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return SetMediaRetentionPolicy(ctx, c, arg[SetMediaRetentionPolicyInput](v, "input"))

@@ -194,7 +194,7 @@ func (q *Queries) CollectPhaseUsage(ctx context.Context, arg CollectPhaseUsagePa
 
 const convertDraftToPrepaidStatement = `-- name: ConvertDraftToPrepaidStatement :one
 UPDATE purser.billing_invoices
-SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
+SET invoice_number = purser.next_billing_document_number('STM'),
     document_kind = 'prepaid_statement',
     status = 'paid',
     currency = 'EUR',
@@ -721,7 +721,7 @@ INSERT INTO purser.billing_invoices (
     presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     $1::text::uuid,
-    'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
+    purser.next_billing_document_number('STM'),
     'prepaid_statement', 'paid', 'EUR', 0,
     $2::timestamptz, $2::timestamptz,
     $3::text::numeric, $4::text::numeric,

@@ -481,7 +481,7 @@ func (q *Queries) InsertPendingProviderSettlement(ctx context.Context, arg Inser
 
 const insertUnusedBaseFeeCreditNote = `-- name: InsertUnusedBaseFeeCreditNote :exec
 INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
-SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),i.tenant_id,'invoice',i.id,'unused_base_fee',$1::text,$2::bigint,$3::text,'Unused subscription period',jsonb_build_object('unused_from',$4::timestamptz)
+SELECT purser.next_billing_document_number('CN'),i.tenant_id,'invoice',i.id,'unused_base_fee',$1::text,$2::bigint,$3::text,'Unused subscription period',jsonb_build_object('unused_from',$4::timestamptz)
 FROM purser.billing_invoices i WHERE i.tenant_id=$5::text::uuid AND i.id=$6::text::uuid AND i.tax_status='ready'
 ON CONFLICT(source_document_type,source_document_id,reversal_reference_type,reversal_reference_id) DO NOTHING
 `

@@ -23,7 +23,8 @@ SELECT
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
      WHERE grant_deadline.subscription_id = ts.id
-       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at,
+    pb.grace_ends_at, COALESCE(pb.grace_credit_cents,0)::bigint AS grace_credit_cents, pb.free_recovery_until
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -70,7 +71,8 @@ SELECT
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
      WHERE grant_deadline.subscription_id = ts.id
-       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at,
+    pb.grace_ends_at, COALESCE(pb.grace_credit_cents,0)::bigint AS grace_credit_cents, pb.free_recovery_until
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -222,15 +224,20 @@ SELECT pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
        COALESCE(pb.created_at, TIMESTAMPTZ 'epoch') AS created_at,
        COALESCE(pb.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
        CEIL(COALESCE(SUM(r.reserved_amount_micro), 0)::numeric / 10000)::bigint
-           AS reserved_balance_cents
+           AS reserved_balance_cents,
+       pb.grace_ends_at,pb.grace_credit_cents,pb.free_recovery_until,
+       COALESCE(s.billing_model,'')::text AS billing_model,COALESCE(s.status,'')::text AS subscription_status,COALESCE(t.tier_name,'')::text AS tier_name
 FROM purser.prepaid_balances pb
+LEFT JOIN purser.tenant_subscriptions s ON s.tenant_id=pb.tenant_id
+LEFT JOIN purser.billing_tiers t ON t.id=s.tier_id
 LEFT JOIN purser.usage_reservations r
     ON r.tenant_id = pb.tenant_id
     AND r.currency = pb.currency
     AND r.updated_at >= NOW() - INTERVAL '3 minutes'
 WHERE pb.tenant_id = sqlc.arg(tenant_id)::text::uuid AND pb.currency = sqlc.arg(currency)
 GROUP BY pb.id, pb.tenant_id, pb.balance_cents, pb.currency,
-         pb.low_balance_threshold_cents, pb.created_at, pb.updated_at;
+         pb.low_balance_threshold_cents, pb.created_at, pb.updated_at,
+         pb.grace_ends_at,pb.grace_credit_cents,pb.free_recovery_until,s.billing_model,s.status,t.tier_name;
 
 -- name: GetPrepaidDrainRate :one
 SELECT COALESCE(SUM(ABS(amount_cents)), 0)::bigint AS usage_last_hour

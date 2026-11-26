@@ -1,0 +1,1 @@
+ALTER TABLE purser.prepaid_balances VALIDATE CONSTRAINT prepaid_grace_policy_valid;

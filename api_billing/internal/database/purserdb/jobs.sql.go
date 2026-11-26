@@ -92,7 +92,8 @@ func (q *Queries) AdvanceSubscriptionBillingPeriod(ctx context.Context, arg Adva
 
 const applyPendingDowngradeTier = `-- name: ApplyPendingDowngradeTier :execrows
 UPDATE purser.tenant_subscriptions
-SET tier_id = $1::text::uuid, updated_at = NOW()
+SET tier_id = $1::text::uuid, updated_at = NOW(),
+    automatic_prepaid_usage = CASE WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=$1::text::uuid)='free' THEN FALSE ELSE automatic_prepaid_usage END
 WHERE tenant_id = $2::text::uuid
   AND pending_tier_id = $1::text::uuid
   AND (pending_reason IS DISTINCT FROM 'downgrade'
@@ -1468,15 +1469,18 @@ const setProviderPaymentIntentStatus = `-- name: SetProviderPaymentIntentStatus 
 UPDATE purser.payment_provider_intents
 SET status = $1, updated_at = NOW()
 WHERE id = $2::text::uuid
+  AND tenant_id = $3::text::uuid
+  AND status NOT IN ('succeeded', 'expired', 'cancelled', 'terminal_failed')
 `
 
 type SetProviderPaymentIntentStatusParams struct {
 	Status   string `db:"status" json:"status"`
 	IntentID string `db:"intent_id" json:"intent_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) SetProviderPaymentIntentStatus(ctx context.Context, arg SetProviderPaymentIntentStatusParams) error {
-	_, err := q.db.ExecContext(ctx, setProviderPaymentIntentStatus, arg.Status, arg.IntentID)
+	_, err := q.db.ExecContext(ctx, setProviderPaymentIntentStatus, arg.Status, arg.IntentID, arg.TenantID)
 	return err
 }
 

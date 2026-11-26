@@ -22,6 +22,7 @@ LIMIT 1;
 -- name: PromotePrepaidTenantSubscription :one
 UPDATE purser.tenant_subscriptions
 SET billing_model = 'postpaid', tier_id = sqlc.arg(tier_id)::text::uuid,
+    automatic_prepaid_usage = CASE WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=sqlc.arg(tier_id)::text::uuid)='free' THEN FALSE ELSE automatic_prepaid_usage END,
     status = 'active', updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND billing_model = 'prepaid'
 RETURNING id::text AS id;
@@ -130,6 +131,10 @@ FOR NO KEY UPDATE;
 -- name: AssignTenantSubscriptionTier :execrows
 UPDATE purser.tenant_subscriptions
 SET tier_id = sqlc.arg(tier_id)::text::uuid,
+    automatic_prepaid_usage = CASE
+        WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=sqlc.arg(tier_id)::text::uuid)='free' THEN FALSE
+        WHEN sqlc.arg(billing_model)::text='prepaid' THEN TRUE
+        ELSE automatic_prepaid_usage END,
     status = CASE
         WHEN billing_model = 'prepaid' AND sqlc.arg(billing_model)::text = 'postpaid' THEN 'active'
         ELSE status

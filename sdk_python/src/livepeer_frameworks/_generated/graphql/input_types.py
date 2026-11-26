@@ -761,6 +761,19 @@ class SendMessageInput(BaseModel):
     "The message content."
 
 
+class SetAutomaticTopupInput(BaseModel):
+    """Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months."""
+
+    enabled: bool
+    threshold_eur_cents: int = Field(alias="thresholdEurCents", default=500)
+    net_amount_minor: int = Field(alias="netAmountMinor", default=2000)
+    monthly_gross_limit_minor: int = Field(
+        alias="monthlyGrossLimitMinor", default=10000
+    )
+    currency: str
+    consent_version: str = Field(alias="consentVersion", default="")
+
+
 class SetMediaRetentionPolicyInput(BaseModel):
     target_type: MediaRetentionTarget = Field(
         alias="targetType", description="Which class to write: VOD, DVR, or CLIP."

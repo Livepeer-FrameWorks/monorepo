@@ -1429,6 +1429,14 @@ type EffectiveRetention struct {
 
 func (EffectiveRetention) IsUpdateMediaRetentionResult() {}
 
+// The funded-usage arrangement after opting into PAYG.
+type EnablePrepaidUsagePayload struct {
+	Activated     bool   `json:"activated"`
+	AwaitingFunds bool   `json:"awaitingFunds"`
+	TierName      string `json:"tierName"`
+	BillingModel  string `json:"billingModel"`
+}
+
 // A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 type EntitlementEntry struct {
 	Key   string `json:"key"`
@@ -1450,6 +1458,19 @@ type FederationEventsConnection struct {
 	Edges      []*FederationEventEdge `json:"edges"`
 	PageInfo   *PageInfo              `json:"pageInfo"`
 	TotalCount int                    `json:"totalCount"`
+}
+
+// Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero.
+type FreeCancellationReview struct {
+	QuotedAt             time.Time `json:"quotedAt"`
+	ExpiresAt            time.Time `json:"expiresAt"`
+	EffectiveAt          time.Time `json:"effectiveAt"`
+	Fingerprint          string    `json:"fingerprint"`
+	DueNowMinor          int       `json:"dueNowMinor"`
+	RefundNowMinor       int       `json:"refundNowMinor"`
+	WalletCreditNowMinor int       `json:"walletCreditNowMinor"`
+	Currency             string    `json:"currency"`
+	FutureUsageMessage   string    `json:"futureUsageMessage"`
 }
 
 // Import a video from a public URL for VOD processing.
@@ -2366,6 +2387,34 @@ type PageInfo struct {
 	HasPreviousPage bool    `json:"hasPreviousPage"`
 }
 
+// Operator billing-assignment receipt.
+type PlatformBillingAssignment struct {
+	SubscriptionID string `json:"subscriptionId"`
+	TierName       string `json:"tierName"`
+	BillingModel   string `json:"billingModel"`
+	Changed        bool   `json:"changed"`
+}
+
+// Priced financial effects of an operator arrangement change. EUR cents and original presentment minor units are labelled in effectsJson.
+type PlatformBillingAssignmentQuote struct {
+	QuotedAt    time.Time `json:"quotedAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	Fingerprint string    `json:"fingerprint"`
+	EffectsJSON string    `json:"effectsJson"`
+}
+
+// Provider-observed result of an operator checkout recovery.
+type PlatformCheckoutRecovery struct {
+	Provider    string `json:"provider"`
+	Status      string `json:"status"`
+	AmountCents int    `json:"amountCents"`
+	Currency    string `json:"currency"`
+	AmountKnown bool   `json:"amountKnown"`
+	Outcome     string `json:"outcome"`
+	Detail      string `json:"detail"`
+	AuditID     string `json:"auditId"`
+}
+
 type PlatformIncidentFilterInput struct {
 	// Omitted matches both scopes.
 	Scope *IncidentScope `json:"scope,omitempty"`
@@ -2374,6 +2423,18 @@ type PlatformIncidentFilterInput struct {
 	ClusterID *string          `json:"clusterId,omitempty"`
 	// Narrows tenant-scope incidents to one tenant.
 	TenantID *string `json:"tenantId,omitempty"`
+}
+
+type PlatformInvoiceRefund struct {
+	RequestID        string `json:"requestId"`
+	InvoiceID        string `json:"invoiceId"`
+	Provider         string `json:"provider"`
+	AmountMinor      int    `json:"amountMinor"`
+	Currency         string `json:"currency"`
+	Status           string `json:"status"`
+	Fingerprint      string `json:"fingerprint"`
+	Detail           string `json:"detail"`
+	ProviderRefundID string `json:"providerRefundId"`
 }
 
 type PlatformTenantIndex struct {
@@ -2688,6 +2749,16 @@ type ServiceInstancesConnection struct {
 	Nodes      []*quartermasterpb.ServiceInstance `json:"nodes"`
 	PageInfo   *PageInfo                          `json:"pageInfo"`
 	TotalCount int                                `json:"totalCount"`
+}
+
+// Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months.
+type SetAutomaticTopupInput struct {
+	Enabled                bool   `json:"enabled"`
+	ThresholdEurCents      int    `json:"thresholdEurCents"`
+	NetAmountMinor         int    `json:"netAmountMinor"`
+	MonthlyGrossLimitMinor int    `json:"monthlyGrossLimitMinor"`
+	Currency               string `json:"currency"`
+	ConsentVersion         string `json:"consentVersion"`
 }
 
 type SetMediaRetentionPolicyInput struct {
@@ -3326,6 +3397,10 @@ type UpdateStreamInput struct {
 
 // Input for updating enterprise subscription custom terms.
 type UpdateSubscriptionCustomTermsInput struct {
+	// Refuse replacement if the stored override map differs from this reviewed value.
+	ExpectedEntitlementOverrides []*EntitlementEntryInput `json:"expectedEntitlementOverrides,omitempty"`
+	// Reason retained in the subscription audit event.
+	Reason *string `json:"reason,omitempty"`
 	// Custom support terms.
 	CustomFeatures *BillingFeaturesInput `json:"customFeatures,omitempty"`
 	// Per-subscription pricing rule overrides (wholesale replace by meter).
@@ -4949,6 +5024,8 @@ const (
 	InvoiceStatusFailed InvoiceStatus = "FAILED"
 	// Invoice requires operator review and cannot be paid.
 	InvoiceStatusManualReview InvoiceStatus = "MANUAL_REVIEW"
+	// The original payment was returned with an original-tax credit note.
+	InvoiceStatusRefunded InvoiceStatus = "REFUNDED"
 	// Invoice cancelled.
 	InvoiceStatusCancelled InvoiceStatus = "CANCELLED"
 )
@@ -4960,12 +5037,13 @@ var AllInvoiceStatus = []InvoiceStatus{
 	InvoiceStatusOverdue,
 	InvoiceStatusFailed,
 	InvoiceStatusManualReview,
+	InvoiceStatusRefunded,
 	InvoiceStatusCancelled,
 }
 
 func (e InvoiceStatus) IsValid() bool {
 	switch e {
-	case InvoiceStatusDraft, InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusOverdue, InvoiceStatusFailed, InvoiceStatusManualReview, InvoiceStatusCancelled:
+	case InvoiceStatusDraft, InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusOverdue, InvoiceStatusFailed, InvoiceStatusManualReview, InvoiceStatusRefunded, InvoiceStatusCancelled:
 		return true
 	}
 	return false
@@ -6631,6 +6709,8 @@ func (e StreamEventSource) MarshalJSON() ([]byte, error) {
 type StreamEventType string
 
 const (
+	StreamEventTypeRecordingRefused      StreamEventType = "RECORDING_REFUSED"
+	StreamEventTypeRecordingActive       StreamEventType = "RECORDING_ACTIVE"
 	StreamEventTypeStreamLifecycleUpdate StreamEventType = "STREAM_LIFECYCLE_UPDATE"
 	StreamEventTypeStreamStart           StreamEventType = "STREAM_START"
 	StreamEventTypeStreamEnd             StreamEventType = "STREAM_END"
@@ -6641,6 +6721,8 @@ const (
 )
 
 var AllStreamEventType = []StreamEventType{
+	StreamEventTypeRecordingRefused,
+	StreamEventTypeRecordingActive,
 	StreamEventTypeStreamLifecycleUpdate,
 	StreamEventTypeStreamStart,
 	StreamEventTypeStreamEnd,
@@ -6652,7 +6734,7 @@ var AllStreamEventType = []StreamEventType{
 
 func (e StreamEventType) IsValid() bool {
 	switch e {
-	case StreamEventTypeStreamLifecycleUpdate, StreamEventTypeStreamStart, StreamEventTypeStreamEnd, StreamEventTypeBufferUpdate, StreamEventTypeTrackListUpdate, StreamEventTypePlayRewrite, StreamEventTypeStreamSource:
+	case StreamEventTypeRecordingRefused, StreamEventTypeRecordingActive, StreamEventTypeStreamLifecycleUpdate, StreamEventTypeStreamStart, StreamEventTypeStreamEnd, StreamEventTypeBufferUpdate, StreamEventTypeTrackListUpdate, StreamEventTypePlayRewrite, StreamEventTypeStreamSource:
 		return true
 	}
 	return false

@@ -1809,3 +1809,8 @@ func (c *GRPCClient) RefreshStreamKeyAndEndIngest(ctx context.Context, streamID 
 func (c *GRPCClient) DisconnectIngest(ctx context.Context, streamID string) (*commodorepb.DisconnectIngestResponse, error) {
 	return c.stream.DisconnectIngest(ctx, &commodorepb.DisconnectIngestRequest{StreamId: streamID})
 }
+
+// GetTenantFreeEligibility obtains a fail-closed resource proof for a Free transition.
+func (c *GRPCClient) GetTenantFreeEligibility(ctx context.Context, req *commodorepb.GetTenantFreeEligibilityRequest) (*commodorepb.GetTenantFreeEligibilityResponse, error) {
+	return c.internal.GetTenantFreeEligibility(withServiceAuth(ctx), req)
+}

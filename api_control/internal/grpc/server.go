@@ -177,6 +177,7 @@ type CommodoreServer struct {
 	logger                    logging.Logger
 	foghornPool               *foghornclient.FoghornPool
 	quartermasterClient       *qmclient.GRPCClient
+	freeTierResources         tenantFreeResourceSource
 	controlRecipientLookup    func(context.Context, *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error)
 	navigatorClient           *navigator.Client
 	purserClient              *purserclient.GRPCClient
@@ -10118,6 +10119,7 @@ func commodoreServiceOnlyMethods() []string {
 		commodorepb.InternalService_RequestMediaAuthorityRefresh_FullMethodName,
 		commodorepb.InternalService_GetTenantUserCount_FullMethodName,
 		commodorepb.InternalService_GetTenantPrimaryUser_FullMethodName,
+		commodorepb.InternalService_GetTenantFreeEligibility_FullMethodName,
 		commodorepb.InternalService_GetOrCreateWalletUser_FullMethodName,
 		commodorepb.InternalService_ValidateMistAdminSession_FullMethodName,
 		commodorepb.InternalService_UpdateArtifactCatalogSnapshot_FullMethodName,
@@ -11172,9 +11174,10 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *commodo
 	}
 
 	return &commodorepb.GetTenantPrimaryUserResponse{
-		UserId: primary.ID,
-		Email:  primary.Email,
-		Name:   name,
+		UserId:           primary.ID,
+		Email:            primary.Email,
+		Name:             name,
+		FreeTierEligible: primary.FreeTierEligible,
 	}, nil
 }
 

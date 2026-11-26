@@ -1,0 +1,8 @@
+mutation EnablePrepaidUsage {
+  enablePrepaidUsage {
+    activated
+    awaitingFunds
+    tierName
+    billingModel
+  }
+}

@@ -438,3 +438,21 @@ func TestErrorPresenterAddsIngestDenialReason(t *testing.T) {
 		t.Fatalf("a status without an ingest denial got a reason: %#v", plain.Extensions)
 	}
 }
+
+func TestErrorPresenterPreservesStorageLimit(t *testing.T) {
+	st, err := status.New(codes.ResourceExhausted, "private backend detail").WithDetails(&errdetails.ErrorInfo{
+		Domain: "storage.frameworks.network", Reason: "STORAGE_LIMIT_REACHED", Metadata: map[string]string{
+			"used_bytes": "11811160064", "limit_bytes": "10737418240", "additional_bytes": "0",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ErrorPresenter(logging.NewLogger())(context.Background(), fmt.Errorf("start DVR: %w", st.Err()))
+	if got.Message != "storage limit reached" || got.Extensions["code"] != "STORAGE_LIMIT_REACHED" {
+		t.Fatalf("storage refusal=%q %v; want actionable storage limit error", got.Message, got.Extensions)
+	}
+	if got.Extensions["used_bytes"] != int64(11811160064) || got.Extensions["limit_bytes"] != int64(10737418240) {
+		t.Fatalf("storage bounds=%v", got.Extensions)
+	}
+}

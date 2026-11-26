@@ -66,6 +66,21 @@ func (e *ThresholdEnforcer) EnforcePrepaidThresholds(ctx context.Context, tenant
 		e.invalidateTenantCache(ctx, tenantID, "balance_crossed_zero")
 	}
 
+	if newBalance <= 0 && e.billing != nil {
+		if err := e.billing.ConvergeTenantEntitlements(ctx, tenantID); err != nil {
+			e.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Payment grace reconciliation awaits retry")
+		}
+	}
+
+	if newBalance <= 0 && e.billing != nil {
+		stillPrepaid, modelErr := e.isPrepaidTenant(ctx, tenantID)
+		if modelErr != nil {
+			return modelErr
+		}
+		if !stillPrepaid {
+			return nil
+		}
+	}
 	if newBalance < suspensionThresholdCents {
 		if err := e.suspendTenantForBalance(ctx, tenantID, newBalance); err != nil {
 			return err

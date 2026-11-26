@@ -1,0 +1,20 @@
+mutation PlatformAssignBillingTierWithReview(
+  $tenantId: ID!
+  $tierName: String!
+  $reason: String!
+  $quotedAt: Time!
+  $fingerprint: String!
+) {
+  platformAssignBillingTierWithReview(
+    tenantId: $tenantId
+    tierName: $tierName
+    reason: $reason
+    quotedAt: $quotedAt
+    fingerprint: $fingerprint
+  ) {
+    subscriptionId
+    tierName
+    billingModel
+    changed
+  }
+}

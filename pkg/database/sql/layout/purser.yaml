@@ -5,6 +5,7 @@
 database: purser
 layout: colocated
 colocated_tables:
+  - purser.automatic_topup_settings
   - purser.billing_collection_balances
   - purser.billing_collection_writeoffs
   - purser.hd_wallet_state
@@ -35,6 +36,9 @@ colocated_tables:
   - purser.tenant_balance_rollups
   - public._schema_baseline
 distributed_tables:
+  - purser.automatic_topup_attempts
+  - purser.operator_invoice_refunds
+  - purser.media_recovery_expiries
   # Retained purchase receipts grow with paid tier upgrades.
   - purser.subscription_tier_upgrades
   - purser.checkout_recovery_audit

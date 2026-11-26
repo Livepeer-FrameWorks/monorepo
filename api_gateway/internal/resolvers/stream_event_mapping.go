@@ -26,6 +26,21 @@ func mapPeriscopeStreamEvent(event *periscopepb.StreamEvent) *model.StreamEvent 
 	}
 
 	details := redactInternalJSONPtr(event.EventData)
+	if event.EventType == "recording_refused" || event.EventType == "recording_active" {
+		message := "Recording failed. Contact support if this continues."
+		var payload struct {
+			Code string `json:"code"`
+		}
+		if parseErr := json.Unmarshal([]byte(event.EventData), &payload); parseErr != nil {
+			payload.Code = ""
+		}
+		if event.EventType == "recording_active" {
+			message = "Recording is capturing media."
+		} else if payload.Code == "STORAGE_LIMIT_REACHED" {
+			message = "Recording failed because the storage limit was reached. Review storage and billing."
+		}
+		details = &message
+	}
 	nodeID := stringPtrOrNil(event.NodeId)
 
 	eventID := event.EventId
@@ -244,6 +259,10 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 
 func mapStreamEventType(value string) model.StreamEventType {
 	switch strings.ToUpper(value) {
+	case "RECORDING_REFUSED":
+		return model.StreamEventTypeRecordingRefused
+	case "RECORDING_ACTIVE":
+		return model.StreamEventTypeRecordingActive
 	case "STREAM_LIFECYCLE":
 		return model.StreamEventTypeStreamLifecycleUpdate
 	case "STREAM_LIFECYCLE_UPDATE":

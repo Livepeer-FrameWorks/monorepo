@@ -871,3 +871,61 @@ func (c *GRPCClient) DiagnoseBilling(ctx context.Context, tenantID string) (*pur
 func (c *GRPCClient) AdminRetryProviderWebhook(ctx context.Context, r *purserpb.AdminRetryProviderWebhookRequest) (*purserpb.AdminRetryProviderWebhookResponse, error) {
 	return c.prepaid.AdminRetryProviderWebhook(ctx, r)
 }
+
+// EnablePrepaidUsage opts the tenant back into balance-funded usage.
+func (c *GRPCClient) EnablePrepaidUsage(ctx context.Context, tenantID string) (*purserpb.EnablePrepaidUsageResponse, error) {
+	return c.prepaid.EnablePrepaidUsage(ctx, &purserpb.EnablePrepaidUsageRequest{TenantId: tenantID})
+}
+
+// UpdateSubscriptionWithEntitlementReview requires the server's reviewed-map contract.
+func (c *GRPCClient) UpdateSubscriptionWithEntitlementReview(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
+	return c.subscription.UpdateSubscriptionWithEntitlementReview(ctx, req)
+}
+
+func (c *GRPCClient) GetMediaRecoveryStatus(ctx context.Context, tenant string) (*purserpb.MediaRecoveryStatus, error) {
+	if c == nil || c.billing == nil {
+		return nil, status.Error(codes.Unavailable, "billing recovery client not configured")
+	}
+	return c.billing.GetMediaRecoveryStatus(withServiceAuth(ctx), &purserpb.GetMediaRecoveryStatusRequest{TenantId: tenant})
+}
+func (c *GRPCClient) CommitMediaRecoveryExpiry(ctx context.Context, req *purserpb.CommitMediaRecoveryExpiryRequest) (*purserpb.MediaRecoveryStatus, error) {
+	if c == nil || c.billing == nil {
+		return nil, status.Error(codes.Unavailable, "billing recovery client not configured")
+	}
+	return c.billing.CommitMediaRecoveryExpiry(withServiceAuth(ctx), req)
+}
+
+func (c *GRPCClient) PreviewAdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignmentQuote, error) {
+	return c.prepaid.PreviewAdminAssignTier(ctx, req)
+}
+func (c *GRPCClient) AdminAssignTierWithReview(ctx context.Context, req *purserpb.AdminAssignTierReviewedRequest) (*purserpb.AdminAssignTierResponse, error) {
+	return c.prepaid.AdminAssignTierWithReview(ctx, req)
+}
+
+func (c *GRPCClient) AdminRefundInvoice(ctx context.Context, req *purserpb.AdminRefundInvoiceRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	return c.prepaid.AdminRefundInvoice(ctx, req)
+}
+
+func (c *GRPCClient) GetAutomaticTopup(ctx context.Context, req *purserpb.GetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	return c.prepaid.GetAutomaticTopup(ctx, req)
+}
+
+func (c *GRPCClient) SetAutomaticTopup(ctx context.Context, req *purserpb.SetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	return c.prepaid.SetAutomaticTopup(ctx, req)
+}
+
+func (c *GRPCClient) AdminDisableAutomaticTopup(ctx context.Context, req *purserpb.AdminDisableAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	return c.prepaid.AdminDisableAutomaticTopup(ctx, req)
+}
+
+func (c *GRPCClient) PreviewFreeCancellation(ctx context.Context, req *purserpb.ChangeBillingTierRequest) (*purserpb.FreeCancellationQuote, error) {
+	return c.prepaid.PreviewFreeCancellation(ctx, req)
+}
+
+func (c *GRPCClient) ConfirmFreeCancellation(ctx context.Context, req *purserpb.ConfirmFreeCancellationRequest) (*purserpb.ChangeBillingTierResponse, error) {
+	return c.prepaid.ConfirmFreeCancellation(ctx, req)
+}
+
+func (c *GRPCClient) AdminGetInvoiceRefund(ctx context.Context, req *purserpb.AdminGetInvoiceRefundRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	return c.prepaid.AdminGetInvoiceRefund(ctx, req)
+}

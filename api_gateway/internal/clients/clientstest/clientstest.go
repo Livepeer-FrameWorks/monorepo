@@ -553,10 +553,11 @@ type FakePeriscope struct {
 	GetStreamsStatusFn       func(ctx context.Context, tenantID string, streamIDs []string) (*periscopepb.StreamsStatusResponse, error)
 	GetLiveNodesFn           func(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*periscopepb.GetLiveNodesResponse, error)
 
-	GetRebufferingEventsFn func(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetRebufferingEventsResponse, error)
-	GetRoutingEventsFn     func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error)
-	GetStreamEventsFn      func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
-	GetClientMetrics5mFn   func(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetClientMetrics5MResponse, error)
+	GetRebufferingEventsFn     func(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetRebufferingEventsResponse, error)
+	GetRoutingEventsFn         func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error)
+	GetStreamEventsFn          func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
+	GetStreamRecordingEventsFn func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
+	GetClientMetrics5mFn       func(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetClientMetrics5MResponse, error)
 
 	GetStreamAnalyticsSummaryFn func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetStreamAnalyticsSummaryResponse, error)
 	GetStreamHealthMetricsFn    func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error)
@@ -676,6 +677,14 @@ func (f *FakePeriscope) GetStreamEvents(ctx context.Context, tenantID string, st
 		panic("FakePeriscope.GetStreamEvents not stubbed")
 	}
 	return f.GetStreamEventsFn(ctx, tenantID, streamID, timeRange, opts)
+}
+
+func (f *FakePeriscope) GetStreamRecordingEvents(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error) {
+	f.Calls++
+	if f.GetStreamRecordingEventsFn == nil {
+		panic("FakePeriscope.GetStreamRecordingEvents not stubbed")
+	}
+	return f.GetStreamRecordingEventsFn(ctx, tenantID, streamID, timeRange, opts)
 }
 
 func (f *FakePeriscope) GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetClientMetrics5MResponse, error) {
@@ -985,6 +994,19 @@ func (f *FakeQuartermaster) CreateEnrollmentToken(ctx context.Context, req *quar
 // FakePurser is a purser.Interface whose exercised methods are backed by func
 // fields. Calls counts every backed method invocation.
 type FakePurser struct {
+	EnablePrepaidUsageFn         func(context.Context, string) (*purserpb.EnablePrepaidUsageResponse, error)
+	AdjustBalanceFn              func(context.Context, string, int64, string, *string, *string) (*purserpb.BalanceTransaction, error)
+	PreviewAdminAssignTierFn     func(context.Context, *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignmentQuote, error)
+	AdminAssignTierWithReviewFn  func(context.Context, *purserpb.AdminAssignTierReviewedRequest) (*purserpb.AdminAssignTierResponse, error)
+	AdminGetInvoiceRefundFn      func(context.Context, *purserpb.AdminGetInvoiceRefundRequest) (*purserpb.AdminRefundInvoiceResponse, error)
+	AdminRefundInvoiceFn         func(context.Context, *purserpb.AdminRefundInvoiceRequest) (*purserpb.AdminRefundInvoiceResponse, error)
+	GetAutomaticTopupFn          func(context.Context, *purserpb.GetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	SetAutomaticTopupFn          func(context.Context, *purserpb.SetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	AdminDisableAutomaticTopupFn func(context.Context, *purserpb.AdminDisableAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	PreviewFreeCancellationFn    func(context.Context, *purserpb.ChangeBillingTierRequest) (*purserpb.FreeCancellationQuote, error)
+	ConfirmFreeCancellationFn    func(context.Context, *purserpb.ConfirmFreeCancellationRequest) (*purserpb.ChangeBillingTierResponse, error)
+	AdminAssignTierFn            func(context.Context, *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error)
+	AdminRecoverCheckoutFn       func(context.Context, *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error)
 	purser.Interface
 	mu    sync.Mutex
 	Calls int
@@ -1202,4 +1224,104 @@ func (f *FakePurser) GetCryptoTopup(ctx context.Context, topupID string) (*purse
 		panic("FakePurser.GetCryptoTopup not stubbed")
 	}
 	return f.GetCryptoTopupFn(ctx, topupID)
+}
+
+func (f *FakePurser) AdjustBalance(ctx context.Context, tenantID string, amount int64, reason string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.AdjustBalanceFn == nil {
+		panic("FakePurser.AdjustBalance not configured")
+	}
+	return f.AdjustBalanceFn(ctx, tenantID, amount, reason, referenceID, referenceType)
+}
+func (f *FakePurser) AdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.AdminAssignTierFn == nil {
+		panic("FakePurser.AdminAssignTier not configured")
+	}
+	return f.AdminAssignTierFn(ctx, req)
+}
+func (f *FakePurser) AdminRecoverCheckout(ctx context.Context, req *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.AdminRecoverCheckoutFn == nil {
+		panic("FakePurser.AdminRecoverCheckout not configured")
+	}
+	return f.AdminRecoverCheckoutFn(ctx, req)
+}
+
+func (f *FakePurser) EnablePrepaidUsage(ctx context.Context, tenantID string) (*purserpb.EnablePrepaidUsageResponse, error) {
+	f.mu.Lock()
+	f.Calls++
+	f.mu.Unlock()
+	if f.EnablePrepaidUsageFn == nil {
+		panic("FakePurser.EnablePrepaidUsage not configured")
+	}
+	return f.EnablePrepaidUsageFn(ctx, tenantID)
+}
+
+func (f *FakePurser) PreviewAdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignmentQuote, error) {
+	if f.PreviewAdminAssignTierFn == nil {
+		panic("FakePurser.PreviewAdminAssignTier not configured")
+	}
+	return f.PreviewAdminAssignTierFn(ctx, req)
+}
+func (f *FakePurser) AdminAssignTierWithReview(ctx context.Context, req *purserpb.AdminAssignTierReviewedRequest) (*purserpb.AdminAssignTierResponse, error) {
+	if f.AdminAssignTierWithReviewFn == nil {
+		panic("FakePurser.AdminAssignTierWithReview not configured")
+	}
+	return f.AdminAssignTierWithReviewFn(ctx, req)
+}
+
+func (f *FakePurser) AdminRefundInvoice(ctx context.Context, req *purserpb.AdminRefundInvoiceRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	if f.AdminRefundInvoiceFn == nil {
+		panic("FakePurser.AdminRefundInvoice not configured")
+	}
+	return f.AdminRefundInvoiceFn(ctx, req)
+}
+
+func (f *FakePurser) GetAutomaticTopup(ctx context.Context, req *purserpb.GetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	if f.GetAutomaticTopupFn == nil {
+		panic("FakePurser.GetAutomaticTopup not configured")
+	}
+	return f.GetAutomaticTopupFn(ctx, req)
+}
+
+func (f *FakePurser) SetAutomaticTopup(ctx context.Context, req *purserpb.SetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	if f.SetAutomaticTopupFn == nil {
+		panic("FakePurser.SetAutomaticTopup not configured")
+	}
+	return f.SetAutomaticTopupFn(ctx, req)
+}
+
+func (f *FakePurser) AdminDisableAutomaticTopup(ctx context.Context, req *purserpb.AdminDisableAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	if f.AdminDisableAutomaticTopupFn == nil {
+		panic("FakePurser.AdminDisableAutomaticTopup not configured")
+	}
+	return f.AdminDisableAutomaticTopupFn(ctx, req)
+}
+
+func (f *FakePurser) PreviewFreeCancellation(ctx context.Context, req *purserpb.ChangeBillingTierRequest) (*purserpb.FreeCancellationQuote, error) {
+	if f.PreviewFreeCancellationFn == nil {
+		panic("FakePurser.PreviewFreeCancellation not configured")
+	}
+	return f.PreviewFreeCancellationFn(ctx, req)
+}
+
+func (f *FakePurser) ConfirmFreeCancellation(ctx context.Context, req *purserpb.ConfirmFreeCancellationRequest) (*purserpb.ChangeBillingTierResponse, error) {
+	if f.ConfirmFreeCancellationFn == nil {
+		panic("FakePurser.ConfirmFreeCancellation not configured")
+	}
+	return f.ConfirmFreeCancellationFn(ctx, req)
+}
+
+func (f *FakePurser) AdminGetInvoiceRefund(ctx context.Context, req *purserpb.AdminGetInvoiceRefundRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	if f.AdminGetInvoiceRefundFn == nil {
+		panic("FakePurser.AdminGetInvoiceRefund not configured")
+	}
+	return f.AdminGetInvoiceRefundFn(ctx, req)
 }

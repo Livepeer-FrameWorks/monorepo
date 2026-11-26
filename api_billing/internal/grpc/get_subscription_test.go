@@ -44,7 +44,7 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 			"stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
 			"pending_tier_id", "pending_effective_at", "pending_reason",
-			"created_at", "updated_at", "presentment_currency",
+			"created_at", "updated_at", "presentment_currency", "automatic_prepaid_usage",
 		}).AddRow(
 			subID, tenantID, tierID, "active", "demo@example.com",
 			testTime(), nil, nil, nil,
@@ -54,7 +54,7 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 			nil, nil, nil, nil, nil,
 			nil,
 			nil, nil, nil,
-			testTime(), testTime(), "GBP",
+			testTime(), testTime(), "GBP", true,
 		))
 
 	// Pricing overrides: one row.
@@ -116,7 +116,7 @@ func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
 			"stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
 			"pending_tier_id", "pending_effective_at", "pending_reason",
-			"created_at", "updated_at", "presentment_currency",
+			"created_at", "updated_at", "presentment_currency", "automatic_prepaid_usage",
 		}).AddRow(
 			subID, tenantID, tierID, "active", nil,
 			testTime(), nil, nil, nil,
@@ -126,7 +126,7 @@ func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
 			nil, nil, nil, nil, nil,
 			nil,
 			nil, nil, nil,
-			testTime(), testTime(), "USD",
+			testTime(), testTime(), "USD", true,
 		))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, model, currency`)).
 		WithArgs(subID).

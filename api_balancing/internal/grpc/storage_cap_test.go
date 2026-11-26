@@ -1,7 +1,10 @@
 package grpc
 
 import (
+	"math"
 	"testing"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,5 +73,25 @@ func TestStorageCapDecisionWouldExceedExactlyAtCapRejects(t *testing.T) {
 	// 5 GB used, adding 5GB+1B → reject
 	if err := storageCapDecision(5*oneGB, 5*oneGB+1, 10*oneGB); err == nil {
 		t.Fatal("sum > cap by 1 byte must reject")
+	}
+}
+
+func TestStorageCapCarriesPublicQuotaReason(t *testing.T) {
+	err := storageCapDecision(11*oneGB, 0, 10*oneGB)
+	st := status.Convert(err)
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == "storage.frameworks.network" && info.GetReason() == "STORAGE_LIMIT_REACHED" {
+			if info.GetMetadata()["used_bytes"] != "11811160064" || info.GetMetadata()["limit_bytes"] != "10737418240" {
+				t.Fatalf("quota metadata=%v", info.GetMetadata())
+			}
+			return
+		}
+	}
+	t.Fatalf("storage refusal has no typed STORAGE_LIMIT_REACHED reason: %v", err)
+}
+
+func TestStorageCapRejectsOverflowingDeclaredSize(t *testing.T) {
+	if err := storageCapDecision(oneGB, math.MaxInt64, 10*oneGB); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("overflowing declared upload size admitted: %v", err)
 	}
 }

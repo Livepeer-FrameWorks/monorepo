@@ -56,6 +56,87 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 5. Purser.ensureTierClusterAccess provisions clusters (same as above)
 ```
 
+### Funding a Free account
+
+An active Free account with automatic funded usage enabled and settled positive EUR credit uses the catalogue's default prepaid tier.
+Purser closes the Free phase before activating PAYG. Its zero prices and Free caps do not carry over;
+the PAYG pricing rules and entitlements apply to new usage, with explicit subscription overrides
+preserved. Usage received in the Free phase retains its original pricing and allowances.
+
+Settled card, crypto, x402 and operator-credit callbacks converge the arrangement. A keyset-paged
+one-minute sweep recovers lost callbacks for eligible funded Free accounts. Closures, outstanding grants,
+paid plans, pending purchases, and provider-cancellation fences retain their existing arrangement.
+The subscription transaction queues durable media-authority refresh, and the activation also
+invalidates the tenant cache and reconciles cluster/DNS access.
+
+`automatic_prepaid_usage` records intent independently of the wallet. An explicit choice of Free
+through promotion (including choosing the current Free tier again), downgrade, or operator assignment disables automatic activation and retains the
+balance as credit. Funding that account does not undo the choice. `enablePrepaidUsage` (MCP
+`enable_prepaid_usage`) records a new opt-in, activates PAYG when funded, or waits for settled funds.
+It refuses to replace an active monthly plan or an operator pricing arrangement. Operator assignment
+to a prepaid tier re-enables automatic funded usage.
+
+Automatic funded usage defaults to enabled for new and existing subscriptions. The migration
+activates eligible existing funded Free accounts from the rollout boundary; it never reprices prior
+Free usage. Historical Free intent was not stored. Explicit Free choices recorded by the current
+writers disable activation, even on later deposits. Update Foghorn owner cells first, then Commodore, then drain and stop all
+old Purser processes before starting the updated Purser processes. Reconciliation starts automatically
+with Purser. Older writers cannot record a deliberate Free opt-out, so this policy requires a coordinated
+writer cutover rather than mixed-version Purser processes. Billing operations are briefly unavailable
+during that cutover; existing media sessions continue.
+
+A canonical funded PAYG account enters payment grace when its ledger balance reaches zero.
+The wallet debit snapshots a 72-hour deadline and at most EUR 10 of additional credit, further
+bounded by its largest prior settled top-up. Trial grants and never-funded wallets do not earn
+borrowed credit. Both the deadline and available balance after reservations govern admission;
+usage keeps its ordinary PAYG prices. Signed authority during grace renews within one minute,
+and neither signed authority nor last-good responses can outlive the grace deadline. A positive top-up restores funded admission but does not renew the episode.
+Grace rearms only after at least 30 days continuously solvent. Reconnects and tier changes cannot
+reset the episode. Reviewed operator entitlements can set `billing_prepaid_grace_seconds`
+(0–604800), `billing_prepaid_grace_credit_cents` (0–1000) and
+`billing_prepaid_grace_rearm_seconds` (2592000–31536000). Zero duration or credit disables new
+grace episodes; changes apply to the next episode, never extend an already-running deadline.
+
+When grace ends, a verified active owner/admin can fall back to Free. Closing the PAYG statement
+preserves debt and finalizes received paid usage; prior unpaid usage is never written off by this
+transition. If fallback is temporarily unavailable, existing broadcasts continue while new paid
+work is refused; the existing below-minus-EUR-10 settled-balance suspension still applies. No
+additional deadline-triggered shutdown occurs. Physical media and active sessions do not block the entire account from returning to
+Free. New operations use the normal Free storage, concurrency, retention and delivery allowance
+limits. Ongoing monthly contracts, custom prices, grants, closure, provider obligations and pending
+purchases require their own lifecycle rather than automatic replacement. The funding preference
+survives automatic fallback, so funding that clears the debt and leaves a positive balance
+reactivates PAYG; an explicit Free opt-out continues to retain the wallet.
+
+A transition from a paid tier to Free records a separate 30-day recovery deadline for legacy paid media. A brief positive
+balance cannot renew that window. Existing asset expiry still applies. The recovery deadline is
+visible in Billing and the balance API; it must not be confused with a retention override or a
+promise to keep an already-expiring recording longer. No immediate deletion or retention rewrite
+occurs at the transition. Recovery cleanup requires the owning cell's guarded retention workflow,
+including delivered initial and reminder notices with at least seven days to act. A fresh expiry
+receipt commits under the same subscription/wallet locks as funding; funding before that commit
+cancels expiry. The receipt is immutable and keeps owning-cell cleanup idempotent. Funding after
+expiry cannot revive assets already expired. Owning cells use the normal deletion outbox and DVR
+cascade, leave active/nonterminal media alone, and exclude foreign tenants, warm federated pointers
+and media created after the committed cutoff. Media must also be at least 30 days past its end
+(or creation when no end is recorded), so a reused courtesy window cannot immediately expire a
+new recording. Longer or uncapped reviewed retention prevents this
+automatic 30-day expiry. Normal retention scans retain their own time budget.
+
+Earlier finalized Free-phase usage consumes the same period's Free allowance. PAYG usage retains
+its own prices and neither replenishes nor consumes that Free allowance. No Free allowance is
+transferred into PAYG. The internal media compatibility diagnostic remains available independently
+of the fallback decision; it does not gate the account's return to Free.
+
+### Invoice collection intent reconciliation
+
+Confirmed invoice receipts establish capture. The existing provider-settlement worker also
+reconciles stale collection-intent metadata every ten minutes, using the recorded intent/payment
+link and exact tenant, invoice, provider, currency and original minor amount. The operation updates
+intent status and its capture reference while preserving the invoice and wallet. Terminal intent
+states cannot be reopened by a delayed API response. Missing or contradictory receipt evidence
+remains visible for operator review.
+
 ### Prepaid → Postpaid Promotion
 
 ```
@@ -63,7 +144,7 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 2. Purser starts a transaction and locks the tenant subscription `FOR UPDATE`.
 3. An explicit active postpaid-eligible tier is honored; otherwise Purser
    resolves `is_default_postpaid = true`.
-4. Free needs verified email but no postal profile/provider. Paid postpaid tiers
+4. Free needs verified email but no postal profile/provider. Paid usage remains payable after the switch. Paid postpaid tiers
    require complete billing identity and confirmed Stripe/Mollie collection.
 5. In the same transaction Purser closes the prepaid phase (see Prepaid
    statements below) and commits prepaid → postpaid while retaining prepaid
@@ -566,3 +647,77 @@ delivered service must be retained; ambiguous delivery requires the confirmed
 `--retain-delivered` procedure, not a guessed refund. A payment with active
 recovery appears once under that work item; resolved receipts leave the list.
 Inventory and preview do not enqueue recovery or move money.
+
+## Reviewed plan changes and original-payment returns
+
+The operator CLI's `billing set-tier` previews by default. `PreviewAdminAssignTier`
+prices the existing assignment transaction at a fixed boundary and rolls it back;
+`AdminAssignTierWithReview` recomputes its financial effects and source fingerprint
+under the subscription lock before committing. Confirmation requires the returned
+`--review` and `--quoted-at`, with the same tenant, tier, model, reason and actor.
+Quotes expire after five minutes. Changed prices, entitlements, wallet or invoice
+state require another preview. The panel displays the closing invoice due, wallet
+movement, carried charges, unused unpaid fee reduction and retained paid fee.
+Cash refund is zero for this operation. Native provider subscriptions and operator
+grants retain their dedicated recovery workflows rather than being silently replaced.
+
+Preview transactions use transaction-local `frameworks.billing_preview=true`.
+`next_billing_document_number` gives them temporary unique identifiers, so rolled
+back invoices, statements and credit notes do not consume issued-document numbers.
+The flag is never set for confirmation, and no provider calls or after-commit
+side effects run on a preview.
+
+Customer cancellation to Free uses `PreviewFreeCancellation` and
+`ConfirmFreeCancellation`. The scheduled downgrade transaction is rolled back for
+review and bound to its source version on confirmation. It creates no charge,
+wallet credit or cash refund now; the paid plan continues until the reviewed
+period end. Existing invoices and later usage remain payable at that plan's
+rates. Future usage is explicitly unpriced. A stale review cannot schedule a
+cancellation with changed terms.
+
+`AdminRefundInvoice` previews and queues a full original-payment refund using a
+stable request UUID and exact source fingerprint. `AdminGetInvoiceRefund` reads
+the receipt without replaying a mutation. The automatic path requires one
+confirmed card payment covering the entire original invoice, complete original
+tax/FX evidence, and no prior credit note, reversal or subsequent operator wallet
+credit. Partial, split, previously adjusted and tax-unknown documents require
+manual reconciliation. A generic wallet adjustment is not a payment refund.
+
+Approval persists `operator_invoice_refunds`, holds invoice collection and queues
+provider work. Stripe and Mollie verify the original payment, payer, amount and
+currency before returning money under the request's stable idempotency key.
+Pending or failed bank returns keep collection held. Confirmed bank settlement
+uses the existing reversal and operator-credit clawback ledger, issues one credit
+note with the original tax/FX and marks the invoice `refunded`. Issued invoice
+amounts and its first-paid timestamp remain intact. No wallet credit is created
+and the subscription remains active until separately changed. Prior goodwill
+must be reconciled before approving a cash return for the same reimbursement.
+
+## Optional automatic prepaid top-ups
+
+Automatic top-ups are opt-in and currently use a specifically consented saved
+Stripe card. Merely possessing a saved payment method or settling a manual top-up
+never enables them. They require prior settled Stripe funding and an eligible
+prepaid arrangement. Paid monthly subscriptions and explicit Free choices are
+preserved. The balance page records `prepaid_auto_topup_v1` consent with an EUR
+balance threshold, a top-up credit amount in the account's presentment currency,
+and a monthly cash limit in that same currency.
+
+Tax is added to the net credit amount. Both reserved and settled gross payments
+count toward the UTC calendar month's cash limit. Changing settings, disabling
+and re-enabling, small deposits or an ambiguous provider response cannot reset
+that budget. Changing presentment currency requires the current budget month to
+finish if money was already reserved or spent in another currency. Each attempt
+retains its consent, payer, card, tax/FX quote and immutable reserved money before
+any provider call. Only one unresolved attempt may exist for a tenant.
+
+A durable inbox worker dispatches the attempt after rechecking consent and
+billing details. Disabling an undispatched attempt cancels it; an already
+in-progress payment is still reconciled. The same provider key recovers lost
+responses, and an unknown creation beyond the bounded idempotency window is held
+for operator review rather than creating another payment. Authentication or a
+definitive failure pauses automation and directs the customer to fund manually.
+Only verified capture credits the net amount through the ordinary prepaid
+funding/tax path, so normal funded-Free activation and debt repayment apply.
+Operators can inspect or disable automatic top-ups; they cannot opt a customer
+in through the operator controls.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: unsafe, creates a tenant and debits its prepaid balance through the operator CLI
-# A prepaid tenant spends its balance while it streams. At EUR 0 the running
+# A prepaid tenant without a verified billing identity spends its balance while it streams. At EUR 0 the running
 # publisher and its viewer keep going, a new viewer is refused and a stopped
 # publisher cannot publish again. Below -EUR 10 the tenant is suspended and
 # its running sessions stop.
@@ -73,6 +73,10 @@ cli_json admin billing set-tier --tenant-id "$tenant" --tier payg --billing-mode
 pass 'operator assigned prepaid tier'
 cli_json admin billing credit --tenant-id "$tenant" --amount 10.00 --reason 'stack spent prepaid test credit' \
   --output json >/dev/null || { fail 'operator credited EUR 10'; finish; }
+# Verified eligible accounts return to Free at zero (scenario 87). This
+# fixture instead exercises the unchanged prepaid-only enforcement path.
+pg commodore "UPDATE commodore.users SET verified=false WHERE tenant_id='$tenant'" >/dev/null
+check 'fixture has no verified identity eligible for Free' [ "$(pg commodore "SELECT count(*) FROM commodore.users WHERE tenant_id='$tenant' AND verified AND is_active AND role IN ('owner','admin')")" = 0 ]
 balance() { pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'"; }
 check 'prepaid balance is EUR 10' [ "$(balance)" = 1000 ]
 

@@ -111,6 +111,19 @@ mutation ChangePassword(
   }
 }
 
+mutation ConfirmFreeCancellation(
+  $tierId: ID!
+  $quotedAt: Time!
+  $fingerprint: String!
+) {
+  confirmFreeCancellation(tierId: $tierId, quotedAt: $quotedAt, fingerprint: $fingerprint) {
+    __typename
+    ...ChangeBillingTierPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation CreateCardTopup(
   $input: CreateCardTopupInput!
 ) {
@@ -323,6 +336,12 @@ mutation DisconnectIngest(
   }
 }
 
+mutation EnablePrepaidUsage {
+  enablePrepaidUsage {
+    ...EnablePrepaidUsagePayloadDefaultFields
+  }
+}
+
 mutation EnableWebhookEndpoint(
   $id: ID!
 ) {
@@ -371,6 +390,14 @@ mutation OpenMistAdminSession(
     ...ValidationErrorDefaultFields
     ...NotFoundErrorDefaultFields
     ...AuthErrorDefaultFields
+  }
+}
+
+mutation PreviewFreeCancellation(
+  $tierId: ID!
+) {
+  previewFreeCancellation(tierId: $tierId) {
+    ...FreeCancellationReviewDefaultFields
   }
 }
 
@@ -528,6 +555,14 @@ mutation SendMessage(
     ...ValidationErrorDefaultFields
     ...NotFoundErrorDefaultFields
     ...AuthErrorDefaultFields
+  }
+}
+
+mutation SetAutomaticTopup(
+  $input: SetAutomaticTopupInput!
+) {
+  setAutomaticTopup(input: $input) {
+    ...AutomaticTopupSettingsDefaultFields
   }
 }
 

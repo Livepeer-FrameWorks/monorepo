@@ -5,6 +5,16 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
     tenant(id: $id) {
       tenantId
       billing {
+        subscription {
+          automaticPrepaidUsage
+          id
+          tierId
+          billingModel
+          entitlementOverrides {
+            key
+            value
+          }
+        }
         snapshot {
           billingModel
           status
@@ -62,6 +72,12 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
         prepaidBalance {
           balanceCents
           currency
+          paymentGrace {
+            active
+            endsAt
+            remainingCreditCents
+            mediaRecoveryUntil
+          }
         }
         balanceTransactions(page: { first: 25 }, timeRange: $timeRange) {
           nodes {

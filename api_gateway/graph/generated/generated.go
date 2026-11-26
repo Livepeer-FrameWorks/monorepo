@@ -98,6 +98,7 @@ type ResolverRoot interface {
 	OrchestratorPerformancePoint() OrchestratorPerformancePointResolver
 	OrchestratorVantage() OrchestratorVantageResolver
 	Payment() PaymentResolver
+	PaymentGrace() PaymentGraceResolver
 	Platform() PlatformResolver
 	PlatformOverview() PlatformOverviewResolver
 	PlaybackInstance() PlaybackInstanceResolver
@@ -271,6 +272,7 @@ type ComplexityRoot struct {
 		ArtifactStatesConnection   func(childComplexity int, page *model.ConnectionInput, streamID *string, contentType *string, stage *string) int
 		BufferEventsConnection     func(childComplexity int, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) int
 		ConnectionEventsConnection func(childComplexity int, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) int
+		RecordingEventsConnection  func(childComplexity int, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) int
 		StorageEventsConnection    func(childComplexity int, page *model.ConnectionInput, assetType *string, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) int
 		StreamEventsConnection     func(childComplexity int, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) int
 		TrackListConnection        func(childComplexity int, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) int
@@ -420,6 +422,19 @@ type ComplexityRoot struct {
 	AuthSessionEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	AutomaticTopupSettings struct {
+		Available                   func(childComplexity int) int
+		ConsentVersion              func(childComplexity int) int
+		Currency                    func(childComplexity int) int
+		Enabled                     func(childComplexity int) int
+		MonthlyGrossLimitMinor      func(childComplexity int) int
+		MonthlyReservedOrSpentMinor func(childComplexity int) int
+		NetAmountMinor              func(childComplexity int) int
+		PausedReason                func(childComplexity int) int
+		ThresholdEurCents           func(childComplexity int) int
+		UnavailableReason           func(childComplexity int) int
 	}
 
 	AvailableCluster struct {
@@ -1238,6 +1253,13 @@ type ComplexityRoot struct {
 		Source         func(childComplexity int) int
 	}
 
+	EnablePrepaidUsagePayload struct {
+		Activated     func(childComplexity int) int
+		AwaitingFunds func(childComplexity int) int
+		BillingModel  func(childComplexity int) int
+		TierName      func(childComplexity int) int
+	}
+
 	EntitlementEntry struct {
 		Key   func(childComplexity int) int
 		Value func(childComplexity int) int
@@ -1303,6 +1325,18 @@ type ComplexityRoot struct {
 		OverallAvgLatencyMs func(childComplexity int) int
 		OverallFailureRate  func(childComplexity int) int
 		TotalEvents         func(childComplexity int) int
+	}
+
+	FreeCancellationReview struct {
+		Currency             func(childComplexity int) int
+		DueNowMinor          func(childComplexity int) int
+		EffectiveAt          func(childComplexity int) int
+		ExpiresAt            func(childComplexity int) int
+		Fingerprint          func(childComplexity int) int
+		FutureUsageMessage   func(childComplexity int) int
+		QuotedAt             func(childComplexity int) int
+		RefundNowMinor       func(childComplexity int) int
+		WalletCreditNowMinor func(childComplexity int) int
 	}
 
 	FreeFallback struct {
@@ -1977,100 +2011,111 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		AbortVodUpload                 func(childComplexity int, uploadID string) int
-		AcceptClusterInvite            func(childComplexity int, inviteToken string) int
-		AcknowledgeIncident            func(childComplexity int, id string) int
-		AddIncidentNote                func(childComplexity int, id string, body string) int
-		ApplyClusterMediaConsentChange func(childComplexity int, input model.ApplyMediaCapacityConsentInput) int
-		ApplyMediaPlacementChange      func(childComplexity int, input model.ApplyMediaPlacementChangeInput) int
-		ApproveClusterSubscription     func(childComplexity int, subscriptionID string) int
-		AssignIncident                 func(childComplexity int, id string, assigneeUserID *string) int
-		BootstrapEdge                  func(childComplexity int, input model.BootstrapEdgeInput) int
-		ChangeBillingTier              func(childComplexity int, tierID string) int
-		ChangePassword                 func(childComplexity int, currentPassword string, newPassword string) int
-		CompleteVodUpload              func(childComplexity int, input model.CompleteVodUploadInput) int
-		CreateBootstrapToken           func(childComplexity int, input model.CreateBootstrapTokenInput) int
-		CreateCardTopup                func(childComplexity int, input model.CreateCardTopupInput) int
-		CreateClip                     func(childComplexity int, input model.CreateClipInput) int
-		CreateClusterInvite            func(childComplexity int, input model.CreateClusterInviteInput) int
-		CreateConversation             func(childComplexity int, input model.CreateConversationInput) int
-		CreateCryptoTopup              func(childComplexity int, input model.CreateCryptoTopupInput) int
-		CreateDeveloperToken           func(childComplexity int, input model.CreateDeveloperTokenInput) int
-		CreateEdgeCluster              func(childComplexity int, input model.CreateEdgeClusterInput) int
-		CreateEnrollmentToken          func(childComplexity int, clusterID string, name *string, ttl *string) int
-		CreateMollieFirstPayment       func(childComplexity int, tierID string, method string, redirectURL string) int
-		CreateMollieSubscription       func(childComplexity int, tierID string, mandateID string, description *string) int
-		CreatePayment                  func(childComplexity int, input model.CreatePaymentInput) int
-		CreatePushTarget               func(childComplexity int, streamID string, input model.CreatePushTargetInput) int
-		CreateSigningKey               func(childComplexity int, input model.CreateSigningKeyInput) int
-		CreateStream                   func(childComplexity int, input model.CreateStreamInput) int
-		CreateStreamKey                func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
-		CreateStripeBillingPortal      func(childComplexity int, returnURL string) int
-		CreateStripeCheckout           func(childComplexity int, tierID string, billingPeriod string, successURL string, cancelURL string) int
-		CreateVodOriginalDownload      func(childComplexity int, id string) int
-		CreateVodUpload                func(childComplexity int, input model.CreateVodUploadInput) int
-		CreateWebhookEndpoint          func(childComplexity int, input model.CreateWebhookEndpointInput) int
-		CryptoTopupStatus              func(childComplexity int, topupID string) int
-		DeleteClip                     func(childComplexity int, id string) int
-		DeleteDvr                      func(childComplexity int, dvrHash string) int
-		DeletePushTarget               func(childComplexity int, id string) int
-		DeleteSkipperConversation      func(childComplexity int, id string) int
-		DeleteStream                   func(childComplexity int, id string) int
-		DeleteStreamKey                func(childComplexity int, streamID string, keyID string) int
-		DeleteVodAsset                 func(childComplexity int, id string) int
-		DeleteVodOriginal              func(childComplexity int, id string) int
-		DeleteWebhookEndpoint          func(childComplexity int, id string) int
-		DisableWebhookEndpoint         func(childComplexity int, id string) int
-		DisconnectIngest               func(childComplexity int, streamID string) int
-		EnableWebhookEndpoint          func(childComplexity int, id string) int
-		ImportVodAsset                 func(childComplexity int, input model.ImportVodAssetInput) int
-		LinkEmail                      func(childComplexity int, input model.LinkEmailInput) int
-		LinkWallet                     func(childComplexity int, input model.WalletLoginInput) int
-		MarkSkipperReportsRead         func(childComplexity int, ids []string) int
-		OpenMistAdminSession           func(childComplexity int, input model.OpenMistAdminSessionInput) int
-		PromoteToPaid                  func(childComplexity int, tierID string) int
-		RefreshStreamKey               func(childComplexity int, id string, endActiveSession *bool) int
-		RejectClusterSubscription      func(childComplexity int, subscriptionID string, reason *string) int
-		RenameAuthSession              func(childComplexity int, id string, label string) int
-		ReplayWebhookDeliveries        func(childComplexity int, endpointID string, createdAfter time.Time, createdBefore time.Time) int
-		ReplayWebhookDelivery          func(childComplexity int, id string) int
-		RequestClusterSubscription     func(childComplexity int, clusterID string, inviteToken *string) int
-		ResetMediaRetentionOverride    func(childComplexity int, input model.ResetMediaRetentionOverrideInput) int
-		ResolveIncident                func(childComplexity int, id string) int
-		RevokeAuthSession              func(childComplexity int, id string) int
-		RevokeBootstrapToken           func(childComplexity int, id string) int
-		RevokeClusterInvite            func(childComplexity int, inviteID string) int
-		RevokeDeveloperToken           func(childComplexity int, id string) int
-		RevokeOtherAuthSessions        func(childComplexity int) int
-		RevokeSigningKey               func(childComplexity int, id string) int
-		RotateWebhookEndpointSecret    func(childComplexity int, id string, revokePrevious *bool) int
-		SendMessage                    func(childComplexity int, input model.SendMessageInput) int
-		SetMediaRetentionPolicy        func(childComplexity int, input model.SetMediaRetentionPolicyInput) int
-		SetNodeCapacity                func(childComplexity int, input model.SetNodeCapacityInput) int
-		SetNodeMode                    func(childComplexity int, input model.SetNodeModeInput) int
-		SetPlaybackPolicy              func(childComplexity int, input model.SetPlaybackPolicyInput) int
-		SetPreferredCluster            func(childComplexity int, clusterID string) int
-		SetStreamRetentionOverrides    func(childComplexity int, input model.SetStreamRetentionOverridesInput) int
-		SetTranscodeLadderPolicy       func(childComplexity int, input model.SetTranscodeLadderPolicyInput) int
-		SetVodOriginalPolicy           func(childComplexity int, keepVodOriginals *bool) int
-		StartDvr                       func(childComplexity int, streamID string) int
-		StopDvr                        func(childComplexity int, dvrHash string) int
-		SubmitX402Payment              func(childComplexity int, payment string, resource *string) int
-		SubscribeToCluster             func(childComplexity int, clusterID string) int
-		TestPlaybackAccess             func(childComplexity int, input model.TestPlaybackAccessInput) int
-		TestWebhookEndpoint            func(childComplexity int, id string) int
-		UnlinkWallet                   func(childComplexity int, walletID string) int
-		UnsubscribeFromCluster         func(childComplexity int, clusterID string) int
-		UpdateBillingDetails           func(childComplexity int, input model.UpdateBillingDetailsInput) int
-		UpdateClusterMarketplace       func(childComplexity int, clusterID string, input model.UpdateClusterMarketplaceInput) int
-		UpdateMediaRetention           func(childComplexity int, input model.UpdateMediaRetentionInput) int
-		UpdatePushTarget               func(childComplexity int, id string, input model.UpdatePushTargetInput) int
-		UpdateSkipperConversation      func(childComplexity int, id string, title string) int
-		UpdateStream                   func(childComplexity int, id string, input model.UpdateStreamInput) int
-		UpdateSubscriptionCustomTerms  func(childComplexity int, tenantID string, input model.UpdateSubscriptionCustomTermsInput) int
-		UpdateTenant                   func(childComplexity int, input model.UpdateTenantInput) int
-		UpdateWebhookEndpoint          func(childComplexity int, id string, input model.UpdateWebhookEndpointInput) int
-		WalletLogin                    func(childComplexity int, input model.WalletLoginInput) int
+		AbortVodUpload                      func(childComplexity int, uploadID string) int
+		AcceptClusterInvite                 func(childComplexity int, inviteToken string) int
+		AcknowledgeIncident                 func(childComplexity int, id string) int
+		AddIncidentNote                     func(childComplexity int, id string, body string) int
+		ApplyClusterMediaConsentChange      func(childComplexity int, input model.ApplyMediaCapacityConsentInput) int
+		ApplyMediaPlacementChange           func(childComplexity int, input model.ApplyMediaPlacementChangeInput) int
+		ApproveClusterSubscription          func(childComplexity int, subscriptionID string) int
+		AssignIncident                      func(childComplexity int, id string, assigneeUserID *string) int
+		BootstrapEdge                       func(childComplexity int, input model.BootstrapEdgeInput) int
+		ChangeBillingTier                   func(childComplexity int, tierID string) int
+		ChangePassword                      func(childComplexity int, currentPassword string, newPassword string) int
+		CompleteVodUpload                   func(childComplexity int, input model.CompleteVodUploadInput) int
+		ConfirmFreeCancellation             func(childComplexity int, tierID string, quotedAt time.Time, fingerprint string) int
+		CreateBootstrapToken                func(childComplexity int, input model.CreateBootstrapTokenInput) int
+		CreateCardTopup                     func(childComplexity int, input model.CreateCardTopupInput) int
+		CreateClip                          func(childComplexity int, input model.CreateClipInput) int
+		CreateClusterInvite                 func(childComplexity int, input model.CreateClusterInviteInput) int
+		CreateConversation                  func(childComplexity int, input model.CreateConversationInput) int
+		CreateCryptoTopup                   func(childComplexity int, input model.CreateCryptoTopupInput) int
+		CreateDeveloperToken                func(childComplexity int, input model.CreateDeveloperTokenInput) int
+		CreateEdgeCluster                   func(childComplexity int, input model.CreateEdgeClusterInput) int
+		CreateEnrollmentToken               func(childComplexity int, clusterID string, name *string, ttl *string) int
+		CreateMollieFirstPayment            func(childComplexity int, tierID string, method string, redirectURL string) int
+		CreateMollieSubscription            func(childComplexity int, tierID string, mandateID string, description *string) int
+		CreatePayment                       func(childComplexity int, input model.CreatePaymentInput) int
+		CreatePushTarget                    func(childComplexity int, streamID string, input model.CreatePushTargetInput) int
+		CreateSigningKey                    func(childComplexity int, input model.CreateSigningKeyInput) int
+		CreateStream                        func(childComplexity int, input model.CreateStreamInput) int
+		CreateStreamKey                     func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
+		CreateStripeBillingPortal           func(childComplexity int, returnURL string) int
+		CreateStripeCheckout                func(childComplexity int, tierID string, billingPeriod string, successURL string, cancelURL string) int
+		CreateVodOriginalDownload           func(childComplexity int, id string) int
+		CreateVodUpload                     func(childComplexity int, input model.CreateVodUploadInput) int
+		CreateWebhookEndpoint               func(childComplexity int, input model.CreateWebhookEndpointInput) int
+		CryptoTopupStatus                   func(childComplexity int, topupID string) int
+		DeleteClip                          func(childComplexity int, id string) int
+		DeleteDvr                           func(childComplexity int, dvrHash string) int
+		DeletePushTarget                    func(childComplexity int, id string) int
+		DeleteSkipperConversation           func(childComplexity int, id string) int
+		DeleteStream                        func(childComplexity int, id string) int
+		DeleteStreamKey                     func(childComplexity int, streamID string, keyID string) int
+		DeleteVodAsset                      func(childComplexity int, id string) int
+		DeleteVodOriginal                   func(childComplexity int, id string) int
+		DeleteWebhookEndpoint               func(childComplexity int, id string) int
+		DisableWebhookEndpoint              func(childComplexity int, id string) int
+		DisconnectIngest                    func(childComplexity int, streamID string) int
+		EnablePrepaidUsage                  func(childComplexity int) int
+		EnableWebhookEndpoint               func(childComplexity int, id string) int
+		ImportVodAsset                      func(childComplexity int, input model.ImportVodAssetInput) int
+		LinkEmail                           func(childComplexity int, input model.LinkEmailInput) int
+		LinkWallet                          func(childComplexity int, input model.WalletLoginInput) int
+		MarkSkipperReportsRead              func(childComplexity int, ids []string) int
+		OpenMistAdminSession                func(childComplexity int, input model.OpenMistAdminSessionInput) int
+		PlatformAdjustBalance               func(childComplexity int, tenantID string, amountCents int, reason string, referenceID string) int
+		PlatformAssignBillingTier           func(childComplexity int, tenantID string, tierName string, reason string) int
+		PlatformAssignBillingTierWithReview func(childComplexity int, tenantID string, tierName string, reason string, quotedAt time.Time, fingerprint string) int
+		PlatformDisableAutomaticTopup       func(childComplexity int, tenantID string, reason string) int
+		PlatformPreviewBillingTier          func(childComplexity int, tenantID string, tierName string, reason string) int
+		PlatformRecoverCheckout             func(childComplexity int, tenantID string, reservationID string, reason string, confirmed bool) int
+		PlatformRefundInvoice               func(childComplexity int, tenantID string, invoiceID string, requestID string, reason string, confirmed bool, fingerprint string) int
+		PreviewFreeCancellation             func(childComplexity int, tierID string) int
+		PromoteToPaid                       func(childComplexity int, tierID string) int
+		RefreshStreamKey                    func(childComplexity int, id string, endActiveSession *bool) int
+		RejectClusterSubscription           func(childComplexity int, subscriptionID string, reason *string) int
+		RenameAuthSession                   func(childComplexity int, id string, label string) int
+		ReplayWebhookDeliveries             func(childComplexity int, endpointID string, createdAfter time.Time, createdBefore time.Time) int
+		ReplayWebhookDelivery               func(childComplexity int, id string) int
+		RequestClusterSubscription          func(childComplexity int, clusterID string, inviteToken *string) int
+		ResetMediaRetentionOverride         func(childComplexity int, input model.ResetMediaRetentionOverrideInput) int
+		ResolveIncident                     func(childComplexity int, id string) int
+		RevokeAuthSession                   func(childComplexity int, id string) int
+		RevokeBootstrapToken                func(childComplexity int, id string) int
+		RevokeClusterInvite                 func(childComplexity int, inviteID string) int
+		RevokeDeveloperToken                func(childComplexity int, id string) int
+		RevokeOtherAuthSessions             func(childComplexity int) int
+		RevokeSigningKey                    func(childComplexity int, id string) int
+		RotateWebhookEndpointSecret         func(childComplexity int, id string, revokePrevious *bool) int
+		SendMessage                         func(childComplexity int, input model.SendMessageInput) int
+		SetAutomaticTopup                   func(childComplexity int, input model.SetAutomaticTopupInput) int
+		SetMediaRetentionPolicy             func(childComplexity int, input model.SetMediaRetentionPolicyInput) int
+		SetNodeCapacity                     func(childComplexity int, input model.SetNodeCapacityInput) int
+		SetNodeMode                         func(childComplexity int, input model.SetNodeModeInput) int
+		SetPlaybackPolicy                   func(childComplexity int, input model.SetPlaybackPolicyInput) int
+		SetPreferredCluster                 func(childComplexity int, clusterID string) int
+		SetStreamRetentionOverrides         func(childComplexity int, input model.SetStreamRetentionOverridesInput) int
+		SetTranscodeLadderPolicy            func(childComplexity int, input model.SetTranscodeLadderPolicyInput) int
+		SetVodOriginalPolicy                func(childComplexity int, keepVodOriginals *bool) int
+		StartDvr                            func(childComplexity int, streamID string) int
+		StopDvr                             func(childComplexity int, dvrHash string) int
+		SubmitX402Payment                   func(childComplexity int, payment string, resource *string) int
+		SubscribeToCluster                  func(childComplexity int, clusterID string) int
+		TestPlaybackAccess                  func(childComplexity int, input model.TestPlaybackAccessInput) int
+		TestWebhookEndpoint                 func(childComplexity int, id string) int
+		UnlinkWallet                        func(childComplexity int, walletID string) int
+		UnsubscribeFromCluster              func(childComplexity int, clusterID string) int
+		UpdateBillingDetails                func(childComplexity int, input model.UpdateBillingDetailsInput) int
+		UpdateClusterMarketplace            func(childComplexity int, clusterID string, input model.UpdateClusterMarketplaceInput) int
+		UpdateMediaRetention                func(childComplexity int, input model.UpdateMediaRetentionInput) int
+		UpdatePushTarget                    func(childComplexity int, id string, input model.UpdatePushTargetInput) int
+		UpdateSkipperConversation           func(childComplexity int, id string, title string) int
+		UpdateStream                        func(childComplexity int, id string, input model.UpdateStreamInput) int
+		UpdateSubscriptionCustomTerms       func(childComplexity int, tenantID string, input model.UpdateSubscriptionCustomTermsInput) int
+		UpdateTenant                        func(childComplexity int, input model.UpdateTenantInput) int
+		UpdateWebhookEndpoint               func(childComplexity int, id string, input model.UpdateWebhookEndpointInput) int
+		WalletLogin                         func(childComplexity int, input model.WalletLoginInput) int
 	}
 
 	MySubscriptionEdge struct {
@@ -2394,11 +2439,55 @@ type ComplexityRoot struct {
 		Reason              func(childComplexity int) int
 	}
 
+	PaymentGrace struct {
+		Active               func(childComplexity int) int
+		EndsAt               func(childComplexity int) int
+		MediaRecoveryUntil   func(childComplexity int) int
+		RemainingCreditCents func(childComplexity int) int
+	}
+
 	Platform struct {
 		Clusters  func(childComplexity int) int
 		Incidents func(childComplexity int, page *model.ConnectionInput, filter *model.PlatformIncidentFilterInput) int
 		Tenant    func(childComplexity int, id string) int
 		Tenants   func(childComplexity int, timeRange *model.TimeRangeInput, limit *int) int
+	}
+
+	PlatformBillingAssignment struct {
+		BillingModel   func(childComplexity int) int
+		Changed        func(childComplexity int) int
+		SubscriptionID func(childComplexity int) int
+		TierName       func(childComplexity int) int
+	}
+
+	PlatformBillingAssignmentQuote struct {
+		EffectsJSON func(childComplexity int) int
+		ExpiresAt   func(childComplexity int) int
+		Fingerprint func(childComplexity int) int
+		QuotedAt    func(childComplexity int) int
+	}
+
+	PlatformCheckoutRecovery struct {
+		AmountCents func(childComplexity int) int
+		AmountKnown func(childComplexity int) int
+		AuditID     func(childComplexity int) int
+		Currency    func(childComplexity int) int
+		Detail      func(childComplexity int) int
+		Outcome     func(childComplexity int) int
+		Provider    func(childComplexity int) int
+		Status      func(childComplexity int) int
+	}
+
+	PlatformInvoiceRefund struct {
+		AmountMinor      func(childComplexity int) int
+		Currency         func(childComplexity int) int
+		Detail           func(childComplexity int) int
+		Fingerprint      func(childComplexity int) int
+		InvoiceID        func(childComplexity int) int
+		Provider         func(childComplexity int) int
+		ProviderRefundID func(childComplexity int) int
+		RequestID        func(childComplexity int) int
+		Status           func(childComplexity int) int
 	}
 
 	PlatformOverview struct {
@@ -2546,6 +2635,7 @@ type ComplexityRoot struct {
 		ID                       func(childComplexity int) int
 		IsLowBalance             func(childComplexity int) int
 		LowBalanceThresholdCents func(childComplexity int) int
+		PaymentGrace             func(childComplexity int) int
 		ReservedBalanceCents     func(childComplexity int) int
 		TenantID                 func(childComplexity int) int
 		UpdatedAt                func(childComplexity int) int
@@ -2748,6 +2838,7 @@ type ComplexityRoot struct {
 	Query struct {
 		Analytics                       func(childComplexity int) int
 		AuthSessionsConnection          func(childComplexity int, first *int, after *string) int
+		AutomaticTopup                  func(childComplexity int) int
 		BalanceTransactionsConnection   func(childComplexity int, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) int
 		BillingDetails                  func(childComplexity int) int
 		BillingLifecycle                func(childComplexity int) int
@@ -2803,6 +2894,7 @@ type ComplexityRoot struct {
 		PendingSubscriptions            func(childComplexity int, clusterID string) int
 		PendingSubscriptionsConnection  func(childComplexity int, page *model.ConnectionInput, clusterID string) int
 		Platform                        func(childComplexity int) int
+		PlatformAutomaticTopup          func(childComplexity int, tenantID string) int
 		PrepaidBalance                  func(childComplexity int) int
 		PreviewMediaPlacement           func(childComplexity int, input model.PreviewMediaPlacementInput) int
 		ResolveIngestEndpoint           func(childComplexity int, streamKey string, protocol *model.MediaIngestProtocol) int
@@ -3855,6 +3947,7 @@ type ComplexityRoot struct {
 		Lifecycle           func(childComplexity int) int
 		PrepaidBalance      func(childComplexity int) int
 		Snapshot            func(childComplexity int) int
+		Subscription        func(childComplexity int) int
 		TenantID            func(childComplexity int) int
 		UsageRecords        func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput) int
 	}
@@ -3959,26 +4052,27 @@ type ComplexityRoot struct {
 	}
 
 	TenantSubscription struct {
-		BillingEmail         func(childComplexity int) int
-		BillingModel         func(childComplexity int) int
-		CancelledAt          func(childComplexity int) int
-		CreatedAt            func(childComplexity int) int
-		CustomFeatures       func(childComplexity int) int
-		EntitlementOverrides func(childComplexity int) int
-		Id                   func(childComplexity int) int
-		NextBillingDate      func(childComplexity int) int
-		PaymentMethod        func(childComplexity int) int
-		PendingEffectiveAt   func(childComplexity int) int
-		PendingReason        func(childComplexity int) int
-		PendingTier          func(childComplexity int) int
-		PresentmentCurrency  func(childComplexity int) int
-		PricingOverrides     func(childComplexity int) int
-		StartedAt            func(childComplexity int) int
-		Status               func(childComplexity int) int
-		TenantId             func(childComplexity int) int
-		TierId               func(childComplexity int) int
-		TrialEndsAt          func(childComplexity int) int
-		UpdatedAt            func(childComplexity int) int
+		AutomaticPrepaidUsage func(childComplexity int) int
+		BillingEmail          func(childComplexity int) int
+		BillingModel          func(childComplexity int) int
+		CancelledAt           func(childComplexity int) int
+		CreatedAt             func(childComplexity int) int
+		CustomFeatures        func(childComplexity int) int
+		EntitlementOverrides  func(childComplexity int) int
+		Id                    func(childComplexity int) int
+		NextBillingDate       func(childComplexity int) int
+		PaymentMethod         func(childComplexity int) int
+		PendingEffectiveAt    func(childComplexity int) int
+		PendingReason         func(childComplexity int) int
+		PendingTier           func(childComplexity int) int
+		PresentmentCurrency   func(childComplexity int) int
+		PricingOverrides      func(childComplexity int) int
+		StartedAt             func(childComplexity int) int
+		Status                func(childComplexity int) int
+		TenantId              func(childComplexity int) int
+		TierId                func(childComplexity int) int
+		TrialEndsAt           func(childComplexity int) int
+		UpdatedAt             func(childComplexity int) int
 	}
 
 	TenantUsage struct {
@@ -4621,6 +4715,7 @@ type AnalyticsInfraResolver interface {
 	FederationSummary(ctx context.Context, obj *markers.AnalyticsInfra, timeRange model.TimeRangeInput, noCache *bool) (*periscopepb.FederationSummary, error)
 }
 type AnalyticsLifecycleResolver interface {
+	RecordingEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error)
 	StreamEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error)
 	BufferEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.BufferEventsConnection, error)
 	ArtifactEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID *string, stage *string, contentType *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ArtifactEventsConnection, error)
@@ -4999,6 +5094,17 @@ type MutationResolver interface {
 	CreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error)
 	CryptoTopupStatus(ctx context.Context, topupID string) (*model.CryptoTopupStatus, error)
 	UpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*purserpb.BillingDetails, error)
+	EnablePrepaidUsage(ctx context.Context) (*model.EnablePrepaidUsagePayload, error)
+	PreviewFreeCancellation(ctx context.Context, tierID string) (*model.FreeCancellationReview, error)
+	ConfirmFreeCancellation(ctx context.Context, tierID string, quotedAt time.Time, fingerprint string) (model.ChangeBillingTierResult, error)
+	SetAutomaticTopup(ctx context.Context, input model.SetAutomaticTopupInput) (*purserpb.AutomaticTopupSettings, error)
+	PlatformDisableAutomaticTopup(ctx context.Context, tenantID string, reason string) (*purserpb.AutomaticTopupSettings, error)
+	PlatformRefundInvoice(ctx context.Context, tenantID string, invoiceID string, requestID string, reason string, confirmed bool, fingerprint string) (*model.PlatformInvoiceRefund, error)
+	PlatformAdjustBalance(ctx context.Context, tenantID string, amountCents int, reason string, referenceID string) (*model.BalanceTransaction, error)
+	PlatformPreviewBillingTier(ctx context.Context, tenantID string, tierName string, reason string) (*model.PlatformBillingAssignmentQuote, error)
+	PlatformAssignBillingTierWithReview(ctx context.Context, tenantID string, tierName string, reason string, quotedAt time.Time, fingerprint string) (*model.PlatformBillingAssignment, error)
+	PlatformAssignBillingTier(ctx context.Context, tenantID string, tierName string, reason string) (*model.PlatformBillingAssignment, error)
+	PlatformRecoverCheckout(ctx context.Context, tenantID string, reservationID string, reason string, confirmed bool) (*model.PlatformCheckoutRecovery, error)
 	UpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*purserpb.TenantSubscription, error)
 	UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (model.UpdateTenantResult, error)
 	SubscribeToCluster(ctx context.Context, clusterID string) (bool, error)
@@ -5169,6 +5275,11 @@ type PaymentResolver interface {
 	QuotedAt(ctx context.Context, obj *purserpb.PaymentResponse) (*time.Time, error)
 	CreatedAt(ctx context.Context, obj *purserpb.PaymentResponse) (*time.Time, error)
 }
+type PaymentGraceResolver interface {
+	EndsAt(ctx context.Context, obj *purserpb.PaymentGrace) (*time.Time, error)
+
+	MediaRecoveryUntil(ctx context.Context, obj *purserpb.PaymentGrace) (*time.Time, error)
+}
 type PlatformResolver interface {
 	Tenants(ctx context.Context, obj *markers.Platform, timeRange *model.TimeRangeInput, limit *int) (*model.PlatformTenantIndex, error)
 	Tenant(ctx context.Context, obj *markers.Platform, id string) (*markers.TenantAdminDetail, error)
@@ -5276,6 +5387,8 @@ type QualityTierSummaryResolver interface {
 	CodecAv1Minutes(ctx context.Context, obj *periscopepb.QualityTierSummary) (int, error)
 }
 type QueryResolver interface {
+	AutomaticTopup(ctx context.Context) (*purserpb.AutomaticTopupSettings, error)
+	PlatformAutomaticTopup(ctx context.Context, tenantID string) (*purserpb.AutomaticTopupSettings, error)
 	AuthSessionsConnection(ctx context.Context, first *int, after *string) (*model.AuthSessionConnection, error)
 	SecurityActivityConnection(ctx context.Context, first *int, after *string) (*model.SecurityActivityConnection, error)
 	Analytics(ctx context.Context) (*markers.Analytics, error)
@@ -5622,6 +5735,7 @@ type TenantResolver interface {
 	CustomDomainStatus(ctx context.Context, obj *quartermasterpb.Tenant) (*model.CustomDomainStatus, error)
 }
 type TenantAdminBillingResolver interface {
+	Subscription(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.TenantSubscription, error)
 	Snapshot(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.TenantBillingSnapshot, error)
 	Lifecycle(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.BillingStatusResponse, error)
 	Invoices(ctx context.Context, obj *markers.TenantAdminBilling, page *model.ConnectionInput) (*model.InvoicesConnection, error)
@@ -6411,6 +6525,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AnalyticsLifecycle.ConnectionEventsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["streamId"].(*string), args["timeRange"].(*model.TimeRangeInput), args["noCache"].(*bool)), true
+	case "AnalyticsLifecycle.recordingEventsConnection":
+		if e.ComplexityRoot.AnalyticsLifecycle.RecordingEventsConnection == nil {
+			break
+		}
+
+		args, err := ec.field_AnalyticsLifecycle_recordingEventsConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.AnalyticsLifecycle.RecordingEventsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["streamId"].(string), args["timeRange"].(*model.TimeRangeInput), args["noCache"].(*bool)), true
 	case "AnalyticsLifecycle.storageEventsConnection":
 		if e.ComplexityRoot.AnalyticsLifecycle.StorageEventsConnection == nil {
 			break
@@ -7053,6 +7178,67 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AuthSessionEdge.Node(childComplexity), true
+
+	case "AutomaticTopupSettings.available":
+		if e.ComplexityRoot.AutomaticTopupSettings.Available == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.Available(childComplexity), true
+	case "AutomaticTopupSettings.consentVersion":
+		if e.ComplexityRoot.AutomaticTopupSettings.ConsentVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.ConsentVersion(childComplexity), true
+	case "AutomaticTopupSettings.currency":
+		if e.ComplexityRoot.AutomaticTopupSettings.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.Currency(childComplexity), true
+	case "AutomaticTopupSettings.enabled":
+		if e.ComplexityRoot.AutomaticTopupSettings.Enabled == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.Enabled(childComplexity), true
+	case "AutomaticTopupSettings.monthlyGrossLimitMinor":
+		if e.ComplexityRoot.AutomaticTopupSettings.MonthlyGrossLimitMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.MonthlyGrossLimitMinor(childComplexity), true
+	case "AutomaticTopupSettings.monthlyReservedOrSpentMinor":
+		if e.ComplexityRoot.AutomaticTopupSettings.MonthlyReservedOrSpentMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.MonthlyReservedOrSpentMinor(childComplexity), true
+	case "AutomaticTopupSettings.netAmountMinor":
+		if e.ComplexityRoot.AutomaticTopupSettings.NetAmountMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.NetAmountMinor(childComplexity), true
+	case "AutomaticTopupSettings.pausedReason":
+		if e.ComplexityRoot.AutomaticTopupSettings.PausedReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.PausedReason(childComplexity), true
+	case "AutomaticTopupSettings.thresholdEurCents":
+		if e.ComplexityRoot.AutomaticTopupSettings.ThresholdEurCents == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.ThresholdEurCents(childComplexity), true
+	case "AutomaticTopupSettings.unavailableReason":
+		if e.ComplexityRoot.AutomaticTopupSettings.UnavailableReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AutomaticTopupSettings.UnavailableReason(childComplexity), true
 
 	case "AvailableCluster.autoEnroll":
 		if e.ComplexityRoot.AvailableCluster.AutoEnroll == nil {
@@ -10481,6 +10667,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.EffectiveRetention.Source(childComplexity), true
 
+	case "EnablePrepaidUsagePayload.activated":
+		if e.ComplexityRoot.EnablePrepaidUsagePayload.Activated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnablePrepaidUsagePayload.Activated(childComplexity), true
+	case "EnablePrepaidUsagePayload.awaitingFunds":
+		if e.ComplexityRoot.EnablePrepaidUsagePayload.AwaitingFunds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnablePrepaidUsagePayload.AwaitingFunds(childComplexity), true
+	case "EnablePrepaidUsagePayload.billingModel":
+		if e.ComplexityRoot.EnablePrepaidUsagePayload.BillingModel == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnablePrepaidUsagePayload.BillingModel(childComplexity), true
+	case "EnablePrepaidUsagePayload.tierName":
+		if e.ComplexityRoot.EnablePrepaidUsagePayload.TierName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnablePrepaidUsagePayload.TierName(childComplexity), true
+
 	case "EntitlementEntry.key":
 		if e.ComplexityRoot.EntitlementEntry.Key == nil {
 			break
@@ -10746,6 +10957,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FederationSummary.TotalEvents(childComplexity), true
+
+	case "FreeCancellationReview.currency":
+		if e.ComplexityRoot.FreeCancellationReview.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.Currency(childComplexity), true
+	case "FreeCancellationReview.dueNowMinor":
+		if e.ComplexityRoot.FreeCancellationReview.DueNowMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.DueNowMinor(childComplexity), true
+	case "FreeCancellationReview.effectiveAt":
+		if e.ComplexityRoot.FreeCancellationReview.EffectiveAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.EffectiveAt(childComplexity), true
+	case "FreeCancellationReview.expiresAt":
+		if e.ComplexityRoot.FreeCancellationReview.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.ExpiresAt(childComplexity), true
+	case "FreeCancellationReview.fingerprint":
+		if e.ComplexityRoot.FreeCancellationReview.Fingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.Fingerprint(childComplexity), true
+	case "FreeCancellationReview.futureUsageMessage":
+		if e.ComplexityRoot.FreeCancellationReview.FutureUsageMessage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.FutureUsageMessage(childComplexity), true
+	case "FreeCancellationReview.quotedAt":
+		if e.ComplexityRoot.FreeCancellationReview.QuotedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.QuotedAt(childComplexity), true
+	case "FreeCancellationReview.refundNowMinor":
+		if e.ComplexityRoot.FreeCancellationReview.RefundNowMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.RefundNowMinor(childComplexity), true
+	case "FreeCancellationReview.walletCreditNowMinor":
+		if e.ComplexityRoot.FreeCancellationReview.WalletCreditNowMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FreeCancellationReview.WalletCreditNowMinor(childComplexity), true
 
 	case "FreeFallback.at":
 		if e.ComplexityRoot.FreeFallback.At == nil {
@@ -13725,6 +13991,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CompleteVodUpload(childComplexity, args["input"].(model.CompleteVodUploadInput)), true
+	case "Mutation.confirmFreeCancellation":
+		if e.ComplexityRoot.Mutation.ConfirmFreeCancellation == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_confirmFreeCancellation_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ConfirmFreeCancellation(childComplexity, args["tierId"].(string), args["quotedAt"].(time.Time), args["fingerprint"].(string)), true
 	case "Mutation.createBootstrapToken":
 		if e.ComplexityRoot.Mutation.CreateBootstrapToken == nil {
 			break
@@ -14088,6 +14365,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DisconnectIngest(childComplexity, args["streamId"].(string)), true
+	case "Mutation.enablePrepaidUsage":
+		if e.ComplexityRoot.Mutation.EnablePrepaidUsage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.EnablePrepaidUsage(childComplexity), true
 	case "Mutation.enableWebhookEndpoint":
 		if e.ComplexityRoot.Mutation.EnableWebhookEndpoint == nil {
 			break
@@ -14154,6 +14437,94 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.OpenMistAdminSession(childComplexity, args["input"].(model.OpenMistAdminSessionInput)), true
+	case "Mutation.platformAdjustBalance":
+		if e.ComplexityRoot.Mutation.PlatformAdjustBalance == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformAdjustBalance_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformAdjustBalance(childComplexity, args["tenantId"].(string), args["amountCents"].(int), args["reason"].(string), args["referenceId"].(string)), true
+	case "Mutation.platformAssignBillingTier":
+		if e.ComplexityRoot.Mutation.PlatformAssignBillingTier == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformAssignBillingTier_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformAssignBillingTier(childComplexity, args["tenantId"].(string), args["tierName"].(string), args["reason"].(string)), true
+	case "Mutation.platformAssignBillingTierWithReview":
+		if e.ComplexityRoot.Mutation.PlatformAssignBillingTierWithReview == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformAssignBillingTierWithReview_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformAssignBillingTierWithReview(childComplexity, args["tenantId"].(string), args["tierName"].(string), args["reason"].(string), args["quotedAt"].(time.Time), args["fingerprint"].(string)), true
+	case "Mutation.platformDisableAutomaticTopup":
+		if e.ComplexityRoot.Mutation.PlatformDisableAutomaticTopup == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformDisableAutomaticTopup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformDisableAutomaticTopup(childComplexity, args["tenantId"].(string), args["reason"].(string)), true
+	case "Mutation.platformPreviewBillingTier":
+		if e.ComplexityRoot.Mutation.PlatformPreviewBillingTier == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformPreviewBillingTier_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformPreviewBillingTier(childComplexity, args["tenantId"].(string), args["tierName"].(string), args["reason"].(string)), true
+	case "Mutation.platformRecoverCheckout":
+		if e.ComplexityRoot.Mutation.PlatformRecoverCheckout == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformRecoverCheckout_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformRecoverCheckout(childComplexity, args["tenantId"].(string), args["reservationId"].(string), args["reason"].(string), args["confirmed"].(bool)), true
+	case "Mutation.platformRefundInvoice":
+		if e.ComplexityRoot.Mutation.PlatformRefundInvoice == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_platformRefundInvoice_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PlatformRefundInvoice(childComplexity, args["tenantId"].(string), args["invoiceId"].(string), args["requestId"].(string), args["reason"].(string), args["confirmed"].(bool), args["fingerprint"].(string)), true
+	case "Mutation.previewFreeCancellation":
+		if e.ComplexityRoot.Mutation.PreviewFreeCancellation == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_previewFreeCancellation_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.PreviewFreeCancellation(childComplexity, args["tierId"].(string)), true
 	case "Mutation.promoteToPaid":
 		if e.ComplexityRoot.Mutation.PromoteToPaid == nil {
 			break
@@ -14336,6 +14707,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SendMessage(childComplexity, args["input"].(model.SendMessageInput)), true
+	case "Mutation.setAutomaticTopup":
+		if e.ComplexityRoot.Mutation.SetAutomaticTopup == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setAutomaticTopup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetAutomaticTopup(childComplexity, args["input"].(model.SetAutomaticTopupInput)), true
 	case "Mutation.setMediaRetentionPolicy":
 		if e.ComplexityRoot.Mutation.SetMediaRetentionPolicy == nil {
 			break
@@ -16022,6 +16404,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PaymentFailed.Reason(childComplexity), true
 
+	case "PaymentGrace.active":
+		if e.ComplexityRoot.PaymentGrace.Active == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PaymentGrace.Active(childComplexity), true
+	case "PaymentGrace.endsAt":
+		if e.ComplexityRoot.PaymentGrace.EndsAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PaymentGrace.EndsAt(childComplexity), true
+	case "PaymentGrace.mediaRecoveryUntil":
+		if e.ComplexityRoot.PaymentGrace.MediaRecoveryUntil == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PaymentGrace.MediaRecoveryUntil(childComplexity), true
+	case "PaymentGrace.remainingCreditCents":
+		if e.ComplexityRoot.PaymentGrace.RemainingCreditCents == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PaymentGrace.RemainingCreditCents(childComplexity), true
+
 	case "Platform.clusters":
 		if e.ComplexityRoot.Platform.Clusters == nil {
 			break
@@ -16061,6 +16468,160 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Platform.Tenants(childComplexity, args["timeRange"].(*model.TimeRangeInput), args["limit"].(*int)), true
+
+	case "PlatformBillingAssignment.billingModel":
+		if e.ComplexityRoot.PlatformBillingAssignment.BillingModel == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignment.BillingModel(childComplexity), true
+	case "PlatformBillingAssignment.changed":
+		if e.ComplexityRoot.PlatformBillingAssignment.Changed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignment.Changed(childComplexity), true
+	case "PlatformBillingAssignment.subscriptionId":
+		if e.ComplexityRoot.PlatformBillingAssignment.SubscriptionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignment.SubscriptionID(childComplexity), true
+	case "PlatformBillingAssignment.tierName":
+		if e.ComplexityRoot.PlatformBillingAssignment.TierName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignment.TierName(childComplexity), true
+
+	case "PlatformBillingAssignmentQuote.effectsJson":
+		if e.ComplexityRoot.PlatformBillingAssignmentQuote.EffectsJSON == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignmentQuote.EffectsJSON(childComplexity), true
+	case "PlatformBillingAssignmentQuote.expiresAt":
+		if e.ComplexityRoot.PlatformBillingAssignmentQuote.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignmentQuote.ExpiresAt(childComplexity), true
+	case "PlatformBillingAssignmentQuote.fingerprint":
+		if e.ComplexityRoot.PlatformBillingAssignmentQuote.Fingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignmentQuote.Fingerprint(childComplexity), true
+	case "PlatformBillingAssignmentQuote.quotedAt":
+		if e.ComplexityRoot.PlatformBillingAssignmentQuote.QuotedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformBillingAssignmentQuote.QuotedAt(childComplexity), true
+
+	case "PlatformCheckoutRecovery.amountCents":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.AmountCents == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.AmountCents(childComplexity), true
+	case "PlatformCheckoutRecovery.amountKnown":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.AmountKnown == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.AmountKnown(childComplexity), true
+	case "PlatformCheckoutRecovery.auditId":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.AuditID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.AuditID(childComplexity), true
+	case "PlatformCheckoutRecovery.currency":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.Currency(childComplexity), true
+	case "PlatformCheckoutRecovery.detail":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.Detail == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.Detail(childComplexity), true
+	case "PlatformCheckoutRecovery.outcome":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.Outcome(childComplexity), true
+	case "PlatformCheckoutRecovery.provider":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.Provider == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.Provider(childComplexity), true
+	case "PlatformCheckoutRecovery.status":
+		if e.ComplexityRoot.PlatformCheckoutRecovery.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformCheckoutRecovery.Status(childComplexity), true
+
+	case "PlatformInvoiceRefund.amountMinor":
+		if e.ComplexityRoot.PlatformInvoiceRefund.AmountMinor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.AmountMinor(childComplexity), true
+	case "PlatformInvoiceRefund.currency":
+		if e.ComplexityRoot.PlatformInvoiceRefund.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.Currency(childComplexity), true
+	case "PlatformInvoiceRefund.detail":
+		if e.ComplexityRoot.PlatformInvoiceRefund.Detail == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.Detail(childComplexity), true
+	case "PlatformInvoiceRefund.fingerprint":
+		if e.ComplexityRoot.PlatformInvoiceRefund.Fingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.Fingerprint(childComplexity), true
+	case "PlatformInvoiceRefund.invoiceId":
+		if e.ComplexityRoot.PlatformInvoiceRefund.InvoiceID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.InvoiceID(childComplexity), true
+	case "PlatformInvoiceRefund.provider":
+		if e.ComplexityRoot.PlatformInvoiceRefund.Provider == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.Provider(childComplexity), true
+	case "PlatformInvoiceRefund.providerRefundId":
+		if e.ComplexityRoot.PlatformInvoiceRefund.ProviderRefundID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.ProviderRefundID(childComplexity), true
+	case "PlatformInvoiceRefund.requestId":
+		if e.ComplexityRoot.PlatformInvoiceRefund.RequestID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.RequestID(childComplexity), true
+	case "PlatformInvoiceRefund.status":
+		if e.ComplexityRoot.PlatformInvoiceRefund.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlatformInvoiceRefund.Status(childComplexity), true
 
 	case "PlatformOverview.activeStreams":
 		if e.ComplexityRoot.PlatformOverview.ActiveStreams == nil {
@@ -16710,6 +17271,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PrepaidBalance.LowBalanceThresholdCents(childComplexity), true
+	case "PrepaidBalance.paymentGrace":
+		if e.ComplexityRoot.PrepaidBalance.PaymentGrace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PrepaidBalance.PaymentGrace(childComplexity), true
 	case "PrepaidBalance.reservedBalanceCents":
 		if e.ComplexityRoot.PrepaidBalance.ReservedBalanceCents == nil {
 			break
@@ -17660,6 +18227,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.AuthSessionsConnection(childComplexity, args["first"].(*int), args["after"].(*string)), true
+	case "Query.automaticTopup":
+		if e.ComplexityRoot.Query.AutomaticTopup == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.AutomaticTopup(childComplexity), true
 	case "Query.balanceTransactionsConnection":
 		if e.ComplexityRoot.Query.BalanceTransactionsConnection == nil {
 			break
@@ -18216,6 +18789,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Platform(childComplexity), true
+	case "Query.platformAutomaticTopup":
+		if e.ComplexityRoot.Query.PlatformAutomaticTopup == nil {
+			break
+		}
+
+		args, err := ec.field_Query_platformAutomaticTopup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.PlatformAutomaticTopup(childComplexity, args["tenantId"].(string)), true
 	case "Query.prepaidBalance":
 		if e.ComplexityRoot.Query.PrepaidBalance == nil {
 			break
@@ -22911,6 +23495,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TenantAdminBilling.Snapshot(childComplexity), true
+	case "TenantAdminBilling.subscription":
+		if e.ComplexityRoot.TenantAdminBilling.Subscription == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TenantAdminBilling.Subscription(childComplexity), true
 	case "TenantAdminBilling.tenantId":
 		if e.ComplexityRoot.TenantAdminBilling.TenantID == nil {
 			break
@@ -23363,6 +23953,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TenantStorageUsage.VodBytes(childComplexity), true
 
+	case "TenantSubscription.automaticPrepaidUsage":
+		if e.ComplexityRoot.TenantSubscription.AutomaticPrepaidUsage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TenantSubscription.AutomaticPrepaidUsage(childComplexity), true
 	case "TenantSubscription.billingEmail":
 		if e.ComplexityRoot.TenantSubscription.BillingEmail == nil {
 			break
@@ -25827,6 +26423,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputReviewMediaCapacityConsentInput,
 		ec.unmarshalInputReviewMediaPlacementChangeInput,
 		ec.unmarshalInputSendMessageInput,
+		ec.unmarshalInputSetAutomaticTopupInput,
 		ec.unmarshalInputSetMediaRetentionPolicyInput,
 		ec.unmarshalInputSetNodeCapacityInput,
 		ec.unmarshalInputSetNodeModeInput,
@@ -26048,6 +26645,8 @@ enabling graceful degradation when individual services are unavailable.
 Most connection fields are non-null, but some may be nullable when upstream data is optional.
 """
 type Query {
+  automaticTopup: AutomaticTopupSettings!
+  platformAutomaticTopup(tenantId: ID!): AutomaticTopupSettings! @internal(reason: "Requires the platform_operator grant.")
   "The signed-in user’s own interactive sessions, newest first. Supports first=1..100."
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
   "Your own security activity from the past 90 days."
@@ -27181,6 +27780,14 @@ Lifecycle analytics for streams and artifacts.
 ` + "`" + `streamId` + "`" + ` arguments accept Stream.id (Relay global ID).
 """
 type AnalyticsLifecycle {
+  "Latest recording outcomes and broadcast boundaries, without buffer/track noise."
+  recordingEventsConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamEventsConnection!
+
   streamEventsConnection(
     page: ConnectionInput
     streamId: ID!
@@ -27636,9 +28243,38 @@ type Mutation {
   """
   updateBillingDetails(input: UpdateBillingDetailsInput!): BillingDetails!
 
-  # NOTE: adjustPrepaidBalance is NOT exposed in GraphQL.
-  # Admin operations go through CLI → direct gRPC to Purser.
-  # We have no RBAC in Gateway to safely expose admin routes.
+  "Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved."
+  enablePrepaidUsage: EnablePrepaidUsagePayload!
+  previewFreeCancellation(tierId: ID!): FreeCancellationReview!
+  confirmFreeCancellation(tierId: ID!, quotedAt: Time!, fingerprint: String!): ChangeBillingTierResult!
+  setAutomaticTopup(input: SetAutomaticTopupInput!): AutomaticTopupSettings!
+  platformDisableAutomaticTopup(tenantId: ID!, reason: String!): AutomaticTopupSettings! @internal(reason: "Requires the platform_operator grant.")
+  platformRefundInvoice(tenantId: ID!, invoiceId: ID!, requestId: ID!, reason: String!, confirmed: Boolean! = false, fingerprint: String! = ""): PlatformInvoiceRefund! @internal(reason: "Requires the platform_operator grant.")
+
+  "Record an audited EUR wallet adjustment. Reuse referenceId when retrying."
+  platformAdjustBalance(
+    tenantId: ID!
+    amountCents: Int!
+    reason: String!
+    referenceId: ID!
+  ): BalanceTransaction! @internal(reason: "Requires the platform_operator grant.")
+  "Price an immediate arrangement change without committing it. The quote expires after five minutes."
+  platformPreviewBillingTier(tenantId: ID!, tierName: String!, reason: String!): PlatformBillingAssignmentQuote! @internal(reason: "Requires the platform_operator grant.")
+  "Apply the exact financial effects reviewed in an unexpired quote. Changed billing or usage requires another preview."
+  platformAssignBillingTierWithReview(tenantId: ID!, tierName: String!, reason: String!, quotedAt: Time!, fingerprint: String!): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
+  "Assign a billing arrangement immediately, closing its existing billing phase."
+  platformAssignBillingTier(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+  ): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
+  "Preview or reconcile a tenant-owned checkout, including provider cancellation or refund when required."
+  platformRecoverCheckout(
+    tenantId: ID!
+    reservationId: ID!
+    reason: String!
+    confirmed: Boolean! = false
+  ): PlatformCheckoutRecovery! @internal(reason: "Requires the platform_operator grant.")
 
   """
   Update custom billing terms for a tenant subscription.
@@ -29373,6 +30009,10 @@ input CreatePaymentInput {
 Input for updating enterprise subscription custom terms.
 """
 input UpdateSubscriptionCustomTermsInput {
+  "Refuse replacement if the stored override map differs from this reviewed value."
+  expectedEntitlementOverrides: [EntitlementEntryInput!]
+  "Reason retained in the subscription audit event."
+  reason: String
   "Custom support terms."
   customFeatures: BillingFeaturesInput
   "Per-subscription pricing rule overrides (wholesale replace by meter)."
@@ -29856,6 +30496,8 @@ enum InvoiceStatus {
   FAILED
   "Invoice requires operator review and cannot be paid."
   MANUAL_REVIEW
+  "The original payment was returned with an original-tax credit note."
+  REFUNDED
   "Invoice cancelled."
   CANCELLED
 }
@@ -30004,6 +30646,8 @@ type BufferEvent implements Node {
 }
 
 enum StreamEventType {
+  RECORDING_REFUSED
+  RECORDING_ACTIVE
   STREAM_LIFECYCLE_UPDATE
   STREAM_START
   STREAM_END
@@ -31596,6 +32240,8 @@ type InvoicesConnection {
 
 # Tenant subscription with custom terms
 type TenantSubscription {
+  "Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it."
+  automaticPrepaidUsage: Boolean!
   id: ID!
   tenantId: ID!
   tierId: String!
@@ -32038,7 +32684,16 @@ type UsageRecordsConnection {
 Prepaid balance for wallet-based accounts.
 Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
 """
+type PaymentGrace {
+  active: Boolean!
+  endsAt: Time
+  remainingCreditCents: Int!
+  mediaRecoveryUntil: Time
+}
+
 type PrepaidBalance {
+  "Temporary paid continuity and any media recovery deadline."
+  paymentGrace: PaymentGrace
   "Unique balance record identifier."
   id: ID!
   "Owning tenant identifier."
@@ -34973,6 +35628,7 @@ type TenantAdminDetail {
 "Admin view of one tenant's billing surface (reuses the tenant-facing types)."
 type TenantAdminBilling {
   tenantId: ID!
+  subscription: TenantSubscription
   snapshot: TenantBillingSnapshot
   "Plan lifecycle as the tenant sees it: arrangement, scheduled move to Free and pending plan change. Null when the tenant has no subscription."
   lifecycle: BillingLifecycle
@@ -36061,6 +36717,88 @@ type DVRChapterEdge {
   cursor: String!
   node: DVRChapterRef!
 }
+
+"Priced financial effects of an operator arrangement change. EUR cents and original presentment minor units are labelled in effectsJson."
+type PlatformBillingAssignmentQuote {
+  quotedAt: Time!
+  expiresAt: Time!
+  fingerprint: String!
+  effectsJson: String!
+}
+
+"Operator billing-assignment receipt."
+type PlatformBillingAssignment {
+  subscriptionId: ID!
+  tierName: String!
+  billingModel: String!
+  changed: Boolean!
+}
+
+"Provider-observed result of an operator checkout recovery."
+type PlatformCheckoutRecovery {
+  provider: String!
+  status: String!
+  amountCents: Int!
+  currency: String!
+  amountKnown: Boolean!
+  outcome: String!
+  detail: String!
+  auditId: String!
+}
+
+"The funded-usage arrangement after opting into PAYG."
+type EnablePrepaidUsagePayload {
+  activated: Boolean!
+  awaitingFunds: Boolean!
+  tierName: String!
+  billingModel: String!
+}
+
+"Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months."
+input SetAutomaticTopupInput {
+ enabled: Boolean!
+ thresholdEurCents: Int! = 500
+ netAmountMinor: Int! = 2000
+ monthlyGrossLimitMinor: Int! = 10000
+ currency: String!
+ consentVersion: String! = ""
+}
+type AutomaticTopupSettings {
+ enabled: Boolean!
+ thresholdEurCents: Int!
+ netAmountMinor: Int!
+ monthlyGrossLimitMinor: Int!
+ currency: String!
+ pausedReason: String!
+ monthlyReservedOrSpentMinor: Int!
+ available: Boolean!
+ unavailableReason: String!
+ consentVersion: String!
+}
+type PlatformInvoiceRefund {
+ requestId: ID!
+ invoiceId: ID!
+ provider: String!
+ amountMinor: Int!
+ currency: String!
+ status: String!
+ fingerprint: String!
+ detail: String!
+ providerRefundId: String!
+}
+
+"Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero."
+type FreeCancellationReview {
+ quotedAt: Time!
+ expiresAt: Time!
+ effectiveAt: Time!
+ fingerprint: String!
+ dueNowMinor: Int!
+ refundNowMinor: Int!
+ walletCreditNowMinor: Int!
+ currency: String!
+ futureUsageMessage: String!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -36867,6 +37605,32 @@ func (ec *executionContext) field_AnalyticsLifecycle_connectionEventsConnection_
 	return args, nil
 }
 
+func (ec *executionContext) field_AnalyticsLifecycle_recordingEventsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["streamId"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "noCache", ec.unmarshalOBoolean2ᚖbool)
+	if err != nil {
+		return nil, err
+	}
+	args["noCache"] = arg3
+	return args, nil
+}
+
 func (ec *executionContext) field_AnalyticsLifecycle_storageEventsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -37195,6 +37959,27 @@ func (ec *executionContext) field_Mutation_completeVodUpload_args(ctx context.Co
 		return nil, err
 	}
 	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_confirmFreeCancellation_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tierId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tierId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "quotedAt", ec.unmarshalNTime2timeᚐTime)
+	if err != nil {
+		return nil, err
+	}
+	args["quotedAt"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "fingerprint", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["fingerprint"] = arg2
 	return args, nil
 }
 
@@ -37687,6 +38472,194 @@ func (ec *executionContext) field_Mutation_openMistAdminSession_args(ctx context
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_platformAdjustBalance_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "amountCents", ec.unmarshalNInt2int)
+	if err != nil {
+		return nil, err
+	}
+	args["amountCents"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "referenceId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["referenceId"] = arg3
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformAssignBillingTierWithReview_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tierName", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tierName"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "quotedAt", ec.unmarshalNTime2timeᚐTime)
+	if err != nil {
+		return nil, err
+	}
+	args["quotedAt"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "fingerprint", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["fingerprint"] = arg4
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformAssignBillingTier_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tierName", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tierName"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformDisableAutomaticTopup_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformPreviewBillingTier_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tierName", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tierName"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformRecoverCheckout_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "reservationId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reservationId"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "confirmed", ec.unmarshalNBoolean2bool)
+	if err != nil {
+		return nil, err
+	}
+	args["confirmed"] = arg3
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_platformRefundInvoice_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "invoiceId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["invoiceId"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "requestId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["requestId"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "reason", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["reason"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "confirmed", ec.unmarshalNBoolean2bool)
+	if err != nil {
+		return nil, err
+	}
+	args["confirmed"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "fingerprint", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["fingerprint"] = arg5
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_previewFreeCancellation_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tierId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tierId"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_promoteToPaid_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -37891,6 +38864,17 @@ func (ec *executionContext) field_Mutation_sendMessage_args(ctx context.Context,
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNSendMessageInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSendMessageInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setAutomaticTopup_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNSetAutomaticTopupInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetAutomaticTopupInput)
 	if err != nil {
 		return nil, err
 	}
@@ -39018,6 +40002,17 @@ func (ec *executionContext) field_Query_pendingSubscriptions_args(ctx context.Co
 		return nil, err
 	}
 	args["clusterId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_platformAutomaticTopup_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
 	return args, nil
 }
 
@@ -41300,6 +42295,8 @@ func (ec *executionContext) fieldContext_Analytics_lifecycle(_ context.Context, 
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "recordingEventsConnection":
+				return ec.fieldContext_AnalyticsLifecycle_recordingEventsConnection(ctx, field)
 			case "streamEventsConnection":
 				return ec.fieldContext_AnalyticsLifecycle_streamEventsConnection(ctx, field)
 			case "bufferEventsConnection":
@@ -42916,6 +43913,57 @@ func (ec *executionContext) fieldContext_AnalyticsInfra_federationSummary(ctx co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_AnalyticsInfra_federationSummary_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AnalyticsLifecycle_recordingEventsConnection(ctx context.Context, field graphql.CollectedField, obj *markers.AnalyticsLifecycle) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AnalyticsLifecycle_recordingEventsConnection,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.AnalyticsLifecycle().RecordingEventsConnection(ctx, obj, fc.Args["page"].(*model.ConnectionInput), fc.Args["streamId"].(string), fc.Args["timeRange"].(*model.TimeRangeInput), fc.Args["noCache"].(*bool))
+		},
+		nil,
+		ec.marshalNStreamEventsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEventsConnection,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AnalyticsLifecycle_recordingEventsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AnalyticsLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_StreamEventsConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_StreamEventsConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_StreamEventsConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_StreamEventsConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamEventsConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_AnalyticsLifecycle_recordingEventsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -46561,6 +47609,296 @@ func (ec *executionContext) fieldContext_AuthSessionEdge_node(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _AutomaticTopupSettings_enabled(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_enabled,
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_thresholdEurCents(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_thresholdEurCents,
+		func(ctx context.Context) (any, error) {
+			return obj.ThresholdEurCents, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_thresholdEurCents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_netAmountMinor(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_netAmountMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.NetAmountMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_netAmountMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_monthlyGrossLimitMinor(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.MonthlyGrossLimitMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_currency(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_currency,
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_pausedReason(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_pausedReason,
+		func(ctx context.Context) (any, error) {
+			return obj.PausedReason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_pausedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.MonthlyReservedOrSpentMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_available(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_available,
+		func(ctx context.Context) (any, error) {
+			return obj.Available, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_available(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_unavailableReason(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_unavailableReason,
+		func(ctx context.Context) (any, error) {
+			return obj.UnavailableReason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_unavailableReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AutomaticTopupSettings_consentVersion(ctx context.Context, field graphql.CollectedField, obj *purserpb.AutomaticTopupSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_AutomaticTopupSettings_consentVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.ConsentVersion, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_AutomaticTopupSettings_consentVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AutomaticTopupSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AvailableCluster_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.AvailableCluster) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -48604,6 +49942,8 @@ func (ec *executionContext) fieldContext_BillingStatus_subscription(_ context.Co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "automaticPrepaidUsage":
+				return ec.fieldContext_TenantSubscription_automaticPrepaidUsage(ctx, field)
 			case "id":
 				return ec.fieldContext_TenantSubscription_id(ctx, field)
 			case "tenantId":
@@ -64634,6 +65974,122 @@ func (ec *executionContext) fieldContext_EffectiveRetention_source(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _EnablePrepaidUsagePayload_activated(ctx context.Context, field graphql.CollectedField, obj *model.EnablePrepaidUsagePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_EnablePrepaidUsagePayload_activated,
+		func(ctx context.Context) (any, error) {
+			return obj.Activated, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_EnablePrepaidUsagePayload_activated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnablePrepaidUsagePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EnablePrepaidUsagePayload_awaitingFunds(ctx context.Context, field graphql.CollectedField, obj *model.EnablePrepaidUsagePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_EnablePrepaidUsagePayload_awaitingFunds,
+		func(ctx context.Context) (any, error) {
+			return obj.AwaitingFunds, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_EnablePrepaidUsagePayload_awaitingFunds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnablePrepaidUsagePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EnablePrepaidUsagePayload_tierName(ctx context.Context, field graphql.CollectedField, obj *model.EnablePrepaidUsagePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_EnablePrepaidUsagePayload_tierName,
+		func(ctx context.Context) (any, error) {
+			return obj.TierName, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_EnablePrepaidUsagePayload_tierName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnablePrepaidUsagePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EnablePrepaidUsagePayload_billingModel(ctx context.Context, field graphql.CollectedField, obj *model.EnablePrepaidUsagePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_EnablePrepaidUsagePayload_billingModel,
+		func(ctx context.Context) (any, error) {
+			return obj.BillingModel, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_EnablePrepaidUsagePayload_billingModel(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnablePrepaidUsagePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _EntitlementEntry_key(ctx context.Context, field graphql.CollectedField, obj *model.EntitlementEntry) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -65948,6 +67404,267 @@ func (ec *executionContext) fieldContext_FederationSummary_overallFailureRate(_ 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_quotedAt(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_quotedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.QuotedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_quotedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_effectiveAt(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_effectiveAt,
+		func(ctx context.Context) (any, error) {
+			return obj.EffectiveAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_effectiveAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_fingerprint(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_fingerprint,
+		func(ctx context.Context) (any, error) {
+			return obj.Fingerprint, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_fingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_dueNowMinor(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_dueNowMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.DueNowMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_dueNowMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_refundNowMinor(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_refundNowMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.RefundNowMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_refundNowMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_walletCreditNowMinor(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_walletCreditNowMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.WalletCreditNowMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_walletCreditNowMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_currency(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_currency,
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FreeCancellationReview_futureUsageMessage(ctx context.Context, field graphql.CollectedField, obj *model.FreeCancellationReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FreeCancellationReview_futureUsageMessage,
+		func(ctx context.Context) (any, error) {
+			return obj.FutureUsageMessage, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_FreeCancellationReview_futureUsageMessage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FreeCancellationReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -81809,6 +83526,607 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingDetails(ctx conte
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_enablePrepaidUsage(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_enablePrepaidUsage,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().EnablePrepaidUsage(ctx)
+		},
+		nil,
+		ec.marshalNEnablePrepaidUsagePayload2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEnablePrepaidUsagePayload,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_enablePrepaidUsage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "activated":
+				return ec.fieldContext_EnablePrepaidUsagePayload_activated(ctx, field)
+			case "awaitingFunds":
+				return ec.fieldContext_EnablePrepaidUsagePayload_awaitingFunds(ctx, field)
+			case "tierName":
+				return ec.fieldContext_EnablePrepaidUsagePayload_tierName(ctx, field)
+			case "billingModel":
+				return ec.fieldContext_EnablePrepaidUsagePayload_billingModel(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EnablePrepaidUsagePayload", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_previewFreeCancellation(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_previewFreeCancellation,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PreviewFreeCancellation(ctx, fc.Args["tierId"].(string))
+		},
+		nil,
+		ec.marshalNFreeCancellationReview2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐFreeCancellationReview,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_previewFreeCancellation(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "quotedAt":
+				return ec.fieldContext_FreeCancellationReview_quotedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_FreeCancellationReview_expiresAt(ctx, field)
+			case "effectiveAt":
+				return ec.fieldContext_FreeCancellationReview_effectiveAt(ctx, field)
+			case "fingerprint":
+				return ec.fieldContext_FreeCancellationReview_fingerprint(ctx, field)
+			case "dueNowMinor":
+				return ec.fieldContext_FreeCancellationReview_dueNowMinor(ctx, field)
+			case "refundNowMinor":
+				return ec.fieldContext_FreeCancellationReview_refundNowMinor(ctx, field)
+			case "walletCreditNowMinor":
+				return ec.fieldContext_FreeCancellationReview_walletCreditNowMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_FreeCancellationReview_currency(ctx, field)
+			case "futureUsageMessage":
+				return ec.fieldContext_FreeCancellationReview_futureUsageMessage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type FreeCancellationReview", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_previewFreeCancellation_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_confirmFreeCancellation(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_confirmFreeCancellation,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ConfirmFreeCancellation(ctx, fc.Args["tierId"].(string), fc.Args["quotedAt"].(time.Time), fc.Args["fingerprint"].(string))
+		},
+		nil,
+		ec.marshalNChangeBillingTierResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐChangeBillingTierResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_confirmFreeCancellation(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ChangeBillingTierResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_confirmFreeCancellation_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setAutomaticTopup(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_setAutomaticTopup,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetAutomaticTopup(ctx, fc.Args["input"].(model.SetAutomaticTopupInput))
+		},
+		nil,
+		ec.marshalNAutomaticTopupSettings2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_setAutomaticTopup(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_AutomaticTopupSettings_enabled(ctx, field)
+			case "thresholdEurCents":
+				return ec.fieldContext_AutomaticTopupSettings_thresholdEurCents(ctx, field)
+			case "netAmountMinor":
+				return ec.fieldContext_AutomaticTopupSettings_netAmountMinor(ctx, field)
+			case "monthlyGrossLimitMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_AutomaticTopupSettings_currency(ctx, field)
+			case "pausedReason":
+				return ec.fieldContext_AutomaticTopupSettings_pausedReason(ctx, field)
+			case "monthlyReservedOrSpentMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx, field)
+			case "available":
+				return ec.fieldContext_AutomaticTopupSettings_available(ctx, field)
+			case "unavailableReason":
+				return ec.fieldContext_AutomaticTopupSettings_unavailableReason(ctx, field)
+			case "consentVersion":
+				return ec.fieldContext_AutomaticTopupSettings_consentVersion(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AutomaticTopupSettings", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setAutomaticTopup_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformDisableAutomaticTopup(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformDisableAutomaticTopup,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformDisableAutomaticTopup(ctx, fc.Args["tenantId"].(string), fc.Args["reason"].(string))
+		},
+		nil,
+		ec.marshalNAutomaticTopupSettings2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformDisableAutomaticTopup(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_AutomaticTopupSettings_enabled(ctx, field)
+			case "thresholdEurCents":
+				return ec.fieldContext_AutomaticTopupSettings_thresholdEurCents(ctx, field)
+			case "netAmountMinor":
+				return ec.fieldContext_AutomaticTopupSettings_netAmountMinor(ctx, field)
+			case "monthlyGrossLimitMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_AutomaticTopupSettings_currency(ctx, field)
+			case "pausedReason":
+				return ec.fieldContext_AutomaticTopupSettings_pausedReason(ctx, field)
+			case "monthlyReservedOrSpentMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx, field)
+			case "available":
+				return ec.fieldContext_AutomaticTopupSettings_available(ctx, field)
+			case "unavailableReason":
+				return ec.fieldContext_AutomaticTopupSettings_unavailableReason(ctx, field)
+			case "consentVersion":
+				return ec.fieldContext_AutomaticTopupSettings_consentVersion(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AutomaticTopupSettings", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformDisableAutomaticTopup_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformRefundInvoice(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformRefundInvoice,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformRefundInvoice(ctx, fc.Args["tenantId"].(string), fc.Args["invoiceId"].(string), fc.Args["requestId"].(string), fc.Args["reason"].(string), fc.Args["confirmed"].(bool), fc.Args["fingerprint"].(string))
+		},
+		nil,
+		ec.marshalNPlatformInvoiceRefund2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformInvoiceRefund,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformRefundInvoice(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "requestId":
+				return ec.fieldContext_PlatformInvoiceRefund_requestId(ctx, field)
+			case "invoiceId":
+				return ec.fieldContext_PlatformInvoiceRefund_invoiceId(ctx, field)
+			case "provider":
+				return ec.fieldContext_PlatformInvoiceRefund_provider(ctx, field)
+			case "amountMinor":
+				return ec.fieldContext_PlatformInvoiceRefund_amountMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_PlatformInvoiceRefund_currency(ctx, field)
+			case "status":
+				return ec.fieldContext_PlatformInvoiceRefund_status(ctx, field)
+			case "fingerprint":
+				return ec.fieldContext_PlatformInvoiceRefund_fingerprint(ctx, field)
+			case "detail":
+				return ec.fieldContext_PlatformInvoiceRefund_detail(ctx, field)
+			case "providerRefundId":
+				return ec.fieldContext_PlatformInvoiceRefund_providerRefundId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PlatformInvoiceRefund", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformRefundInvoice_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformAdjustBalance(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformAdjustBalance,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformAdjustBalance(ctx, fc.Args["tenantId"].(string), fc.Args["amountCents"].(int), fc.Args["reason"].(string), fc.Args["referenceId"].(string))
+		},
+		nil,
+		ec.marshalNBalanceTransaction2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBalanceTransaction,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformAdjustBalance(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_BalanceTransaction_id(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_BalanceTransaction_tenantId(ctx, field)
+			case "amountCents":
+				return ec.fieldContext_BalanceTransaction_amountCents(ctx, field)
+			case "balanceAfterCents":
+				return ec.fieldContext_BalanceTransaction_balanceAfterCents(ctx, field)
+			case "transactionType":
+				return ec.fieldContext_BalanceTransaction_transactionType(ctx, field)
+			case "description":
+				return ec.fieldContext_BalanceTransaction_description(ctx, field)
+			case "referenceId":
+				return ec.fieldContext_BalanceTransaction_referenceId(ctx, field)
+			case "referenceType":
+				return ec.fieldContext_BalanceTransaction_referenceType(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_BalanceTransaction_createdAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BalanceTransaction", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformAdjustBalance_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformPreviewBillingTier(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformPreviewBillingTier,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformPreviewBillingTier(ctx, fc.Args["tenantId"].(string), fc.Args["tierName"].(string), fc.Args["reason"].(string))
+		},
+		nil,
+		ec.marshalNPlatformBillingAssignmentQuote2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignmentQuote,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformPreviewBillingTier(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "quotedAt":
+				return ec.fieldContext_PlatformBillingAssignmentQuote_quotedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_PlatformBillingAssignmentQuote_expiresAt(ctx, field)
+			case "fingerprint":
+				return ec.fieldContext_PlatformBillingAssignmentQuote_fingerprint(ctx, field)
+			case "effectsJson":
+				return ec.fieldContext_PlatformBillingAssignmentQuote_effectsJson(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PlatformBillingAssignmentQuote", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformPreviewBillingTier_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformAssignBillingTierWithReview(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformAssignBillingTierWithReview,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformAssignBillingTierWithReview(ctx, fc.Args["tenantId"].(string), fc.Args["tierName"].(string), fc.Args["reason"].(string), fc.Args["quotedAt"].(time.Time), fc.Args["fingerprint"].(string))
+		},
+		nil,
+		ec.marshalNPlatformBillingAssignment2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignment,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformAssignBillingTierWithReview(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "subscriptionId":
+				return ec.fieldContext_PlatformBillingAssignment_subscriptionId(ctx, field)
+			case "tierName":
+				return ec.fieldContext_PlatformBillingAssignment_tierName(ctx, field)
+			case "billingModel":
+				return ec.fieldContext_PlatformBillingAssignment_billingModel(ctx, field)
+			case "changed":
+				return ec.fieldContext_PlatformBillingAssignment_changed(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PlatformBillingAssignment", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformAssignBillingTierWithReview_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformAssignBillingTier(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformAssignBillingTier,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformAssignBillingTier(ctx, fc.Args["tenantId"].(string), fc.Args["tierName"].(string), fc.Args["reason"].(string))
+		},
+		nil,
+		ec.marshalNPlatformBillingAssignment2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignment,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformAssignBillingTier(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "subscriptionId":
+				return ec.fieldContext_PlatformBillingAssignment_subscriptionId(ctx, field)
+			case "tierName":
+				return ec.fieldContext_PlatformBillingAssignment_tierName(ctx, field)
+			case "billingModel":
+				return ec.fieldContext_PlatformBillingAssignment_billingModel(ctx, field)
+			case "changed":
+				return ec.fieldContext_PlatformBillingAssignment_changed(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PlatformBillingAssignment", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformAssignBillingTier_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_platformRecoverCheckout(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_platformRecoverCheckout,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().PlatformRecoverCheckout(ctx, fc.Args["tenantId"].(string), fc.Args["reservationId"].(string), fc.Args["reason"].(string), fc.Args["confirmed"].(bool))
+		},
+		nil,
+		ec.marshalNPlatformCheckoutRecovery2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformCheckoutRecovery,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_platformRecoverCheckout(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "provider":
+				return ec.fieldContext_PlatformCheckoutRecovery_provider(ctx, field)
+			case "status":
+				return ec.fieldContext_PlatformCheckoutRecovery_status(ctx, field)
+			case "amountCents":
+				return ec.fieldContext_PlatformCheckoutRecovery_amountCents(ctx, field)
+			case "currency":
+				return ec.fieldContext_PlatformCheckoutRecovery_currency(ctx, field)
+			case "amountKnown":
+				return ec.fieldContext_PlatformCheckoutRecovery_amountKnown(ctx, field)
+			case "outcome":
+				return ec.fieldContext_PlatformCheckoutRecovery_outcome(ctx, field)
+			case "detail":
+				return ec.fieldContext_PlatformCheckoutRecovery_detail(ctx, field)
+			case "auditId":
+				return ec.fieldContext_PlatformCheckoutRecovery_auditId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PlatformCheckoutRecovery", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_platformRecoverCheckout_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_updateSubscriptionCustomTerms(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -81834,6 +84152,8 @@ func (ec *executionContext) fieldContext_Mutation_updateSubscriptionCustomTerms(
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "automaticPrepaidUsage":
+				return ec.fieldContext_TenantSubscription_automaticPrepaidUsage(ctx, field)
 			case "id":
 				return ec.fieldContext_TenantSubscription_id(ctx, field)
 			case "tenantId":
@@ -91894,6 +94214,122 @@ func (ec *executionContext) fieldContext_PaymentFailed_providerReferenceId(_ con
 	return fc, nil
 }
 
+func (ec *executionContext) _PaymentGrace_active(ctx context.Context, field graphql.CollectedField, obj *purserpb.PaymentGrace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PaymentGrace_active,
+		func(ctx context.Context) (any, error) {
+			return obj.Active, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PaymentGrace_active(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PaymentGrace",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PaymentGrace_endsAt(ctx context.Context, field graphql.CollectedField, obj *purserpb.PaymentGrace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PaymentGrace_endsAt,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.PaymentGrace().EndsAt(ctx, obj)
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PaymentGrace_endsAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PaymentGrace",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PaymentGrace_remainingCreditCents(ctx context.Context, field graphql.CollectedField, obj *purserpb.PaymentGrace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PaymentGrace_remainingCreditCents,
+		func(ctx context.Context) (any, error) {
+			return obj.RemainingCreditCents, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PaymentGrace_remainingCreditCents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PaymentGrace",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PaymentGrace_mediaRecoveryUntil(ctx context.Context, field graphql.CollectedField, obj *purserpb.PaymentGrace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PaymentGrace_mediaRecoveryUntil,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.PaymentGrace().MediaRecoveryUntil(ctx, obj)
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PaymentGrace_mediaRecoveryUntil(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PaymentGrace",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Platform_tenants(ctx context.Context, field graphql.CollectedField, obj *markers.Platform) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -92082,6 +94518,731 @@ func (ec *executionContext) fieldContext_Platform_incidents(ctx context.Context,
 	if fc.Args, err = ec.field_Platform_incidents_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignment_subscriptionId(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignment_subscriptionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SubscriptionID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignment_subscriptionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignment_tierName(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignment_tierName,
+		func(ctx context.Context) (any, error) {
+			return obj.TierName, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignment_tierName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignment_billingModel(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignment_billingModel,
+		func(ctx context.Context) (any, error) {
+			return obj.BillingModel, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignment_billingModel(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignment_changed(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignment_changed,
+		func(ctx context.Context) (any, error) {
+			return obj.Changed, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignment_changed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignmentQuote_quotedAt(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignmentQuote) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignmentQuote_quotedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.QuotedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignmentQuote_quotedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignmentQuote",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignmentQuote_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignmentQuote) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignmentQuote_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignmentQuote_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignmentQuote",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignmentQuote_fingerprint(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignmentQuote) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignmentQuote_fingerprint,
+		func(ctx context.Context) (any, error) {
+			return obj.Fingerprint, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignmentQuote_fingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignmentQuote",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformBillingAssignmentQuote_effectsJson(ctx context.Context, field graphql.CollectedField, obj *model.PlatformBillingAssignmentQuote) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformBillingAssignmentQuote_effectsJson,
+		func(ctx context.Context) (any, error) {
+			return obj.EffectsJSON, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformBillingAssignmentQuote_effectsJson(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformBillingAssignmentQuote",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_provider(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_provider,
+		func(ctx context.Context) (any, error) {
+			return obj.Provider, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_status(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_amountCents(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_amountCents,
+		func(ctx context.Context) (any, error) {
+			return obj.AmountCents, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_amountCents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_currency(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_currency,
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_amountKnown(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_amountKnown,
+		func(ctx context.Context) (any, error) {
+			return obj.AmountKnown, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_amountKnown(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_outcome(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_outcome,
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_detail(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_detail,
+		func(ctx context.Context) (any, error) {
+			return obj.Detail, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_detail(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformCheckoutRecovery_auditId(ctx context.Context, field graphql.CollectedField, obj *model.PlatformCheckoutRecovery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformCheckoutRecovery_auditId,
+		func(ctx context.Context) (any, error) {
+			return obj.AuditID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformCheckoutRecovery_auditId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformCheckoutRecovery",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_requestId(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_requestId,
+		func(ctx context.Context) (any, error) {
+			return obj.RequestID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_requestId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_invoiceId(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_invoiceId,
+		func(ctx context.Context) (any, error) {
+			return obj.InvoiceID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_invoiceId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_provider(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_provider,
+		func(ctx context.Context) (any, error) {
+			return obj.Provider, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_amountMinor(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_amountMinor,
+		func(ctx context.Context) (any, error) {
+			return obj.AmountMinor, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_amountMinor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_currency(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_currency,
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_status(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_fingerprint(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_fingerprint,
+		func(ctx context.Context) (any, error) {
+			return obj.Fingerprint, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_fingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_detail(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_detail,
+		func(ctx context.Context) (any, error) {
+			return obj.Detail, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_detail(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlatformInvoiceRefund_providerRefundId(ctx context.Context, field graphql.CollectedField, obj *model.PlatformInvoiceRefund) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlatformInvoiceRefund_providerRefundId,
+		func(ctx context.Context) (any, error) {
+			return obj.ProviderRefundID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlatformInvoiceRefund_providerRefundId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlatformInvoiceRefund",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
 	}
 	return fc, nil
 }
@@ -95072,6 +98233,45 @@ func (ec *executionContext) fieldContext_PlayerBootTimeSeriesBucket_p99TtfMs(_ c
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PrepaidBalance_paymentGrace(ctx context.Context, field graphql.CollectedField, obj *model.PrepaidBalance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PrepaidBalance_paymentGrace,
+		func(ctx context.Context) (any, error) {
+			return obj.PaymentGrace, nil
+		},
+		nil,
+		ec.marshalOPaymentGrace2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐPaymentGrace,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PrepaidBalance_paymentGrace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PrepaidBalance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "active":
+				return ec.fieldContext_PaymentGrace_active(ctx, field)
+			case "endsAt":
+				return ec.fieldContext_PaymentGrace_endsAt(ctx, field)
+			case "remainingCreditCents":
+				return ec.fieldContext_PaymentGrace_remainingCreditCents(ctx, field)
+			case "mediaRecoveryUntil":
+				return ec.fieldContext_PaymentGrace_mediaRecoveryUntil(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PaymentGrace", field.Name)
 		},
 	}
 	return fc, nil
@@ -100213,6 +103413,120 @@ func (ec *executionContext) fieldContext_QualityTierSummary_codecAv1Minutes(_ co
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_automaticTopup(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_automaticTopup,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().AutomaticTopup(ctx)
+		},
+		nil,
+		ec.marshalNAutomaticTopupSettings2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_automaticTopup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_AutomaticTopupSettings_enabled(ctx, field)
+			case "thresholdEurCents":
+				return ec.fieldContext_AutomaticTopupSettings_thresholdEurCents(ctx, field)
+			case "netAmountMinor":
+				return ec.fieldContext_AutomaticTopupSettings_netAmountMinor(ctx, field)
+			case "monthlyGrossLimitMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_AutomaticTopupSettings_currency(ctx, field)
+			case "pausedReason":
+				return ec.fieldContext_AutomaticTopupSettings_pausedReason(ctx, field)
+			case "monthlyReservedOrSpentMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx, field)
+			case "available":
+				return ec.fieldContext_AutomaticTopupSettings_available(ctx, field)
+			case "unavailableReason":
+				return ec.fieldContext_AutomaticTopupSettings_unavailableReason(ctx, field)
+			case "consentVersion":
+				return ec.fieldContext_AutomaticTopupSettings_consentVersion(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AutomaticTopupSettings", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_platformAutomaticTopup(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_platformAutomaticTopup,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().PlatformAutomaticTopup(ctx, fc.Args["tenantId"].(string))
+		},
+		nil,
+		ec.marshalNAutomaticTopupSettings2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_platformAutomaticTopup(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "enabled":
+				return ec.fieldContext_AutomaticTopupSettings_enabled(ctx, field)
+			case "thresholdEurCents":
+				return ec.fieldContext_AutomaticTopupSettings_thresholdEurCents(ctx, field)
+			case "netAmountMinor":
+				return ec.fieldContext_AutomaticTopupSettings_netAmountMinor(ctx, field)
+			case "monthlyGrossLimitMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyGrossLimitMinor(ctx, field)
+			case "currency":
+				return ec.fieldContext_AutomaticTopupSettings_currency(ctx, field)
+			case "pausedReason":
+				return ec.fieldContext_AutomaticTopupSettings_pausedReason(ctx, field)
+			case "monthlyReservedOrSpentMinor":
+				return ec.fieldContext_AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx, field)
+			case "available":
+				return ec.fieldContext_AutomaticTopupSettings_available(ctx, field)
+			case "unavailableReason":
+				return ec.fieldContext_AutomaticTopupSettings_unavailableReason(ctx, field)
+			case "consentVersion":
+				return ec.fieldContext_AutomaticTopupSettings_consentVersion(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AutomaticTopupSettings", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_platformAutomaticTopup_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_authSessionsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -101412,6 +104726,8 @@ func (ec *executionContext) fieldContext_Query_prepaidBalance(_ context.Context,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "paymentGrace":
+				return ec.fieldContext_PrepaidBalance_paymentGrace(ctx, field)
 			case "id":
 				return ec.fieldContext_PrepaidBalance_id(ctx, field)
 			case "tenantId":
@@ -128551,6 +131867,79 @@ func (ec *executionContext) fieldContext_TenantAdminBilling_tenantId(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _TenantAdminBilling_subscription(ctx context.Context, field graphql.CollectedField, obj *markers.TenantAdminBilling) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TenantAdminBilling_subscription,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.TenantAdminBilling().Subscription(ctx, obj)
+		},
+		nil,
+		ec.marshalOTenantSubscription2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐTenantSubscription,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_TenantAdminBilling_subscription(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantAdminBilling",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "automaticPrepaidUsage":
+				return ec.fieldContext_TenantSubscription_automaticPrepaidUsage(ctx, field)
+			case "id":
+				return ec.fieldContext_TenantSubscription_id(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_TenantSubscription_tenantId(ctx, field)
+			case "tierId":
+				return ec.fieldContext_TenantSubscription_tierId(ctx, field)
+			case "status":
+				return ec.fieldContext_TenantSubscription_status(ctx, field)
+			case "billingEmail":
+				return ec.fieldContext_TenantSubscription_billingEmail(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_TenantSubscription_startedAt(ctx, field)
+			case "trialEndsAt":
+				return ec.fieldContext_TenantSubscription_trialEndsAt(ctx, field)
+			case "nextBillingDate":
+				return ec.fieldContext_TenantSubscription_nextBillingDate(ctx, field)
+			case "cancelledAt":
+				return ec.fieldContext_TenantSubscription_cancelledAt(ctx, field)
+			case "customFeatures":
+				return ec.fieldContext_TenantSubscription_customFeatures(ctx, field)
+			case "pricingOverrides":
+				return ec.fieldContext_TenantSubscription_pricingOverrides(ctx, field)
+			case "entitlementOverrides":
+				return ec.fieldContext_TenantSubscription_entitlementOverrides(ctx, field)
+			case "paymentMethod":
+				return ec.fieldContext_TenantSubscription_paymentMethod(ctx, field)
+			case "billingModel":
+				return ec.fieldContext_TenantSubscription_billingModel(ctx, field)
+			case "pendingTier":
+				return ec.fieldContext_TenantSubscription_pendingTier(ctx, field)
+			case "pendingEffectiveAt":
+				return ec.fieldContext_TenantSubscription_pendingEffectiveAt(ctx, field)
+			case "pendingReason":
+				return ec.fieldContext_TenantSubscription_pendingReason(ctx, field)
+			case "presentmentCurrency":
+				return ec.fieldContext_TenantSubscription_presentmentCurrency(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_TenantSubscription_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_TenantSubscription_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TenantSubscription", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TenantAdminBilling_snapshot(ctx context.Context, field graphql.CollectedField, obj *markers.TenantAdminBilling) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -128736,6 +132125,8 @@ func (ec *executionContext) fieldContext_TenantAdminBilling_prepaidBalance(_ con
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "paymentGrace":
+				return ec.fieldContext_PrepaidBalance_paymentGrace(ctx, field)
 			case "id":
 				return ec.fieldContext_PrepaidBalance_id(ctx, field)
 			case "tenantId":
@@ -129229,6 +132620,8 @@ func (ec *executionContext) fieldContext_TenantAdminDetail_billing(_ context.Con
 			switch field.Name {
 			case "tenantId":
 				return ec.fieldContext_TenantAdminBilling_tenantId(ctx, field)
+			case "subscription":
+				return ec.fieldContext_TenantAdminBilling_subscription(ctx, field)
 			case "snapshot":
 				return ec.fieldContext_TenantAdminBilling_snapshot(ctx, field)
 			case "lifecycle":
@@ -131509,6 +134902,35 @@ func (ec *executionContext) fieldContext_TenantStorageUsage_frozenVodBytes(_ con
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_automaticPrepaidUsage(ctx context.Context, field graphql.CollectedField, obj *purserpb.TenantSubscription) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TenantSubscription_automaticPrepaidUsage,
+		func(ctx context.Context) (any, error) {
+			return obj.AutomaticPrepaidUsage, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_automaticPrepaidUsage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -148314,6 +151736,84 @@ func (ec *executionContext) unmarshalInputSendMessageInput(ctx context.Context, 
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputSetAutomaticTopupInput(ctx context.Context, obj any) (model.SetAutomaticTopupInput, error) {
+	var it model.SetAutomaticTopupInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["thresholdEurCents"]; !present {
+		asMap["thresholdEurCents"] = 500
+	}
+	if _, present := asMap["netAmountMinor"]; !present {
+		asMap["netAmountMinor"] = 2000
+	}
+	if _, present := asMap["monthlyGrossLimitMinor"]; !present {
+		asMap["monthlyGrossLimitMinor"] = 10000
+	}
+	if _, present := asMap["consentVersion"]; !present {
+		asMap["consentVersion"] = ""
+	}
+
+	fieldsInOrder := [...]string{"enabled", "thresholdEurCents", "netAmountMinor", "monthlyGrossLimitMinor", "currency", "consentVersion"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "thresholdEurCents":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("thresholdEurCents"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ThresholdEurCents = data
+		case "netAmountMinor":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("netAmountMinor"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NetAmountMinor = data
+		case "monthlyGrossLimitMinor":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("monthlyGrossLimitMinor"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MonthlyGrossLimitMinor = data
+		case "currency":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("currency"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Currency = data
+		case "consentVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("consentVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ConsentVersion = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputSetMediaRetentionPolicyInput(ctx context.Context, obj any) (model.SetMediaRetentionPolicyInput, error) {
 	var it model.SetMediaRetentionPolicyInput
 	if obj == nil {
@@ -149300,13 +152800,27 @@ func (ec *executionContext) unmarshalInputUpdateSubscriptionCustomTermsInput(ctx
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"customFeatures", "pricingOverrides", "entitlementOverrides"}
+	fieldsInOrder := [...]string{"expectedEntitlementOverrides", "reason", "customFeatures", "pricingOverrides", "entitlementOverrides"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "expectedEntitlementOverrides":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedEntitlementOverrides"))
+			data, err := ec.unmarshalOEntitlementEntryInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEntitlementEntryInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedEntitlementOverrides = data
+		case "reason":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reason"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Reason = data
 		case "customFeatures":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customFeatures"))
 			data, err := ec.unmarshalOBillingFeaturesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBillingFeaturesInput(ctx, v)
@@ -155206,6 +158720,42 @@ func (ec *executionContext) _AnalyticsLifecycle(ctx context.Context, sel ast.Sel
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("AnalyticsLifecycle")
+		case "recordingEventsConnection":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._AnalyticsLifecycle_recordingEventsConnection(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "streamEventsConnection":
 			field := field
 
@@ -157222,6 +160772,90 @@ func (ec *executionContext) _AuthSessionEdge(ctx context.Context, sel ast.Select
 			}
 		case "node":
 			out.Values[i] = ec._AuthSessionEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var automaticTopupSettingsImplementors = []string{"AutomaticTopupSettings"}
+
+func (ec *executionContext) _AutomaticTopupSettings(ctx context.Context, sel ast.SelectionSet, obj *purserpb.AutomaticTopupSettings) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, automaticTopupSettingsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("AutomaticTopupSettings")
+		case "enabled":
+			out.Values[i] = ec._AutomaticTopupSettings_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "thresholdEurCents":
+			out.Values[i] = ec._AutomaticTopupSettings_thresholdEurCents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "netAmountMinor":
+			out.Values[i] = ec._AutomaticTopupSettings_netAmountMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "monthlyGrossLimitMinor":
+			out.Values[i] = ec._AutomaticTopupSettings_monthlyGrossLimitMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._AutomaticTopupSettings_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pausedReason":
+			out.Values[i] = ec._AutomaticTopupSettings_pausedReason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "monthlyReservedOrSpentMinor":
+			out.Values[i] = ec._AutomaticTopupSettings_monthlyReservedOrSpentMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "available":
+			out.Values[i] = ec._AutomaticTopupSettings_available(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unavailableReason":
+			out.Values[i] = ec._AutomaticTopupSettings_unavailableReason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "consentVersion":
+			out.Values[i] = ec._AutomaticTopupSettings_consentVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -165669,6 +169303,60 @@ func (ec *executionContext) _EffectiveRetention(ctx context.Context, sel ast.Sel
 	return out
 }
 
+var enablePrepaidUsagePayloadImplementors = []string{"EnablePrepaidUsagePayload"}
+
+func (ec *executionContext) _EnablePrepaidUsagePayload(ctx context.Context, sel ast.SelectionSet, obj *model.EnablePrepaidUsagePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, enablePrepaidUsagePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("EnablePrepaidUsagePayload")
+		case "activated":
+			out.Values[i] = ec._EnablePrepaidUsagePayload_activated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "awaitingFunds":
+			out.Values[i] = ec._EnablePrepaidUsagePayload_awaitingFunds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tierName":
+			out.Values[i] = ec._EnablePrepaidUsagePayload_tierName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "billingModel":
+			out.Values[i] = ec._EnablePrepaidUsagePayload_billingModel(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var entitlementEntryImplementors = []string{"EntitlementEntry"}
 
 func (ec *executionContext) _EntitlementEntry(ctx context.Context, sel ast.SelectionSet, obj *model.EntitlementEntry) graphql.Marshaler {
@@ -166391,6 +170079,85 @@ func (ec *executionContext) _FederationSummary(ctx context.Context, sel ast.Sele
 			out.Values[i] = ec._FederationSummary_overallFailureRate(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var freeCancellationReviewImplementors = []string{"FreeCancellationReview"}
+
+func (ec *executionContext) _FreeCancellationReview(ctx context.Context, sel ast.SelectionSet, obj *model.FreeCancellationReview) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, freeCancellationReviewImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FreeCancellationReview")
+		case "quotedAt":
+			out.Values[i] = ec._FreeCancellationReview_quotedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._FreeCancellationReview_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "effectiveAt":
+			out.Values[i] = ec._FreeCancellationReview_effectiveAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fingerprint":
+			out.Values[i] = ec._FreeCancellationReview_fingerprint(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dueNowMinor":
+			out.Values[i] = ec._FreeCancellationReview_dueNowMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "refundNowMinor":
+			out.Values[i] = ec._FreeCancellationReview_refundNowMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "walletCreditNowMinor":
+			out.Values[i] = ec._FreeCancellationReview_walletCreditNowMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._FreeCancellationReview_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "futureUsageMessage":
+			out.Values[i] = ec._FreeCancellationReview_futureUsageMessage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -173327,6 +177094,83 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "enablePrepaidUsage":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_enablePrepaidUsage(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "previewFreeCancellation":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_previewFreeCancellation(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "confirmFreeCancellation":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_confirmFreeCancellation(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setAutomaticTopup":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setAutomaticTopup(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformDisableAutomaticTopup":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformDisableAutomaticTopup(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformRefundInvoice":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformRefundInvoice(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformAdjustBalance":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformAdjustBalance(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformPreviewBillingTier":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformPreviewBillingTier(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformAssignBillingTierWithReview":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformAssignBillingTierWithReview(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformAssignBillingTier":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformAssignBillingTier(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "platformRecoverCheckout":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_platformRecoverCheckout(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "updateSubscriptionCustomTerms":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_updateSubscriptionCustomTerms(ctx, field)
@@ -178207,6 +182051,116 @@ func (ec *executionContext) _PaymentFailed(ctx context.Context, sel ast.Selectio
 	return out
 }
 
+var paymentGraceImplementors = []string{"PaymentGrace"}
+
+func (ec *executionContext) _PaymentGrace(ctx context.Context, sel ast.SelectionSet, obj *purserpb.PaymentGrace) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, paymentGraceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PaymentGrace")
+		case "active":
+			out.Values[i] = ec._PaymentGrace_active(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "endsAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PaymentGrace_endsAt(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "remainingCreditCents":
+			out.Values[i] = ec._PaymentGrace_remainingCreditCents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "mediaRecoveryUntil":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PaymentGrace_mediaRecoveryUntil(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var platformImplementors = []string{"Platform"}
 
 func (ec *executionContext) _Platform(ctx context.Context, sel ast.SelectionSet, obj *markers.Platform) graphql.Marshaler {
@@ -178359,6 +182313,267 @@ func (ec *executionContext) _Platform(ctx context.Context, sel ast.SelectionSet,
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var platformBillingAssignmentImplementors = []string{"PlatformBillingAssignment"}
+
+func (ec *executionContext) _PlatformBillingAssignment(ctx context.Context, sel ast.SelectionSet, obj *model.PlatformBillingAssignment) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, platformBillingAssignmentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PlatformBillingAssignment")
+		case "subscriptionId":
+			out.Values[i] = ec._PlatformBillingAssignment_subscriptionId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tierName":
+			out.Values[i] = ec._PlatformBillingAssignment_tierName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "billingModel":
+			out.Values[i] = ec._PlatformBillingAssignment_billingModel(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "changed":
+			out.Values[i] = ec._PlatformBillingAssignment_changed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var platformBillingAssignmentQuoteImplementors = []string{"PlatformBillingAssignmentQuote"}
+
+func (ec *executionContext) _PlatformBillingAssignmentQuote(ctx context.Context, sel ast.SelectionSet, obj *model.PlatformBillingAssignmentQuote) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, platformBillingAssignmentQuoteImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PlatformBillingAssignmentQuote")
+		case "quotedAt":
+			out.Values[i] = ec._PlatformBillingAssignmentQuote_quotedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._PlatformBillingAssignmentQuote_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fingerprint":
+			out.Values[i] = ec._PlatformBillingAssignmentQuote_fingerprint(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "effectsJson":
+			out.Values[i] = ec._PlatformBillingAssignmentQuote_effectsJson(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var platformCheckoutRecoveryImplementors = []string{"PlatformCheckoutRecovery"}
+
+func (ec *executionContext) _PlatformCheckoutRecovery(ctx context.Context, sel ast.SelectionSet, obj *model.PlatformCheckoutRecovery) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, platformCheckoutRecoveryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PlatformCheckoutRecovery")
+		case "provider":
+			out.Values[i] = ec._PlatformCheckoutRecovery_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._PlatformCheckoutRecovery_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "amountCents":
+			out.Values[i] = ec._PlatformCheckoutRecovery_amountCents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._PlatformCheckoutRecovery_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "amountKnown":
+			out.Values[i] = ec._PlatformCheckoutRecovery_amountKnown(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "outcome":
+			out.Values[i] = ec._PlatformCheckoutRecovery_outcome(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "detail":
+			out.Values[i] = ec._PlatformCheckoutRecovery_detail(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "auditId":
+			out.Values[i] = ec._PlatformCheckoutRecovery_auditId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var platformInvoiceRefundImplementors = []string{"PlatformInvoiceRefund"}
+
+func (ec *executionContext) _PlatformInvoiceRefund(ctx context.Context, sel ast.SelectionSet, obj *model.PlatformInvoiceRefund) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, platformInvoiceRefundImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PlatformInvoiceRefund")
+		case "requestId":
+			out.Values[i] = ec._PlatformInvoiceRefund_requestId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "invoiceId":
+			out.Values[i] = ec._PlatformInvoiceRefund_invoiceId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "provider":
+			out.Values[i] = ec._PlatformInvoiceRefund_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "amountMinor":
+			out.Values[i] = ec._PlatformInvoiceRefund_amountMinor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._PlatformInvoiceRefund_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._PlatformInvoiceRefund_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fingerprint":
+			out.Values[i] = ec._PlatformInvoiceRefund_fingerprint(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "detail":
+			out.Values[i] = ec._PlatformInvoiceRefund_detail(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "providerRefundId":
+			out.Values[i] = ec._PlatformInvoiceRefund_providerRefundId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -179627,6 +183842,8 @@ func (ec *executionContext) _PrepaidBalance(ctx context.Context, sel ast.Selecti
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("PrepaidBalance")
+		case "paymentGrace":
+			out.Values[i] = ec._PrepaidBalance_paymentGrace(ctx, field, obj)
 		case "id":
 			out.Values[i] = ec._PrepaidBalance_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -182277,6 +186494,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Query")
+		case "automaticTopup":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_automaticTopup(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "platformAutomaticTopup":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_platformAutomaticTopup(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "authSessionsConnection":
 			field := field
 
@@ -195465,6 +199726,39 @@ func (ec *executionContext) _TenantAdminBilling(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "subscription":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantAdminBilling_subscription(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "snapshot":
 			field := field
 
@@ -196960,6 +201254,11 @@ func (ec *executionContext) _TenantSubscription(ctx context.Context, sel ast.Sel
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("TenantSubscription")
+		case "automaticPrepaidUsage":
+			out.Values[i] = ec._TenantSubscription_automaticPrepaidUsage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "id":
 			out.Values[i] = ec._TenantSubscription_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -203874,6 +208173,20 @@ func (ec *executionContext) marshalNAuthSessionEdge2ᚖframeworksᚋapi_gateway�
 	return ec._AuthSessionEdge(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNAutomaticTopupSettings2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings(ctx context.Context, sel ast.SelectionSet, v purserpb.AutomaticTopupSettings) graphql.Marshaler {
+	return ec._AutomaticTopupSettings(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAutomaticTopupSettings2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐAutomaticTopupSettings(ctx context.Context, sel ast.SelectionSet, v *purserpb.AutomaticTopupSettings) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._AutomaticTopupSettings(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNAvailableCluster2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAvailableClusterᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.AvailableCluster) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -203938,6 +208251,10 @@ func (ec *executionContext) marshalNAvailableClusterEdge2ᚖframeworksᚋapi_gat
 		return graphql.Null
 	}
 	return ec._AvailableClusterEdge(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNBalanceTransaction2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBalanceTransaction(ctx context.Context, sel ast.SelectionSet, v model.BalanceTransaction) graphql.Marshaler {
+	return ec._BalanceTransaction(ctx, sel, &v)
 }
 
 func (ec *executionContext) marshalNBalanceTransaction2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBalanceTransactionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.BalanceTransaction) graphql.Marshaler {
@@ -205627,6 +209944,20 @@ func (ec *executionContext) marshalNDisconnectIngestResult2frameworksᚋapi_gate
 	return ec._DisconnectIngestResult(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNEnablePrepaidUsagePayload2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐEnablePrepaidUsagePayload(ctx context.Context, sel ast.SelectionSet, v model.EnablePrepaidUsagePayload) graphql.Marshaler {
+	return ec._EnablePrepaidUsagePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNEnablePrepaidUsagePayload2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEnablePrepaidUsagePayload(ctx context.Context, sel ast.SelectionSet, v *model.EnablePrepaidUsagePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._EnablePrepaidUsagePayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNEntitlementEntry2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐEntitlementEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.EntitlementEntry) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -206004,6 +210335,20 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 		}
 	}
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) marshalNFreeCancellationReview2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐFreeCancellationReview(ctx context.Context, sel ast.SelectionSet, v model.FreeCancellationReview) graphql.Marshaler {
+	return ec._FreeCancellationReview(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNFreeCancellationReview2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐFreeCancellationReview(ctx context.Context, sel ast.SelectionSet, v *model.FreeCancellationReview) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FreeCancellationReview(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNFreeFallbackReason2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐFreeFallbackReason(ctx context.Context, v any) (model.FreeFallbackReason, error) {
@@ -208209,6 +212554,62 @@ func (ec *executionContext) marshalNPlatform2ᚖframeworksᚋapi_gatewayᚋgraph
 	return ec._Platform(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNPlatformBillingAssignment2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignment(ctx context.Context, sel ast.SelectionSet, v model.PlatformBillingAssignment) graphql.Marshaler {
+	return ec._PlatformBillingAssignment(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPlatformBillingAssignment2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignment(ctx context.Context, sel ast.SelectionSet, v *model.PlatformBillingAssignment) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PlatformBillingAssignment(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNPlatformBillingAssignmentQuote2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignmentQuote(ctx context.Context, sel ast.SelectionSet, v model.PlatformBillingAssignmentQuote) graphql.Marshaler {
+	return ec._PlatformBillingAssignmentQuote(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPlatformBillingAssignmentQuote2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformBillingAssignmentQuote(ctx context.Context, sel ast.SelectionSet, v *model.PlatformBillingAssignmentQuote) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PlatformBillingAssignmentQuote(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNPlatformCheckoutRecovery2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformCheckoutRecovery(ctx context.Context, sel ast.SelectionSet, v model.PlatformCheckoutRecovery) graphql.Marshaler {
+	return ec._PlatformCheckoutRecovery(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPlatformCheckoutRecovery2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformCheckoutRecovery(ctx context.Context, sel ast.SelectionSet, v *model.PlatformCheckoutRecovery) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PlatformCheckoutRecovery(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNPlatformInvoiceRefund2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformInvoiceRefund(ctx context.Context, sel ast.SelectionSet, v model.PlatformInvoiceRefund) graphql.Marshaler {
+	return ec._PlatformInvoiceRefund(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPlatformInvoiceRefund2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformInvoiceRefund(ctx context.Context, sel ast.SelectionSet, v *model.PlatformInvoiceRefund) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PlatformInvoiceRefund(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNPlatformTenantIndex2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformTenantIndex(ctx context.Context, sel ast.SelectionSet, v model.PlatformTenantIndex) graphql.Marshaler {
 	return ec._PlatformTenantIndex(ctx, sel, &v)
 }
@@ -209191,6 +213592,11 @@ func (ec *executionContext) marshalNSessionQoeTimeSeriesBucket2ᚖgithubᚗcom�
 		return graphql.Null
 	}
 	return ec._SessionQoeTimeSeriesBucket(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSetAutomaticTopupInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetAutomaticTopupInput(ctx context.Context, v any) (model.SetAutomaticTopupInput, error) {
+	res, err := ec.unmarshalInputSetAutomaticTopupInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalNSetMediaRetentionPolicyInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSetMediaRetentionPolicyInput(ctx context.Context, v any) (model.SetMediaRetentionPolicyInput, error) {
@@ -213313,6 +217719,13 @@ func (ec *executionContext) marshalOOrchestratorWithDetails2ᚖframeworksᚋapi_
 		return graphql.Null
 	}
 	return ec._OrchestratorWithDetails(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOPaymentGrace2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐPaymentGrace(ctx context.Context, sel ast.SelectionSet, v *purserpb.PaymentGrace) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._PaymentGrace(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOPendingTierReason2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierReason(ctx context.Context, v any) (*model.PendingTierReason, error) {

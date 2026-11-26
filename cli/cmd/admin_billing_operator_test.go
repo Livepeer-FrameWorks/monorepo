@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -15,9 +16,10 @@ import (
 const billingOperatorTenant = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
 
 type adjustBalanceCall struct {
-	tenantID    string
-	amountCents int64
-	description string
+	tenantID                   string
+	amountCents                int64
+	description                string
+	referenceID, referenceType *string
 }
 
 type assignTierCall struct {
@@ -123,6 +125,9 @@ func TestRunBillingCreditResolvesEmailAndRecordsReason(t *testing.T) {
 		t.Fatalf("AdjustBalance calls = %d, want 1", len(fake.adjustCalls))
 	}
 	call := fake.adjustCalls[0]
+	if call.referenceID == nil || validateUUID(*call.referenceID) != nil {
+		t.Fatal("a default operator adjustment has no recoverable retry identity")
+	}
 	if call.tenantID != billingOperatorTenant || call.amountCents != 2500 || call.description != "operator credit: staging storage test" {
 		t.Fatalf("AdjustBalance call = %+v", call)
 	}
@@ -207,7 +212,7 @@ func TestRunBillingSetTier(t *testing.T) {
 		EligibleClusterIds: []string{"c-1", "c-2"},
 	}}
 	var buf bytes.Buffer
-	if err := runBillingSetTier(context.Background(), &buf, fake, nil, "", billingSetTierRequest{
+	if err := runBillingSetTier(context.Background(), &buf, fake, nil, "", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Target: billingTenantTarget{TenantID: billingOperatorTenant}, Tier: "production", Reason: "comped partner",
 	}, false); err != nil {
 		t.Fatalf("runBillingSetTier: %v", err)
@@ -228,7 +233,7 @@ func TestRunBillingSetTier(t *testing.T) {
 
 	unchanged := &fakeAdminBillingClient{assignResp: &purserpb.AdminAssignTierResponse{TierName: "production", BillingModel: "postpaid"}}
 	var ubuf bytes.Buffer
-	if err := runBillingSetTier(context.Background(), &ubuf, unchanged, nil, "", billingSetTierRequest{
+	if err := runBillingSetTier(context.Background(), &ubuf, unchanged, nil, "", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Target: billingTenantTarget{TenantID: billingOperatorTenant}, Tier: "production", BillingModel: "POSTPAID", Reason: "r",
 	}, false); err != nil {
 		t.Fatalf("runBillingSetTier: %v", err)
@@ -238,7 +243,7 @@ func TestRunBillingSetTier(t *testing.T) {
 	}
 
 	var jbuf bytes.Buffer
-	if err := runBillingSetTier(context.Background(), &jbuf, fake, nil, "", billingSetTierRequest{
+	if err := runBillingSetTier(context.Background(), &jbuf, fake, nil, "", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Target: billingTenantTarget{TenantID: billingOperatorTenant}, Tier: "production", Reason: "r",
 	}, true); err != nil {
 		t.Fatalf("json: %v", err)
@@ -251,7 +256,7 @@ func TestRunBillingSetTier(t *testing.T) {
 func TestRunBillingSetTierResolvesEmail(t *testing.T) {
 	lookup := &fakeUserLookup{resp: &commodorepb.AdminLookupUserByEmailResponse{TenantId: billingOperatorTenant, Email: "owner@example.com"}}
 	fake := &fakeAdminBillingClient{assignResp: &purserpb.AdminAssignTierResponse{TierName: "payg", BillingModel: "prepaid", Changed: true}}
-	if err := runBillingSetTier(context.Background(), &bytes.Buffer{}, fake, lookup, "jwt", billingSetTierRequest{
+	if err := runBillingSetTier(context.Background(), &bytes.Buffer{}, fake, lookup, "jwt", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Target: billingTenantTarget{Email: "owner@example.com"}, Tier: "payg", BillingModel: "prepaid", Reason: "r",
 	}, false); err != nil {
 		t.Fatalf("runBillingSetTier: %v", err)
@@ -268,10 +273,10 @@ func TestRunBillingSetTierRefusesBeforeAnyRPC(t *testing.T) {
 		req     billingSetTierRequest
 		wantErr string
 	}{
-		{"missing tier", billingSetTierRequest{Target: target, Reason: "r"}, "--tier is required"},
-		{"bad model", billingSetTierRequest{Target: target, Tier: "production", BillingModel: "monthly", Reason: "r"}, "--billing-model must be prepaid or postpaid"},
-		{"missing reason", billingSetTierRequest{Target: target, Tier: "production"}, "--reason is required"},
-		{"no target", billingSetTierRequest{Tier: "production", Reason: "r"}, "one of --tenant-id or --email"},
+		{"missing tier", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano), Target: target, Reason: "r"}, "--tier is required"},
+		{"bad model", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano), Target: target, Tier: "production", BillingModel: "monthly", Reason: "r"}, "--billing-model must be prepaid or postpaid"},
+		{"missing reason", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano), Target: target, Tier: "production"}, "--reason is required"},
+		{"no target", billingSetTierRequest{Review: strings.Repeat("a", 64), QuotedAt: time.Now().UTC().Format(time.RFC3339Nano), Tier: "production", Reason: "r"}, "one of --tenant-id or --email"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeAdminBillingClient{}
@@ -301,5 +306,25 @@ func TestAdminBillingOperatorCommandsAreWired(t *testing.T) {
 				t.Errorf("billing %s is missing --%s", name, flag)
 			}
 		}
+	}
+}
+
+func TestOperatorCreditOffersStableReference(t *testing.T) {
+	if newAdminBillingCreditCmd().Flags().Lookup("reference-id") == nil {
+		t.Fatal("operator credit has no stable reference for safe retries")
+	}
+}
+
+func TestOperatorCreditForwardsStableReference(t *testing.T) {
+	const reference = "1f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+	fake := &fakeAdminBillingClient{adjustResp: &purserpb.BalanceTransaction{AmountCents: 7900, BalanceAfterCents: 8812}}
+	var out bytes.Buffer
+	err := runBillingCredit(context.Background(), &out, fake, nil, "", billingCreditRequest{Target: billingTenantTarget{TenantID: billingOperatorTenant}, Amount: "79", Reason: "incident invoice", ReferenceID: reference}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fake.adjustCalls[0]
+	if got.referenceID == nil || *got.referenceID != reference || got.referenceType == nil || *got.referenceType != "operator_adjustment" {
+		t.Fatalf("adjustment lost retry identity: %+v", got)
 	}
 }

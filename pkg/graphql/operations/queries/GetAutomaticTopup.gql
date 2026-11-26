@@ -1,0 +1,14 @@
+query GetAutomaticTopup {
+  automaticTopup {
+    enabled
+    thresholdEurCents
+    netAmountMinor
+    monthlyGrossLimitMinor
+    currency
+    pausedReason
+    monthlyReservedOrSpentMinor
+    available
+    unavailableReason
+    consentVersion
+  }
+}

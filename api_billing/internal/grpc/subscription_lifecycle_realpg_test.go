@@ -135,10 +135,12 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 		t.Fatalf("rollback state email/overrides = %q/%d", email, preserved)
 	}
 
+	cache := &recordingCommodoreCache{}
+	server.commodoreClient = cache
 	updatedEmail := "updated@example.com"
 	updatedMethod := "bank_transfer"
 	updated, err := server.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{
-		TenantId: tenantID, BillingEmail: &updatedEmail, PaymentMethod: &updatedMethod,
+		TenantId: tenantID, BillingEmail: &updatedEmail, PaymentMethod: &updatedMethod, Reason: "incident: restore recording entitlement",
 		PricingOverrides: []*purserpb.PricingRule{{
 			Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "eur",
 			IncludedQuantity: "250", UnitPrice: "0.0007", ConfigJson: "{}",
@@ -152,6 +154,20 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 		len(updated.GetPricingOverrides()) != 1 || updated.GetPricingOverrides()[0].GetCurrency() != "EUR" ||
 		updated.GetEntitlementOverrides()["recording_retention_days"] != "60" {
 		t.Fatalf("updated subscription = %+v", updated)
+	}
+	if cache.tenantID != tenantID {
+		t.Fatal("entitlement update did not invalidate the tenant runtime cache")
+	}
+	var audited bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM purser.domain_event_outbox WHERE tenant_id=$1 AND event_type='billing.subscription_updated' AND encode(payload,'escape') LIKE '%incident: restore recording entitlement%')`, tenantID).Scan(&audited); err != nil {
+		t.Fatal(err)
+	}
+	if !audited {
+		t.Fatal("operator entitlement reason missing from durable audit")
+	}
+	_, err = server.UpdateSubscriptionWithEntitlementReview(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{TenantId: tenantID, Reason: "stale review", EntitlementOverrides: map[string]string{"recording_retention_days": "90"}, CheckEntitlementOverrides: true, ExpectedEntitlementOverrides: map[string]string{"preserved_until_commit": "true"}})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("stale entitlement review was accepted: %v", err)
 	}
 
 }

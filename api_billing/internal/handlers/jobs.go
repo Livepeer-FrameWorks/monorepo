@@ -486,6 +486,8 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		fxSyncer:          fx.NewSyncer(database, log, fx.HTTPFetcher(&http.Client{}), fxAgeGauge),
 	}
 	if billing != nil {
+		jm.cryptoMonitor.convergeFundedAccount = billing.ConvergeTenantEntitlements
+		jm.x402Reconciler.convergeFundedAccount = billing.ConvergeTenantEntitlements
 		wireAdvanceBilling(billing, jm)
 	}
 	return jm
@@ -555,6 +557,10 @@ func (jm *JobManager) Start(ctx context.Context) {
 	// Start deployment-tier sweep (Purser is the authority for
 	// quartermaster.tenants.deployment_tier).
 	go jm.runDeploymentTierSweep(ctx)
+	go jm.runFundedFreeSweep(ctx)
+	go jm.runExhaustedPrepaidSweep(ctx)
+	go jm.runPrepaidPaymentNotices(ctx)
+	go jm.runAutomaticTopups(ctx)
 
 	// Keep ECB reference rates current for presentment-currency conversions.
 	if jm.fxSyncer != nil {
@@ -2380,6 +2386,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// — the webhook owns that transition under the partial-payment-
 		// aware settlement.
 		if updateErr := queries.SetProviderPaymentIntentStatus(ctx, purserdb.SetProviderPaymentIntentStatusParams{
+			TenantID: tenantID,
 			Status:   "provider_open",
 			IntentID: providerIntentID,
 		}); updateErr != nil {
@@ -2396,6 +2403,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// requires_action without SCA, processing, etc. Leave attempt
 		// pending; webhook drives the next state transition.
 		if updateErr := queries.SetProviderPaymentIntentStatus(ctx, purserdb.SetProviderPaymentIntentStatusParams{
+			TenantID: tenantID,
 			Status:   "provider_open",
 			IntentID: providerIntentID,
 		}); updateErr != nil {

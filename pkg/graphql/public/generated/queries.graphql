@@ -141,6 +141,12 @@ query GetAuthSessionsConnection(
   }
 }
 
+query GetAutomaticTopup {
+  automaticTopup {
+    ...AutomaticTopupSettingsDefaultFields
+  }
+}
+
 query GetBalanceTransactionsConnection(
   $page: ConnectionInput
   $transactionType: String
@@ -1224,6 +1230,31 @@ query GetRecentPullSourceEvents(
   stream(id: $id) {
     recentPullSourceEvents(limit: $limit) {
       ...PullSourceEventDefaultFields
+    }
+  }
+}
+
+query GetRecordingEventsConnection(
+  $page: ConnectionInput
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  # @genqlient(omitempty: true)
+  $noCache: Boolean = false
+) {
+  analytics {
+    lifecycle {
+      recordingEventsConnection(page: $page, streamId: $streamId, timeRange: $timeRange, noCache: $noCache) {
+        edges {
+          cursor
+          node {
+            ...StreamEventDefaultFields
+          }
+        }
+        pageInfo {
+          ...PageInfoDefaultFields
+        }
+        totalCount
+      }
     }
   }
 }

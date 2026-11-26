@@ -2078,11 +2078,12 @@ func main() {
 
 	// Start retention job (marks expired assets as deleted)
 	retentionJob := jobs.NewRetentionJob(jobs.RetentionConfig{
-		DB:            db,
-		Logger:        logger,
-		Interval:      1 * time.Hour,
-		RetentionDays: 30, // Failed-artifact cleanup horizon
-		DecklogClient: decklogClient,
+		RecoveryClient: purserClient,
+		DB:             db,
+		Logger:         logger,
+		Interval:       1 * time.Hour,
+		RetentionDays:  30, // Failed-artifact cleanup horizon
+		DecklogClient:  decklogClient,
 	})
 	retentionJob.Start()
 	defer retentionJob.Stop()

@@ -582,6 +582,9 @@ type tenantAdmissionData struct {
 	TierName             string
 	TierLevel            int32
 	GrantExpiresAt       sql.NullTime
+	GraceEndsAt          sql.NullTime
+	GraceCreditCents     int64
+	MediaRecoveryUntil   sql.NullTime
 }
 
 func defaultTenantAdmissionStatus() *purserpb.GetTenantAdmissionStatusResponse {
@@ -604,10 +607,16 @@ func mapTenantAdmissionStatus(row tenantAdmissionData) *purserpb.GetTenantAdmiss
 	}
 	availableBalance := balance - row.ReservedBalanceCents
 	collectionReady, collectionProvider := postpaidCollectionReadiness(row.Collection)
+	recovery := row.MediaRecoveryUntil
+	if row.TierName != "free" {
+		recovery = sql.NullTime{}
+	}
+	grace := paymentGraceSnapshot(model, row.SubscriptionStatus, availableBalance, row.GraceEndsAt, row.GraceCreditCents, recovery)
 	return &purserpb.GetTenantAdmissionStatusResponse{
 		BillingModel:          model,
 		IsSuspended:           row.SubscriptionStatus == "suspended" || row.GrantExpiresAt.Valid && !row.GrantExpiresAt.Time.After(time.Now()),
-		IsBalanceNegative:     model == "prepaid" && availableBalance <= 0,
+		IsBalanceNegative:     model == "prepaid" && availableBalance <= 0 && !grace.GetActive(),
+		PaymentGrace:          grace,
 		BalanceCents:          balance,
 		ReservedBalanceCents:  row.ReservedBalanceCents,
 		AvailableBalanceCents: availableBalance,
@@ -658,6 +667,7 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 	response := mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: row.BillingModel, SubscriptionStatus: row.SubscriptionStatus, GrantExpiresAt: row.GrantExpiresAt,
 		BalanceCents: row.BalanceCents, ReservedBalanceCents: row.ReservedBalanceCents,
+		GraceEndsAt: row.GraceEndsAt, GraceCreditCents: row.GraceCreditCents, MediaRecoveryUntil: row.FreeRecoveryUntil,
 		Collection: postpaidCollectionFacts{
 			PaymentMethod: row.PaymentMethod, StripeSubscriptionID: row.StripeSubscriptionID,
 			MollieSubscriptionID: row.MollieSubscriptionID, StripeCustomerID: row.StripeCustomerID,
@@ -668,6 +678,16 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 	})
 	if row.GrantExpiresAt.Valid {
 		response.ValidUntil = timestamppb.New(row.GrantExpiresAt.Time)
+	}
+	if grace := response.GetPaymentGrace(); grace.GetActive() {
+		deadline := time.Now().Add(time.Minute)
+		if grace.EndsAt.AsTime().Before(deadline) {
+			deadline = grace.EndsAt.AsTime()
+		}
+		if response.ValidUntil == nil || deadline.Before(response.ValidUntil.AsTime()) {
+			response.ValidUntil = timestamppb.New(deadline)
+			response.PrepaidGraceValidity = true
+		}
 	}
 	s.admissionLastGood.store(tenantID, response)
 	return response, nil
@@ -726,6 +746,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	admission := mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: billingStatus.BillingModel, SubscriptionStatus: billingStatus.SubscriptionStatus, GrantExpiresAt: billingStatus.GrantExpiresAt,
 		BalanceCents: billingStatus.BalanceCents, ReservedBalanceCents: billingStatus.ReservedBalanceCents,
+		GraceEndsAt: billingStatus.GraceEndsAt, GraceCreditCents: billingStatus.GraceCreditCents, MediaRecoveryUntil: billingStatus.FreeRecoveryUntil,
 		Collection: postpaidCollectionFacts{
 			PaymentMethod: billingStatus.PaymentMethod, StripeSubscriptionID: billingStatus.StripeSubscriptionID,
 			MollieSubscriptionID: billingStatus.MollieSubscriptionID, StripeCustomerID: billingStatus.StripeCustomerID,
@@ -778,6 +799,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		CollectionReady:        admission.CollectionReady,
 		CollectionProvider:     admission.CollectionProvider,
 		TierName:               admission.TierName,
+		PaymentGrace:           admission.PaymentGrace,
 		GrantExpired:           billingStatus.GrantExpiresAt.Valid && !billingStatus.GrantExpiresAt.Time.After(time.Now()),
 	}, nil
 }
@@ -914,6 +936,15 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 		return nil
 	}
 
+	var priorFree float64
+	if pricing.TierName == "free" {
+		prior, priorErr := handlers.PriorFreeAllowanceUsage(ctx, s.db, tenantID, periodStart, meter)
+		if priorErr != nil {
+			s.logger.WithError(priorErr).WithField("tenant_id", tenantID).Warn("Free allowance history unavailable; treating allowance as exhausted")
+			return []*meteringpb.MeterAllowance{{Meter: meter, Included: pricing.IncludedQuantity, Used: pricing.IncludedQuantity, Remaining: 0, Exhausted: true, IsFreeTier: true}}
+		}
+		priorFree, _ = prior.Float64()
+	}
 	var used float64
 	if err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
@@ -929,9 +960,13 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 			"meter":     meter,
 			"error":     err,
 		}).Warn("Failed to sum current-period delivered_minutes for allowance")
+		if pricing.TierName == "free" {
+			return []*meteringpb.MeterAllowance{{Meter: meter, Included: pricing.IncludedQuantity, Used: pricing.IncludedQuantity, Remaining: 0, Exhausted: true, IsFreeTier: true}}
+		}
 		return nil
 	}
 
+	used += priorFree
 	remaining := pricing.IncludedQuantity - used
 	if remaining < 0 {
 		remaining = 0
@@ -1311,9 +1346,10 @@ func tenantSubscriptionFromCurrentRow(row purserdb.GetCurrentTenantSubscriptionR
 		Id: row.ID.String(), TenantId: row.TenantID.String(), TierId: row.TierID.String(), Status: row.Status,
 		StartedAt: timestamppb.New(row.StartedAt), CreatedAt: timestamppb.New(row.CreatedAt.Time),
 		UpdatedAt: timestamppb.New(row.UpdatedAt.Time), BillingModel: row.BillingModel,
-		CustomFeatures:      scanBillingFeatures([]byte(row.CustomFeaturesText)),
-		BillingAddress:      scanBillingAddress([]byte(row.BillingAddressText)),
-		PresentmentCurrency: strings.TrimSpace(row.PresentmentCurrency),
+		CustomFeatures:        scanBillingFeatures([]byte(row.CustomFeaturesText)),
+		BillingAddress:        scanBillingAddress([]byte(row.BillingAddressText)),
+		PresentmentCurrency:   strings.TrimSpace(row.PresentmentCurrency),
+		AutomaticPrepaidUsage: row.AutomaticPrepaidUsage,
 	}
 	if row.BillingEmail.Valid {
 		sub.BillingEmail = row.BillingEmail.String
@@ -1475,18 +1511,19 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 	}
 
 	sub := &purserpb.TenantSubscription{
-		Id:                  subID,
-		TenantId:            tenantID,
-		TierId:              tierID,
-		Status:              "active",
-		BillingEmail:        billingEmail,
-		BillingModel:        billingModel,
-		StartedAt:           timestamppb.New(now),
-		BillingPeriodStart:  timestamppb.New(periodStart),
-		BillingPeriodEnd:    timestamppb.New(periodEnd),
-		CreatedAt:           timestamppb.New(now),
-		UpdatedAt:           timestamppb.New(now),
-		PresentmentCurrency: presentmentCurrency,
+		Id:                    subID,
+		TenantId:              tenantID,
+		TierId:                tierID,
+		Status:                "active",
+		BillingEmail:          billingEmail,
+		BillingModel:          billingModel,
+		StartedAt:             timestamppb.New(now),
+		BillingPeriodStart:    timestamppb.New(periodStart),
+		BillingPeriodEnd:      timestamppb.New(periodEnd),
+		CreatedAt:             timestamppb.New(now),
+		UpdatedAt:             timestamppb.New(now),
+		PresentmentCurrency:   presentmentCurrency,
+		AutomaticPrepaidUsage: true,
 	}
 	if trialEndsAt.Valid {
 		sub.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
@@ -1623,7 +1660,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 			updatedSubID := eventState.ID.String()
 			updatedEvent, buildErr := billingevents.New(tenantID, updatedSubID, &internalv1.SubscriptionUpdated{
 				SubscriptionId: updatedSubID, TierId: eventState.TierID, Status: eventState.Status,
-				ChangedFields: updatedSubscriptionFields(req),
+				ChangedFields: updatedSubscriptionFields(req), Reason: strings.TrimSpace(req.GetReason()),
 			}, s.domainActor(ctx))
 			if buildErr != nil {
 				return txStatusErrorf(buildErr, codes.Internal, "build subscription_updated: %v", buildErr)
@@ -1648,18 +1685,13 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 		return nil, err
 	}
 
-	// When tier_id changes (upgrade / downgrade), invalidate downstream caches
-	// so per-tenant runtime caps + allowance state (cached in Foghorn's
-	// streamContext via Commodore.ValidateStreamKey) are re-fetched on the
-	// next admission. Mirrors the same pattern used for balance changes at
-	// server.go:5117. Best-effort fan-out — failure is logged but does not
-	// abort the subscription update; cache TTL (10 min postpaid / 1 min
-	// prepaid) provides the eventual-consistency backstop.
-	if req.TierId != nil && s.commodoreClient != nil {
+	// Runtime policy changes need the same immediate cache refresh as tier changes.
+	// The subscription write also queues durable authority convergence in its trigger.
+	if (req.TierId != nil || req.Status != nil || req.CustomFeatures != nil || req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 || req.GetClearPricingOverrides() || len(req.GetPricingOverrides()) > 0) && s.commodoreClient != nil {
 		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, invErr := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
-			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on tier change")
+		if _, invErr := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "subscription_terms_changed"); invErr != nil {
+			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("Subscription policy cache refresh pending")
 		}
 	}
 
@@ -1708,6 +1740,19 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 		}
 	}
 
+	if req.GetCheckEntitlementOverrides() {
+		rows, err := queries.ListSubscriptionEntitlementOverrides(ctx, subscriptionID.String())
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "read entitlement review: %v", err)
+		}
+		current := make(map[string]string, len(rows))
+		for _, row := range rows {
+			current[row.Key] = row.Value
+		}
+		if !maps.Equal(current, req.GetExpectedEntitlementOverrides()) {
+			return billingStatusWithMessage(codes.Aborted, "ENTITLEMENTS_CHANGED", "Subscription entitlements changed since review. Reload before applying.").Err()
+		}
+	}
 	if req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 {
 		if err := queries.DeleteSubscriptionEntitlementOverrides(ctx, subscriptionID); err != nil {
 			return txStatusErrorf(err, codes.Internal, "clear entitlement overrides: %v", err)
@@ -1716,8 +1761,8 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 			if k == "" {
 				return status.Error(codes.InvalidArgument, "entitlement override key is required")
 			}
-			if !json.Valid([]byte(v)) {
-				return status.Errorf(codes.InvalidArgument, "entitlement override %q must be valid JSON", k)
+			if err := validateEntitlementOverride(k, v); err != nil {
+				return billingStatusWithMessage(codes.InvalidArgument, "INVALID_ENTITLEMENT", fmt.Sprintf("Entitlement %q: %v", k, err)).Err()
 			}
 			if err := queries.UpsertSubscriptionEntitlementOverride(ctx, purserdb.UpsertSubscriptionEntitlementOverrideParams{
 				SubscriptionID: subscriptionID, Key: k, Value: json.RawMessage(v),
@@ -4768,6 +4813,11 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 	}
 	balance.AvailableBalanceCents = balance.BalanceCents - balance.ReservedBalanceCents
 	balance.IsLowBalance = balance.AvailableBalanceCents < balance.LowBalanceThresholdCents
+	recovery := row.FreeRecoveryUntil
+	if row.TierName != "free" {
+		recovery = sql.NullTime{}
+	}
+	balance.PaymentGrace = paymentGraceSnapshot(row.BillingModel, row.SubscriptionStatus, balance.AvailableBalanceCents, row.GraceEndsAt, row.GraceCreditCents, recovery)
 
 	// Calculate drain rate from last hour's usage deductions
 	usageLastHour, err := purserdb.New(s.db).GetPrepaidDrainRate(ctx, tenantID)
@@ -5180,6 +5230,10 @@ func (s *PurserServer) recordBalanceTransaction(
 					return txStatusErrorf(scanErr, codes.Internal, "failed to load existing transaction")
 				}
 
+				if existing.AmountCents != amountCents || existing.TransactionType != txType || existing.Description != description {
+					return billingStatusWithMessage(codes.AlreadyExists, "BALANCE_REFERENCE_CONFLICT", "This balance reference already records a different adjustment. Inspect the original receipt before creating another adjustment.").Err()
+				}
+
 				// The balance-row ensure above must not persist on this path, so the
 				// sentinel makes the helper roll back instead of commit.
 				existingTxn = balanceTransactionFromReferenceRow(existing)
@@ -5263,6 +5317,11 @@ func (s *PurserServer) recordBalanceTransaction(
 	switch {
 	case err == nil:
 	case errors.Is(err, errBalanceTransactionExists):
+		if amountCents > 0 && s.billing != nil {
+			if convergeErr := s.billing.ConvergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
+				s.logger.WithError(convergeErr).WithField("tenant_id", tenantID).Warn("Balance replay activation pending")
+			}
+		}
 		return existingTxn, nil
 	case stage == txStageBegin:
 		return nil, status.Error(codes.Internal, "failed to begin transaction")
@@ -5270,6 +5329,11 @@ func (s *PurserServer) recordBalanceTransaction(
 		return nil, status.Error(codes.Internal, "failed to commit transaction")
 	default:
 		return nil, err
+	}
+	if amountCents > 0 && s.billing != nil {
+		if convergeErr := s.billing.ConvergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
+			s.logger.WithError(convergeErr).WithField("tenant_id", tenantID).Warn("Balance credit activation pending")
+		}
 	}
 	previousBalance := newBalance - amountCents
 
@@ -6052,6 +6116,9 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 			if requestedTierID != "" && requestedTierID != subscription.TierID {
 				return status.Error(codes.FailedPrecondition, "already postpaid on a different tier; use changeBillingTier")
 			}
+			if requestedTierID != "" {
+				return s.retainCurrentFreeFundingPreferenceTx(ctx, tx, tenantID, requestedTierID)
+			}
 			return nil
 		}
 
@@ -6093,6 +6160,12 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 			if phaseClosed, err = commitPrepaidPhaseClose(ctx, tx, phase); err != nil {
 				return err
 			}
+			if tier.TierName == "free" {
+				if err = queries.BeginFreeMediaRecovery(ctx, tenantID); err != nil {
+					return err
+				}
+			}
+
 			_, err = queries.PromotePrepaidTenantSubscription(ctx, purserdb.PromotePrepaidTenantSubscriptionParams{
 				TierID: tier.ID, TenantID: tenantID,
 			})
@@ -6230,6 +6303,9 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		}
 		if err != nil {
 			return txStatusErrorf(err, codes.Internal, "load target tier: %v", err)
+		}
+		if reviewErr := loadCancellationReview(ctx, queries, tenantID, target.TierName, target.TierLevel.Int32, current.TierLevel.Int32); reviewErr != nil {
+			return reviewErr
 		}
 		if eligibilityErr := subscriptions.ValidateSelfServiceTier(target); eligibilityErr != nil {
 			return tenantPricingRefusal(eligibilityErr)
@@ -6381,7 +6457,10 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		}); err != nil {
 			return txStatusErrorf(err, codes.Internal, "schedule downgrade: %v", err)
 		}
-		return requestProviderSync()
+		if err := requestProviderSync(); err != nil {
+			return err
+		}
+		return finishCancellationReview(ctx, tenantID, targetTierID, effective)
 	})
 	switch {
 	case err == nil:
@@ -8255,6 +8334,11 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *purserpb.Sett
 		return nil, status.Errorf(codes.Internal, "settlement failed: %v", err)
 	}
 
+	if result.Success && !result.IsAuthOnly && result.NewBalanceCents > 0 && s.billing != nil {
+		if convergeErr := s.billing.ConvergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
+			s.logger.WithError(convergeErr).WithField("tenant_id", tenantID).Warn("X402 funded account activation pending")
+		}
+	}
 	// Auto-reactivate suspended tenant if balance goes positive after x402 top-up
 	if result.Success && !result.IsAuthOnly && tenantID != "" && result.NewBalanceCents >= 0 {
 		rowsAffected, err := purserdb.New(s.db).ReactivateSuspendedTenant(ctx, tenantID)

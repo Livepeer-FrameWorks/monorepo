@@ -241,6 +241,8 @@ type Querier interface {
 	// Makes a finalizing attempt immediately re-claimable. The attempt counter
 	// guard keeps a concurrent re-claim from being undone.
 	ExpireDVRChapterFinalizeAttempt(ctx context.Context, arg ExpireDVRChapterFinalizeAttemptParams) (int64, error)
+	// The caller holds the serialized Purser expiry receipt for this tenant and cutoff.
+	ExpireMediaRecoveryArtifact(ctx context.Context, arg ExpireMediaRecoveryArtifactParams) (string, error)
 	ExpireStrandedCreationCommands(ctx context.Context, arg ExpireStrandedCreationCommandsParams) (int64, error)
 	FailAdmissionEffect(ctx context.Context, arg FailAdmissionEffectParams) error
 	FailDVRChapter(ctx context.Context, arg FailDVRChapterParams) (sql.NullString, error)
@@ -409,6 +411,10 @@ type Querier interface {
 	GetSyncCompletionAttempt(ctx context.Context, arg GetSyncCompletionAttemptParams) (GetSyncCompletionAttemptRow, error)
 	GetTenantAuthorityProjection(ctx context.Context, tenantID string) (GetTenantAuthorityProjectionRow, error)
 	GetTenantDVRChapterMaxRange(ctx context.Context, arg GetTenantDVRChapterMaxRangeParams) (sql.NullInt32, error)
+	// Use the same origin-owned bytes as the write cap, including retained upload
+	// originals without charging the same source object twice. One statement keeps
+	// completion from hiding an unknown-size artifact between separate reads.
+	GetTenantMediaFootprint(ctx context.Context, arg GetTenantMediaFootprintParams) (GetTenantMediaFootprintRow, error)
 	GetThumbnailActiveVersion(ctx context.Context, assetKey string) (string, error)
 	GetThumbnailAssetBackendSnapshot(ctx context.Context, arg GetThumbnailAssetBackendSnapshotParams) (GetThumbnailAssetBackendSnapshotRow, error)
 	GetThumbnailAssignment(ctx context.Context, attemptID string) (GetThumbnailAssignmentRow, error)
@@ -545,6 +551,8 @@ type Querier interface {
 	// legacy owner is released with its own tenant, stream, cluster and claim.
 	ListLegacyPublisherClaimReleasesByExecution(ctx context.Context, arg ListLegacyPublisherClaimReleasesByExecutionParams) ([]ListLegacyPublisherClaimReleasesByExecutionRow, error)
 	ListLocalManagedStreamAuthorities(ctx context.Context) ([]ListLocalManagedStreamAuthoritiesRow, error)
+	ListMediaRecoveryArtifacts(ctx context.Context, arg ListMediaRecoveryArtifactsParams) ([]ListMediaRecoveryArtifactsRow, error)
+	ListMediaRecoveryTenants(ctx context.Context, afterTenantID string) ([]string, error)
 	ListNeverProjectedIngestSessions(ctx context.Context, olderThanMs int64) ([]ListNeverProjectedIngestSessionsRow, error)
 	ListNodeComponentVersions(ctx context.Context, nodeID string) ([]ListNodeComponentVersionsRow, error)
 	ListNodeComponents(ctx context.Context, nodeID string) ([]ListNodeComponentsRow, error)
