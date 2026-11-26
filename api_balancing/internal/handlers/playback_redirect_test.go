@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
@@ -163,6 +164,63 @@ func TestFindProtocolURL(t *testing.T) {
 		if got := findProtocolURL(webrtcBoth, "whep"); got != "https://edge/webrtc/s" {
 			t.Fatalf("findProtocolURL(whep) = %q, want WHEP", got)
 		}
+	}
+}
+
+func matroskaPlaybackOutputs(t *testing.T, base string, native bool) map[string]any {
+	t.Helper()
+	reported := map[string]any{
+		"HTTP": base + "/$.html", "EBML": base + "/$.webm",
+		"HLS": base + "/hls/$/index.m3u8", "MP4": base + "/$.mp4",
+	}
+	matches := []any{"/$.webm"}
+	if native {
+		matches = append(matches, "/$.mkv")
+	}
+	inventory := map[string]any{
+		"config_backup": map[string]any{"config": map[string]any{
+			"protocols": []any{map[string]any{"connector": "HTTP"}, map[string]any{"connector": "EBML"}},
+		}},
+		"capabilities": map[string]any{"connectors": map[string]any{
+			"HTTP": map[string]any{},
+			"EBML": map[string]any{"deps": "HTTP", "url_match": matches},
+		}},
+	}
+	catalog, err := mist.PlaybackOutputCatalog(reported, inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func TestMatroskaRedirectUsesDistinctAdvertisedOutput(t *testing.T) {
+	const base = "https://edge.example/view"
+	endpoint := &sharedpb.ViewerEndpoint{
+		Protocol: "hls",
+		Url:      base + "/hls/chapter/index.m3u8",
+		Outputs:  control.BuildAdvertisedPlaybackOutputs(base, matroskaPlaybackOutputs(t, base, true), "chapter", false),
+	}
+	if output := endpoint.Outputs["MKV"]; output == nil || output.GetProtocol() != "MKV" || output.GetUrl() != base+"/chapter.mkv" {
+		t.Fatalf("native MKV output missing or mislabeled: %v", output)
+	}
+	if got := resolvedViewerProtocolURL(endpoint, "mkv"); got != base+"/chapter.mkv" {
+		t.Errorf("MKV request redirected to %q", got)
+	}
+	for protocol, want := range map[string]string{
+		"webm": base + "/chapter.webm", "mp4": base + "/chapter.mp4",
+		"hls": base + "/hls/chapter/index.m3u8", "html": base + "/chapter.html",
+	} {
+		if got := resolvedViewerProtocolURL(endpoint, protocol); got != want {
+			t.Errorf("%s redirect = %q, want %q", protocol, got, want)
+		}
+	}
+	endpoint.Outputs["MKV"].Url = base + "/chapter.html"
+	if got := resolvedViewerProtocolURL(endpoint, "mkv"); got != "" {
+		t.Errorf("MKV request accepted a mislabeled player page: %q", got)
+	}
+	delete(endpoint.Outputs, "MKV")
+	if got := resolvedViewerProtocolURL(endpoint, "mkv"); got != "" {
+		t.Errorf("MKV request substituted a different format: %q", got)
 	}
 }
 

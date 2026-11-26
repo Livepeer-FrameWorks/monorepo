@@ -1560,6 +1560,9 @@ func BuildAdvertisedPlaybackOutputs(baseURL string, rawOutputs map[string]any, s
 		}
 		outputs[protocol.name] = &sharedpb.OutputEndpoint{Protocol: protocol.name, Url: endpoint, Capabilities: BuildOutputCapabilities(protocol.name, isLive)}
 	}
+	if endpoint := mist.ResolveNativeMatroskaPlaybackURL(rawOutputs, baseURL, streamName); endpoint != "" {
+		outputs["MKV"] = &sharedpb.OutputEndpoint{Protocol: "MKV", Url: endpoint, Capabilities: BuildOutputCapabilities("MKV", isLive)}
+	}
 	if html := outputs["MIST_HTML"]; html != nil {
 		// player.js belongs to the observed HTTP listener, not a media format.
 		if page, err := url.Parse(html.Url); err == nil {
@@ -1584,7 +1587,7 @@ func BuildOutputCapabilities(protocol string, isLive bool) *sharedpb.OutputCapab
 	case "WHEP":
 		caps.SupportsQualitySwitch = false
 		caps.SupportsSeek = false
-	case "MP4", "WEBM":
+	case "MP4", "WEBM", "MKV":
 		caps.SupportsQualitySwitch = false
 		caps.SupportsSeek = true
 	case "AAC", "MP3", "FLAC", "WAV":
