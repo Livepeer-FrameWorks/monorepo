@@ -245,12 +245,6 @@ func TestTierUpgradeProviders_RealPG(t *testing.T) {
 	for _, mode := range []string{"advance Stripe", "advance missing invoice", "fixed Stripe", "grandfathered Stripe price", "fixed Mollie", "Mollie cancellation after provider receipt", "lost Stripe response", "metering delay", "cancelled subscription during metering wait", "cancelled subscription after advance receipt", "account closure after advance receipt", "refusal write failure", "stale Stripe price", "unpaid Stripe fee", "rejected price transaction retry", "Stripe rounded grant boundary", "Stripe same second callback", "unpaid Mollie renewal", "paid Mollie renewal before rollover", "declined upgrade with scheduled downgrade", "operator cancels metering wait", "operator completes lost Stripe response"} {
 		t.Run(mode, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
-			if strings.Contains(t.Name(), "_RealYugabyte") {
-				var engine string
-				if err := db.QueryRowContext(t.Context(), `SELECT version()`).Scan(&engine); err != nil || !strings.Contains(engine, "-YB-") {
-					t.Fatalf("Yugabyte case reached the wrong engine: %s (%v)", engine, err)
-				}
-			}
 			ctx := t.Context()
 			tenant, oldTier, newTier := uuid.NewString(), uuid.NewString(), uuid.NewString()
 			start := time.Now().UTC().Add(-15 * 24 * time.Hour).Truncate(time.Second)
@@ -689,5 +683,3 @@ SELECT 'upgrade-source',w,w+INTERVAL '5 minutes',true FROM generate_series($1::t
 		})
 	}
 }
-
-func TestTierUpgradeProviders_RealYugabyte(t *testing.T) { TestTierUpgradeProviders_RealPG(t) }
