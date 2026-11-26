@@ -13,7 +13,11 @@ import (
 )
 
 const getTenantPrimaryUser = `-- name: GetTenantPrimaryUser :one
-SELECT id, COALESCE(email::text, '')::text AS email, first_name, last_name
+SELECT id, COALESCE(email::text, '')::text AS email, first_name, last_name,
+       EXISTS (SELECT 1 FROM commodore.users eligible
+               WHERE eligible.tenant_id = $1 AND eligible.is_active = true
+                 AND eligible.verified = true AND eligible.email IS NOT NULL AND eligible.email <> ''
+                 AND eligible.role IN ('owner', 'admin'))::boolean AS free_tier_eligible
 FROM commodore.users
 WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
 ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
@@ -22,10 +26,11 @@ LIMIT 1
 `
 
 type GetTenantPrimaryUserRow struct {
-	ID        string         `db:"id" json:"id"`
-	Email     string         `db:"email" json:"email"`
-	FirstName sql.NullString `db:"first_name" json:"first_name"`
-	LastName  sql.NullString `db:"last_name" json:"last_name"`
+	ID               string         `db:"id" json:"id"`
+	Email            string         `db:"email" json:"email"`
+	FirstName        sql.NullString `db:"first_name" json:"first_name"`
+	LastName         sql.NullString `db:"last_name" json:"last_name"`
+	FreeTierEligible bool           `db:"free_tier_eligible" json:"free_tier_eligible"`
 }
 
 func (q *Queries) GetTenantPrimaryUser(ctx context.Context, tenantID string) (GetTenantPrimaryUserRow, error) {
@@ -36,6 +41,7 @@ func (q *Queries) GetTenantPrimaryUser(ctx context.Context, tenantID string) (Ge
 		&i.Email,
 		&i.FirstName,
 		&i.LastName,
+		&i.FreeTierEligible,
 	)
 	return i, err
 }

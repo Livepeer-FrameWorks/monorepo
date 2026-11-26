@@ -3871,7 +3871,8 @@
             "graphql": {
               "mutations": [
                 "changeBillingTier",
-                "createStripeBillingPortal"
+                "createStripeBillingPortal",
+                "enablePrepaidUsage"
               ],
               "queries": [
                 "billingStatus",
@@ -3881,7 +3882,8 @@
             },
             "mcp": {
               "tools": [
-                "change_billing_tier"
+                "change_billing_tier",
+                "enable_prepaid_usage"
               ]
             },
             "cli": {},

@@ -1,6 +1,7 @@
 package model
 
 import (
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"time"
 )
 
@@ -22,15 +23,16 @@ type BalanceTransaction struct {
 // We can use the proto type directly since it's not in a union.
 // But we need this for connections.
 type PrepaidBalance struct {
-	ID                       string    `json:"id"`
-	TenantID                 string    `json:"tenantId"`
-	BalanceCents             int       `json:"balanceCents"`
-	ReservedBalanceCents     int       `json:"reservedBalanceCents"`
-	AvailableBalanceCents    int       `json:"availableBalanceCents"`
-	Currency                 string    `json:"currency"`
-	LowBalanceThresholdCents int       `json:"lowBalanceThresholdCents"`
-	IsLowBalance             bool      `json:"isLowBalance"`
-	DrainRateCentsPerHour    int       `json:"drainRateCentsPerHour"`
-	CreatedAt                time.Time `json:"createdAt"`
-	UpdatedAt                time.Time `json:"updatedAt"`
+	PaymentGrace             *purserpb.PaymentGrace `json:"paymentGrace"`
+	ID                       string                 `json:"id"`
+	TenantID                 string                 `json:"tenantId"`
+	BalanceCents             int                    `json:"balanceCents"`
+	ReservedBalanceCents     int                    `json:"reservedBalanceCents"`
+	AvailableBalanceCents    int                    `json:"availableBalanceCents"`
+	Currency                 string                 `json:"currency"`
+	LowBalanceThresholdCents int                    `json:"lowBalanceThresholdCents"`
+	IsLowBalance             bool                   `json:"isLowBalance"`
+	DrainRateCentsPerHour    int                    `json:"drainRateCentsPerHour"`
+	CreatedAt                time.Time              `json:"createdAt"`
+	UpdatedAt                time.Time              `json:"updatedAt"`
 }

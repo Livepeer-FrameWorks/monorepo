@@ -81,7 +81,7 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			}
 		}
 		presented := graphql.DefaultErrorPresenter(ctx, err)
-		if message, extensions, ok := publicGRPCError(err); ok {
+		if message, extensions, ok := PublicGRPCError(err); ok {
 			presented.Message = message
 			if presented.Extensions == nil {
 				presented.Extensions = map[string]any{}
@@ -167,7 +167,8 @@ func PublicCode(code codes.Code) string {
 	}
 }
 
-func publicGRPCError(err error) (string, map[string]any, bool) {
+// PublicGRPCError returns the safe message and structured details shared by GraphQL and MCP.
+func PublicGRPCError(err error) (string, map[string]any, bool) {
 	st, ok := status.FromError(err)
 	if !ok {
 		return "", nil, false
@@ -183,6 +184,9 @@ func publicGRPCError(err error) (string, map[string]any, bool) {
 		case reason == grpcutil.StreamOfflineReason && st.Code() == codes.FailedPrecondition:
 			return "stream is offline", map[string]any{"code": reason}, true
 		}
+	}
+	if used, additional, limit, storageLimit := grpcutil.StorageLimitState(err); storageLimit {
+		return "storage limit reached", map[string]any{"code": grpcutil.StorageLimitReachedReason, "used_bytes": used, "limit_bytes": limit, "additional_bytes": additional}, true
 	}
 	for _, detail := range st.Details() {
 		info, isErrorInfo := detail.(*errdetails.ErrorInfo)

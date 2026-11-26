@@ -274,8 +274,22 @@ message PushNodeCapacityResponse {
   bool delivered = 2;
 }
 
+message GetTenantMediaFootprintRequest {
+  string tenant_id = 1;
+  int32 retention_limit_days = 2; // Zero is an explicitly uncapped target.
+}
+message TenantMediaFootprint {
+  int64 storage_bytes = 1;
+  int64 pending_artifacts = 2;
+  int64 incompatible_retention = 3;
+  int64 active_ingest = 4;
+  int64 active_viewers = 5;
+}
+
 // TenantControlService handles tenant-level operations called by Purser
 service TenantControlService {
+  // Point-in-time origin-owned media, used before a voluntary Free transition.
+  rpc GetTenantMediaFootprint(GetTenantMediaFootprintRequest) returns (TenantMediaFootprint);
   rpc GetStreamIngestStates(foghorn_control.GetStreamIngestStatesRequest) returns (foghorn_control.GetStreamIngestStatesResponse);
   // TerminateTenantStreams stops all active streams for a tenant (called when suspended)
   rpc TerminateTenantStreams(foghorn_control.TerminateTenantStreamsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);

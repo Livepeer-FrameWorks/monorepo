@@ -14,6 +14,7 @@ from .bootstrap_edge import BootstrapEdge
 from .change_billing_tier import ChangeBillingTier
 from .change_password import ChangePassword
 from .complete_vod_upload import CompleteVodUpload
+from .confirm_free_cancellation import ConfirmFreeCancellation
 from .create_card_topup import CreateCardTopup
 from .create_clip import CreateClip
 from .create_cluster_invite import CreateClusterInvite
@@ -44,6 +45,7 @@ from .delete_vod_original import DeleteVodOriginal
 from .delete_webhook_endpoint import DeleteWebhookEndpoint
 from .disable_webhook_endpoint import DisableWebhookEndpoint
 from .disconnect_ingest import DisconnectIngest
+from .enable_prepaid_usage import EnablePrepaidUsage
 from .enable_webhook_endpoint import EnableWebhookEndpoint
 from .enums import (
     DVRChapterMode,
@@ -63,6 +65,7 @@ from .get_artifact_events_connection import GetArtifactEventsConnection
 from .get_artifact_node_copies import GetArtifactNodeCopies
 from .get_artifact_states_connection import GetArtifactStatesConnection
 from .get_auth_sessions_connection import GetAuthSessionsConnection
+from .get_automatic_topup import GetAutomaticTopup
 from .get_balance_transactions_connection import GetBalanceTransactionsConnection
 from .get_billing_details import GetBillingDetails
 from .get_billing_lifecycle import GetBillingLifecycle
@@ -139,6 +142,7 @@ from .get_processing_usage_connection import GetProcessingUsageConnection
 from .get_quality_tier_daily_connection import GetQualityTierDailyConnection
 from .get_rebuffering_events_connection import GetRebufferingEventsConnection
 from .get_recent_pull_source_events import GetRecentPullSourceEvents
+from .get_recording_events_connection import GetRecordingEventsConnection
 from .get_review_cluster_media_consent_change import GetReviewClusterMediaConsentChange
 from .get_review_media_placement_change import GetReviewMediaPlacementChange
 from .get_routing_efficiency import GetRoutingEfficiency
@@ -224,6 +228,7 @@ from .input_types import (
     ReviewMediaCapacityConsentInput,
     ReviewMediaPlacementChangeInput,
     SendMessageInput,
+    SetAutomaticTopupInput,
     SetMediaRetentionPolicyInput,
     SetNodeCapacityInput,
     SetNodeModeInput,
@@ -258,6 +263,7 @@ from .list_streams import ListStreams
 from .list_usage_records import ListUsageRecords
 from .mark_skipper_reports_read import MarkSkipperReportsRead
 from .open_mist_admin_session import OpenMistAdminSession
+from .preview_free_cancellation import PreviewFreeCancellation
 from .promote_to_paid import PromoteToPaid
 from .refresh_stream_key import RefreshStreamKey
 from .reject_cluster_subscription import RejectClusterSubscription
@@ -277,6 +283,7 @@ from .revoke_signing_key import RevokeSigningKey
 from .rotate_webhook_endpoint_secret import RotateWebhookEndpointSecret
 from .send_message import SendMessage
 from .server_info import ServerInfo
+from .set_automatic_topup import SetAutomaticTopup
 from .set_media_retention_policy import SetMediaRetentionPolicy
 from .set_node_capacity import SetNodeCapacity
 from .set_node_mode import SetNodeMode
@@ -936,6 +943,117 @@ class GraphQLClient(BaseClient):
         )
         data = self.get_data(response)
         return ChangePassword.model_validate(data)
+
+    def confirm_free_cancellation(
+        self, tier_id: str, quoted_at: datetime, fingerprint: str, **kwargs: Any
+    ) -> ConfirmFreeCancellation:
+        query = gql("""
+            mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {
+              confirmFreeCancellation(
+                tierId: $tierId
+                quotedAt: $quotedAt
+                fingerprint: $fingerprint
+              ) {
+                __typename
+                ...ChangeBillingTierPayloadDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
+              success
+              message
+              appliedTier {
+                id
+                tierName
+                tierLevel
+                displayName
+                description
+                basePrice
+                currency
+                billingPeriod
+                features {
+                  supportLevel
+                  sla
+                  processingCustomizable
+                }
+                pricingRules {
+                  meter
+                  model
+                  currency
+                  includedQuantity
+                  unitPrice
+                  configJson
+                }
+                entitlements {
+                  key
+                  value
+                }
+                supportLevel
+                slaLevel
+                meteringEnabled
+                isEnterprise
+              }
+              pendingTier {
+                id
+                tierName
+                tierLevel
+                displayName
+                description
+                basePrice
+                currency
+                billingPeriod
+                features {
+                  supportLevel
+                  sla
+                  processingCustomizable
+                }
+                pricingRules {
+                  meter
+                  model
+                  currency
+                  includedQuantity
+                  unitPrice
+                  configJson
+                }
+                entitlements {
+                  key
+                  value
+                }
+                supportLevel
+                slaLevel
+                meteringEnabled
+                isEnterprise
+              }
+              effectiveAt
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {
+            "tierId": tier_id,
+            "quotedAt": quoted_at,
+            "fingerprint": fingerprint,
+        }
+        response = self.execute(
+            query=query,
+            operation_name="ConfirmFreeCancellation",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return ConfirmFreeCancellation.model_validate(data)
 
     def create_card_topup(
         self, input: CreateCardTopupInput, **kwargs: Any
@@ -1950,6 +2068,32 @@ class GraphQLClient(BaseClient):
         data = self.get_data(response)
         return DisconnectIngest.model_validate(data)
 
+    def enable_prepaid_usage(self, **kwargs: Any) -> EnablePrepaidUsage:
+        """Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved."""
+        query = gql("""
+            mutation EnablePrepaidUsage {
+              enablePrepaidUsage {
+                ...EnablePrepaidUsagePayloadDefaultFields
+              }
+            }
+
+            fragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {
+              activated
+              awaitingFunds
+              tierName
+              billingModel
+            }
+            """)
+        variables: dict[str, object] = {}
+        response = self.execute(
+            query=query,
+            operation_name="EnablePrepaidUsage",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return EnablePrepaidUsage.model_validate(data)
+
     def enable_webhook_endpoint(self, id: str, **kwargs: Any) -> EnableWebhookEndpoint:
         """Enable a disabled endpoint. Deliveries skipped while it was disabled are not
         sent again; replay them with replayWebhookDeliveries."""
@@ -2161,6 +2305,38 @@ class GraphQLClient(BaseClient):
         )
         data = self.get_data(response)
         return OpenMistAdminSession.model_validate(data)
+
+    def preview_free_cancellation(
+        self, tier_id: str, **kwargs: Any
+    ) -> PreviewFreeCancellation:
+        query = gql("""
+            mutation PreviewFreeCancellation($tierId: ID!) {
+              previewFreeCancellation(tierId: $tierId) {
+                ...FreeCancellationReviewDefaultFields
+              }
+            }
+
+            fragment FreeCancellationReviewDefaultFields on FreeCancellationReview {
+              quotedAt
+              expiresAt
+              effectiveAt
+              fingerprint
+              dueNowMinor
+              refundNowMinor
+              walletCreditNowMinor
+              currency
+              futureUsageMessage
+            }
+            """)
+        variables: dict[str, object] = {"tierId": tier_id}
+        response = self.execute(
+            query=query,
+            operation_name="PreviewFreeCancellation",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return PreviewFreeCancellation.model_validate(data)
 
     def promote_to_paid(self, tier_id: str, **kwargs: Any) -> PromoteToPaid:
         """Switch from prepaid to a selected postpaid tier.
@@ -2883,6 +3059,39 @@ class GraphQLClient(BaseClient):
         )
         data = self.get_data(response)
         return SendMessage.model_validate(data)
+
+    def set_automatic_topup(
+        self, input: SetAutomaticTopupInput, **kwargs: Any
+    ) -> SetAutomaticTopup:
+        query = gql("""
+            mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) {
+              setAutomaticTopup(input: $input) {
+                ...AutomaticTopupSettingsDefaultFields
+              }
+            }
+
+            fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+              enabled
+              thresholdEurCents
+              netAmountMinor
+              monthlyGrossLimitMinor
+              currency
+              pausedReason
+              monthlyReservedOrSpentMinor
+              available
+              unavailableReason
+              consentVersion
+            }
+            """)
+        variables: dict[str, object] = {"input": input}
+        response = self.execute(
+            query=query,
+            operation_name="SetAutomaticTopup",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return SetAutomaticTopup.model_validate(data)
 
     def set_media_retention_policy(
         self, input: SetMediaRetentionPolicyInput, **kwargs: Any
@@ -4517,6 +4726,37 @@ class GraphQLClient(BaseClient):
         data = self.get_data(response)
         return GetAuthSessionsConnection.model_validate(data)
 
+    def get_automatic_topup(self, **kwargs: Any) -> GetAutomaticTopup:
+        query = gql("""
+            query GetAutomaticTopup {
+              automaticTopup {
+                ...AutomaticTopupSettingsDefaultFields
+              }
+            }
+
+            fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+              enabled
+              thresholdEurCents
+              netAmountMinor
+              monthlyGrossLimitMinor
+              currency
+              pausedReason
+              monthlyReservedOrSpentMinor
+              available
+              unavailableReason
+              consentVersion
+            }
+            """)
+        variables: dict[str, object] = {}
+        response = self.execute(
+            query=query,
+            operation_name="GetAutomaticTopup",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetAutomaticTopup.model_validate(data)
+
     def get_balance_transactions_connection(
         self,
         page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
@@ -4737,6 +4977,7 @@ class GraphQLClient(BaseClient):
                 isEnterprise
               }
               subscription {
+                automaticPrepaidUsage
                 id
                 tenantId
                 tierId
@@ -10772,6 +11013,12 @@ class GraphQLClient(BaseClient):
             }
 
             fragment PrepaidBalanceDefaultFields on PrepaidBalance {
+              paymentGrace {
+                active
+                endsAt
+                remainingCreditCents
+                mediaRecoveryUntil
+              }
               id
               tenantId
               balanceCents
@@ -11492,6 +11739,195 @@ class GraphQLClient(BaseClient):
         )
         data = self.get_data(response)
         return GetRecentPullSourceEvents.model_validate(data)
+
+    def get_recording_events_connection(
+        self,
+        stream_id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        time_range: Union[Optional[TimeRangeInput], UnsetType] = UNSET,
+        no_cache: Union[Optional[bool], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> GetRecordingEventsConnection:
+        """Latest recording outcomes and broadcast boundaries, without buffer/track noise."""
+        query = gql("""
+            query GetRecordingEventsConnection($page: ConnectionInput, $streamId: ID!, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
+              analytics {
+                lifecycle {
+                  recordingEventsConnection(
+                    page: $page
+                    streamId: $streamId
+                    timeRange: $timeRange
+                    noCache: $noCache
+                  ) {
+                    edges {
+                      cursor
+                      node {
+                        ...StreamEventDefaultFields
+                      }
+                    }
+                    pageInfo {
+                      ...PageInfoDefaultFields
+                    }
+                    totalCount
+                  }
+                }
+              }
+            }
+
+            fragment PageInfoDefaultFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+
+            fragment StreamEventDefaultFields on StreamEvent {
+              id
+              eventId
+              streamId
+              stream {
+                id
+                streamId
+                name
+                description
+                streamKey
+                playbackId
+                record
+                liveVideoAbr
+                ingestMode
+                pullSource {
+                  sourceUriRedacted
+                  enabled
+                  class
+                }
+                managedSource {
+                  sourceKind
+                  alwaysOn
+                  placementCount
+                }
+                sourceLocation {
+                  mode
+                  avoidNodeIds
+                }
+                createdAt
+                updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
+                metrics {
+                  status
+                  isLive
+                  currentViewers
+                  startedAt
+                  updatedAt
+                  nodeId
+                  trackCount
+                  totalInputs
+                  uploadedBytes
+                  downloadedBytes
+                  viewerSeconds
+                  packetsSent
+                  packetsLost
+                  packetsRetransmitted
+                  bufferState
+                  qualityTier
+                  primaryWidth
+                  primaryHeight
+                  primaryFps
+                  primaryCodec
+                  primaryBitrate
+                  hasIssues
+                  issuesDescription
+                }
+                pushTargets {
+                  id
+                  streamId
+                  platform
+                  name
+                  videoChoice
+                  targetUri
+                  isEnabled
+                  status
+                  lastError
+                  reasonCode
+                  lastPushedAt
+                  createdAt
+                }
+                playbackPolicy {
+                  type
+                  allowedOrigins
+                }
+                dvrChapterMode
+                dvrChapterIntervalSeconds
+                monitoring
+                thumbnailAssets {
+                  posterUrl
+                  spriteVttUrl
+                  spriteJpgUrl
+                  assetKey
+                }
+                retentionOverrides {
+                  streamId
+                  dvrRetentionDaysOverride
+                  clipRetentionDaysOverride
+                }
+              }
+              nodeId
+              type
+              status
+              timestamp
+              details
+              payload
+              source
+              bufferState
+              hasIssues
+              trackCount
+              qualityTier
+              primaryWidth
+              primaryHeight
+              primaryFps
+              primaryCodec
+              primaryBitrate
+              downloadedBytes
+              uploadedBytes
+              totalViewers
+              totalInputs
+              totalOutputs
+              viewerSeconds
+              requestUrl
+              protocol
+              latitude
+              longitude
+              location
+              countryCode
+              city
+              sourceRegion
+              sourceClusterId
+              streamOriginRegion
+              streamOriginClusterId
+              schemaVersion
+            }
+            """)
+        variables: dict[str, object] = {
+            "page": page,
+            "streamId": stream_id,
+            "timeRange": time_range,
+            "noCache": no_cache,
+        }
+        response = self.execute(
+            query=query,
+            operation_name="GetRecordingEventsConnection",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetRecordingEventsConnection.model_validate(data)
 
     def get_review_cluster_media_consent_change(
         self, input: ReviewMediaCapacityConsentInput, **kwargs: Any

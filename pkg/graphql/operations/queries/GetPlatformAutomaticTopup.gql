@@ -1,0 +1,14 @@
+query GetPlatformAutomaticTopup($tenantId: ID!) {
+  platformAutomaticTopup(tenantId: $tenantId) {
+    enabled
+    thresholdEurCents
+    netAmountMinor
+    monthlyGrossLimitMinor
+    currency
+    pausedReason
+    monthlyReservedOrSpentMinor
+    available
+    unavailableReason
+    consentVersion
+  }
+}

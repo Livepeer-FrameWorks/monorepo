@@ -120,6 +120,11 @@ var errPhaseChangedWhileRated = status.Error(codes.Aborted, "the billing phase c
 
 func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierName, requestedModel, reason string, grant *operatorGrantMutation) (*purserpb.AdminAssignTierResponse, error) {
 	userID := middleware.GetUserID(ctx)
+	if review := assignmentReviewFrom(ctx); review != nil {
+		if err := s.checkAssignmentReviewSupported(ctx, tenantID); err != nil {
+			return nil, err
+		}
+	}
 	retainedProvider, retainedErr := s.prepareRetainedProviderAssignment(ctx, tenantID, tierName, requestedModel, grant)
 	if retainedErr != nil {
 		return nil, retainedErr
@@ -200,6 +205,11 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		phaseClosed, postpaidPhaseClosed = false, false
 		resp, creditReturns = nil, nil
 		queries := purserdb.New(tx)
+		if review := assignmentReviewFrom(ctx); review != nil && review.preview {
+			if err := queries.BeginBillingPreview(ctx); err != nil {
+				return err
+			}
+		}
 		tier, err := queries.GetTierByNameForOperatorAssignment(ctx, tierName)
 		if errors.Is(err, sql.ErrNoRows) {
 			return status.Errorf(codes.NotFound, "billing tier %q does not exist", tierName)
@@ -315,6 +325,20 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			}
 		}
 
+		var reviewSource []byte
+		if assignmentReviewFrom(ctx) != nil {
+			if retainedNative || grant != nil {
+				return status.Error(codes.FailedPrecondition, "reviewed assignment requires a Purser-owned arrangement without an operator grant")
+			}
+			reviewSource, err = queries.GetAssignmentReviewSource(ctx, purserdb.GetAssignmentReviewSourceParams{TenantID: tenantID, TargetTier: tierName})
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "load assignment review source: %v", err)
+			}
+		}
+		finishReview := func() error {
+			return finishAssignmentReview(ctx, queries, tenantID, tierName, requestedModel, reason, reviewSource, phase, postpaidPhase)
+		}
+
 		resp = &purserpb.AdminAssignTierResponse{
 			SubscriptionId: current.SubscriptionID, TierId: tier.ID, TierName: tier.TierName,
 			TierLevel: tier.TierLevel, BillingModel: model,
@@ -395,8 +419,17 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 				}
 			}
 		}
+		if grant == nil && (tier.TierName == "free" || model == "prepaid") {
+			preferenceRows, preferenceErr := queries.SetAutomaticPrepaidUsage(ctx, purserdb.SetAutomaticPrepaidUsageParams{TenantID: tenantID, Enabled: model == "prepaid"})
+			if preferenceErr != nil {
+				return txStatusErrorf(preferenceErr, codes.Internal, "record funded usage preference: %v", preferenceErr)
+			}
+			if preferenceRows > 0 {
+				changedFields = append(changedFields, "automatic_prepaid_usage")
+			}
+		}
 		if len(changedFields) == 0 {
-			return nil
+			return finishReview()
 		}
 		resp.Changed = true
 
@@ -450,9 +483,12 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		}, updated); err != nil {
 			return txStatusErrorf(err, codes.Internal, "enqueue subscription_updated: %v", err)
 		}
-		return nil
+		return finishReview()
 	})
-	err = handlers.RecordBillingPhaseTaxReview(ctx, err)
+
+	if assignmentReviewFrom(ctx) == nil {
+		err = handlers.RecordBillingPhaseTaxReview(ctx, err)
+	}
 	switch {
 	case err == nil:
 	case stage == txStageBegin:
@@ -531,7 +567,13 @@ func (s *PurserServer) preparePrepaidPhaseCloseForTier(ctx context.Context, tena
 // phase for a switch to postpaid now. It is nil for a tenant that is not
 // prepaid.
 func (s *PurserServer) preparePrepaidPhaseClose(ctx context.Context, tenantID string) (*handlers.PrepaidPhaseClose, error) {
-	phase, err := handlers.PreparePrepaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
+	var phase *handlers.PrepaidPhaseClose
+	var err error
+	if review := assignmentReviewFrom(ctx); review != nil {
+		phase, err = handlers.PreparePrepaidPhaseCloseAt(ctx, s.db, s.logger, s.billing, tenantID, review.at)
+	} else {
+		phase, err = handlers.PreparePrepaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
+	}
 	if err != nil {
 		return nil, billingBoundaryStatus("prepare the statement that closes the prepaid period", err)
 	}
@@ -569,7 +611,13 @@ func (s *PurserServer) preparePostpaidPhaseCloseForTier(ctx context.Context, ten
 		return nil, status.Errorf(codes.Internal, "load billing tier: %v", err)
 	}
 	if model, modelErr := operatorTierBillingModel(tier.TierName, tier.TierLevel, tier.IsDefaultPrepaid, requestedModel); modelErr == nil && model == "prepaid" {
-		phase, prepareErr := handlers.PreparePostpaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
+		var phase *handlers.PostpaidPhaseClose
+		var prepareErr error
+		if review := assignmentReviewFrom(ctx); review != nil {
+			phase, prepareErr = handlers.PreparePostpaidPhaseCloseAt(ctx, s.db, s.logger, s.billing, tenantID, review.at)
+		} else {
+			phase, prepareErr = handlers.PreparePostpaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
+		}
 		if prepareErr != nil {
 			return nil, billingBoundaryStatus("prepare the invoice that closes the postpaid period", prepareErr)
 		}

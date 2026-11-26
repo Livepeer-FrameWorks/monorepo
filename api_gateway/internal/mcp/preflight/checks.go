@@ -154,11 +154,11 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		balance = &purserpb.PrepaidBalance{BalanceCents: 0, AvailableBalanceCents: 0}
 	}
 
-	// Check if balance is sufficient (must be > 0 for new operations)
-	if balance.AvailableBalanceCents <= 0 {
+	// Purser applies both the persisted grace deadline and its spending ceiling.
+	if balance.AvailableBalanceCents <= 0 && !billingStatus.GetPaymentGrace().GetActive() {
 		blocker := &Blocker{
 			Code:       "INSUFFICIENT_BALANCE",
-			Message:    fmt.Sprintf("Available balance is %d cents (%d settled, %d reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; once the settled balance is below -€10 running sessions stop. Top up to run billable operations.", balance.AvailableBalanceCents, balance.BalanceCents, balance.ReservedBalanceCents),
+			Message:    fmt.Sprintf("Available balance is %d cents (%d settled, %d reserved). Paid continuity is unavailable or its grace limit has been reached. Top up to restore paid operations; an eligible account returns to Free limits without erasing unpaid usage.", balance.AvailableBalanceCents, balance.BalanceCents, balance.ReservedBalanceCents),
 			Resolution: "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
 			Tool:       "topup_balance",
 		}

@@ -27,10 +27,15 @@
       </span>
     </div>
     <div class="flex justify-between items-center">
-      <span class="text-sm text-muted-foreground">Recording:</span>
+      <span class="text-sm text-muted-foreground">Automatic recording:</span>
       <span class="font-mono {stream?.record ? 'text-success' : 'text-error'} font-medium text-sm">
         {stream?.record ? "Enabled" : "Disabled"}
       </span>
     </div>
+    {#if stream?.record}
+      <p class="text-xs text-muted-foreground">
+        Enabled is a setting. Check recordings and the analytics event log to confirm capture.
+      </p>
+    {/if}
   </div>
 </div>

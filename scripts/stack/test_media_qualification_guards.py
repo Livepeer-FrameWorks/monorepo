@@ -111,5 +111,62 @@ class QualificationGuards(unittest.TestCase):
             thread.join(timeout=5)
 
 
+class SourceExportGuards(unittest.TestCase):
+    def export_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tools, scratch = (root / name for name in ("source", "tools", "scratch"))
+            for path in (source / "src/output", tools, scratch):
+                path.mkdir(parents=True)
+            (source / "meson.build").write_text("project('source-contract-fixture', 'cpp')\n")
+            (source / "src/output/output.cpp").write_text("// fixture\n")
+            for command in (("init", "-q"), ("add", "."),
+                            ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                             "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")):
+                subprocess.run(["git", "-C", str(source), *command], check=True, capture_output=True)
+            revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+            commands = root / "docker.jsonl"
+            docker = tools / "docker"
+            docker.write_text(
+                "#!/usr/bin/env python3\nimport json,os,sys\n"
+                "with open(os.environ['EXPORT_COMMANDS'],'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                "if sys.argv[1:3]==['image','inspect']:\n"
+                " print('sha256:fixture' if sys.argv[4]=='{{.Id}}' else os.environ['EXPORT_REVISION'])\n"
+            )
+            make = tools / "make"
+            make.write_text("#!/bin/sh\nexit 0\n")
+            for executable in (docker, make):
+                executable.chmod(0o755)
+            env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                       TMPDIR=str(scratch), EXPORT_COMMANDS=str(commands), EXPORT_REVISION=revision,
+                       MIST_SOURCE_DIR=str(source), MIST_CONTRACT_BUILD_IMAGE="fixture:local",
+                       MIST_PREFETCH_SUBPROJECTS="1")
+            env.pop("MIST_INSTALL_TREE_OUT", None)
+            result = subprocess.run(["bash", str(ROOT.parent / "verify-mist-current-source.sh")],
+                                    env=env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return [json.loads(line) for line in commands.read_text().splitlines()]
+
+    def test_source_export_prefetches_the_non_processing_profile(self):
+        run = next(args for args in self.export_commands() if args[0] == "run")
+        self.assertTrue({"mbedtls", "libsrtp2", "usrsctp", "libsrt", "librist"}.issubset(run),
+                        "the offline profile needs every enabled protocol dependency, including librist")
+
+    def test_source_export_prefetch_preserves_job_directory_ownership(self):
+        run = next(args for args in self.export_commands() if args[0] == "run")
+        self.assertIn("--user", run, "root-owned dependencies prevent job cleanup")
+        self.assertEqual(run[run.index("--user") + 1], f"{os.getuid()}:{os.getgid()}")
+        self.assertIn("HOME=/tmp", run)
+
+
+    def test_source_export_separates_offline_build_from_native_socket_tests(self):
+        commands = self.export_commands()
+        build = next(args for args in commands if args[0] == "build")
+        self.assertIn("--network=none", build)
+        native = next(args for args in commands if args[0] == "run" and "test" in args)
+        self.assertEqual(native[native.index("--network") + 1], "bridge")
+        self.assertIn("--print-errorlogs", native)
+
+
 if __name__ == "__main__":
     unittest.main()

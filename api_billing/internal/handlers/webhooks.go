@@ -62,13 +62,18 @@ type StripeWebhookPayload struct {
 
 // StripePaymentIntentObject for payment_intent events
 type StripePaymentIntentObject struct {
-	ID             string `json:"id"`
-	Status         string `json:"status"`
-	LatestCharge   string `json:"latest_charge"`
-	AmountReceived int64  `json:"amount_received"`
-	Currency       string `json:"currency"`
-	Metadata       struct {
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	LatestCharge    string `json:"latest_charge"`
+	AmountReceived  int64  `json:"amount_received"`
+	Currency        string `json:"currency"`
+	CustomerID      string `json:"customer"`
+	PaymentMethodID string `json:"payment_method"`
+	Metadata        struct {
 		InvoiceID string `json:"invoice_id"`
+		TopupID   string `json:"topup_id"`
+		Purpose   string `json:"purpose"`
+		AttemptID string `json:"automatic_topup_attempt_id"`
 		TenantID  string `json:"tenant_id"`
 	} `json:"metadata"`
 	LastPaymentError struct {
@@ -640,6 +645,15 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 		return fmt.Errorf("failed to parse payment intent: %w", err)
 	}
 
+	if obj.Metadata.Purpose == "automatic_prepaid" {
+		if payload.Type != "payment_intent.succeeded" {
+			return nil
+		}
+		if obj.Status != "succeeded" {
+			return fmt.Errorf("automatic payment event does not confirm capture")
+		}
+		return s.settleAutomaticTopup(context.Background(), automaticTopupReceipt{TenantID: obj.Metadata.TenantID, TopupID: obj.Metadata.TopupID, PaymentID: obj.ID, AttemptID: obj.Metadata.AttemptID, CustomerID: obj.CustomerID, PaymentMethodID: obj.PaymentMethodID, AmountMinor: obj.AmountReceived, Currency: obj.Currency})
+	}
 	invoiceID := obj.Metadata.InvoiceID
 	if invoiceID == "" {
 		s.logger.WithField("payment_intent_id", obj.ID).Debug("No invoice_id in payment intent metadata, skipping")

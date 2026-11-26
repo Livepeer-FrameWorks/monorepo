@@ -8,6 +8,7 @@ package foghorndb
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 const expireArtifactIfStillEligible = `-- name: ExpireArtifactIfStillEligible :one
@@ -34,6 +35,28 @@ type ExpireArtifactIfStillEligibleParams struct {
 
 func (q *Queries) ExpireArtifactIfStillEligible(ctx context.Context, arg ExpireArtifactIfStillEligibleParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, expireArtifactIfStillEligible, arg.ArtifactHash, arg.RetentionDays)
+	var tenant_id string
+	err := row.Scan(&tenant_id)
+	return tenant_id, err
+}
+
+const expireMediaRecoveryArtifact = `-- name: ExpireMediaRecoveryArtifact :one
+UPDATE foghorn.artifacts SET status='deleted',updated_at=NOW()
+WHERE tenant_id=$1::text::uuid AND artifact_hash=$2
+ AND created_at<=$3::timestamptz AND COALESCE(ended_at,created_at)<NOW()-INTERVAL '30 days' AND federated_pointer=false
+ AND status IN ('completed','completed_partial','ready','failed')
+RETURNING tenant_id::text
+`
+
+type ExpireMediaRecoveryArtifactParams struct {
+	TenantID     string    `db:"tenant_id" json:"tenant_id"`
+	ArtifactHash string    `db:"artifact_hash" json:"artifact_hash"`
+	CutoffAt     time.Time `db:"cutoff_at" json:"cutoff_at"`
+}
+
+// The caller holds the serialized Purser expiry receipt for this tenant and cutoff.
+func (q *Queries) ExpireMediaRecoveryArtifact(ctx context.Context, arg ExpireMediaRecoveryArtifactParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, expireMediaRecoveryArtifact, arg.TenantID, arg.ArtifactHash, arg.CutoffAt)
 	var tenant_id string
 	err := row.Scan(&tenant_id)
 	return tenant_id, err
@@ -93,6 +116,91 @@ func (q *Queries) ListExpiredArtifacts(ctx context.Context, retentionDays int32)
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaRecoveryArtifacts = `-- name: ListMediaRecoveryArtifacts :many
+SELECT artifact_hash,artifact_type,stream_internal_name,tenant_id::text AS tenant_id,
+ COALESCE(user_id::text,'')::text AS user_id,size_bytes,retention_until
+FROM foghorn.artifacts
+WHERE tenant_id=$1::text::uuid AND federated_pointer=false
+ AND created_at<=$2::timestamptz AND COALESCE(ended_at,created_at)<NOW()-INTERVAL '30 days' AND status IN ('completed','completed_partial','ready','failed')
+ORDER BY artifact_hash LIMIT 500
+`
+
+type ListMediaRecoveryArtifactsParams struct {
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+	CutoffAt time.Time `db:"cutoff_at" json:"cutoff_at"`
+}
+
+type ListMediaRecoveryArtifactsRow struct {
+	ArtifactHash       string         `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactType       string         `db:"artifact_type" json:"artifact_type"`
+	StreamInternalName sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
+	TenantID           string         `db:"tenant_id" json:"tenant_id"`
+	UserID             string         `db:"user_id" json:"user_id"`
+	SizeBytes          sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
+	RetentionUntil     sql.NullTime   `db:"retention_until" json:"retention_until"`
+}
+
+func (q *Queries) ListMediaRecoveryArtifacts(ctx context.Context, arg ListMediaRecoveryArtifactsParams) ([]ListMediaRecoveryArtifactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaRecoveryArtifacts, arg.TenantID, arg.CutoffAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMediaRecoveryArtifactsRow{}
+	for rows.Next() {
+		var i ListMediaRecoveryArtifactsRow
+		if err := rows.Scan(
+			&i.ArtifactHash,
+			&i.ArtifactType,
+			&i.StreamInternalName,
+			&i.TenantID,
+			&i.UserID,
+			&i.SizeBytes,
+			&i.RetentionUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaRecoveryTenants = `-- name: ListMediaRecoveryTenants :many
+SELECT DISTINCT tenant_id::text AS tenant_id FROM foghorn.artifacts
+WHERE tenant_id>$1::text::uuid AND federated_pointer=false
+ AND status IN ('completed','completed_partial','ready','failed') AND COALESCE(ended_at,created_at)<NOW()-INTERVAL '30 days'
+ORDER BY tenant_id LIMIT 20
+`
+
+func (q *Queries) ListMediaRecoveryTenants(ctx context.Context, afterTenantID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaRecoveryTenants, afterTenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

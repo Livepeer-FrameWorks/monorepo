@@ -330,8 +330,31 @@ func main() {
 	// by JobManager's downgrade applier so both apply the same grant/suspend
 	// logic against tenant_cluster_access.
 	tierReconciler := tieraccess.NewReconciler(db, qmGRPCClient, logger, serverMetrics.TierAccessReconciliationFailures)
+	billingSvc.SetFreeTierEligibilityReader(func(ctx context.Context, tenantID string, _ handlers.FreeTierLimits) (bool, error) {
+		if commodoreClient == nil {
+			return false, nil
+		}
+		proof, err := commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
+		if err != nil {
+			return false, err
+		}
+		return proof.GetFreeTierEligible(), nil
+	})
 	billingSvc.SetTenantEntitlementConverger(func(ctx context.Context, tenantID string) error {
-		_, _, err := tierReconciler.ReconcileCanonical(ctx, tenantID)
+		activated, err := billingSvc.ActivateFundedFree(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		returned, err := billingSvc.ReturnExhaustedPrepaidToFree(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		if (activated || returned) && commodoreClient != nil {
+			if _, cacheErr := commodoreClient.InvalidateTenantCache(ctx, tenantID, "funded_usage_reconciled"); cacheErr != nil {
+				logger.WithError(cacheErr).WithField("tenant_id", tenantID).Warn("Funded account cache refresh awaits durable authority convergence")
+			}
+		}
+		_, _, err = tierReconciler.ReconcileCanonical(ctx, tenantID)
 		return err
 	})
 

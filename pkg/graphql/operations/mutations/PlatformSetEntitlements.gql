@@ -1,0 +1,9 @@
+mutation PlatformSetEntitlements($tenantId: ID!, $input: UpdateSubscriptionCustomTermsInput!) {
+  updateSubscriptionCustomTerms(tenantId: $tenantId, input: $input) {
+    id
+    entitlementOverrides {
+      key
+      value
+    }
+  }
+}

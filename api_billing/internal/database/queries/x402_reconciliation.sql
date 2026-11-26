@@ -94,7 +94,7 @@ INSERT INTO purser.credit_notes (
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
     reason, evidence_json, customer_snapshot, supplier_snapshot
 )
-SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
+SELECT purser.next_billing_document_number('CN'),
        document.tenant_id, document.source_type, document.id, 'x402_failed', sqlc.arg(nonce_id),
        document.gross_amount_cents, document.currency, 'x402 settlement reversed after confirmation',
        jsonb_build_object('transaction_hash', sqlc.arg(tx_hash)::text, 'original_invoice_number', document.invoice_number),

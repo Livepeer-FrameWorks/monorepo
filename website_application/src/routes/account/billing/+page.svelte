@@ -19,7 +19,10 @@
     CreateMollieFirstPaymentStore,
     CreateMollieSubscriptionStore,
     ChangeBillingTierStore,
+    PreviewFreeCancellationStore,
+    ConfirmFreeCancellationStore,
     PromoteToPaidStore,
+    EnablePrepaidUsageStore,
     CreateStripeBillingPortalStore,
     BillingTierFieldsStore,
   } from "$houdini";
@@ -40,7 +43,12 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import PrepaidBalanceWidget from "$lib/components/PrepaidBalanceWidget.svelte";
   import { getIconComponent } from "$lib/iconUtils";
-  import { formatEcbRate, formatEurConversion, invoiceChargeDisplay } from "$lib/utils/formatters";
+  import {
+    formatCents,
+    formatEcbRate,
+    formatEurConversion,
+    invoiceChargeDisplay,
+  } from "$lib/utils/formatters";
   import { PaymentMethod, type PaymentMethod$options } from "$houdini";
 
   // Houdini stores
@@ -56,8 +64,27 @@
   const mollieFirstPaymentMutation = new CreateMollieFirstPaymentStore();
   const mollieSubscriptionMutation = new CreateMollieSubscriptionStore();
   const changeTierMutation = new ChangeBillingTierStore();
+  const freeCancellationPreview = new PreviewFreeCancellationStore();
+  const freeCancellationConfirm = new ConfirmFreeCancellationStore();
+  type CancellationReview = {
+    quotedAt: string;
+    expiresAt: string;
+    effectiveAt: string;
+    fingerprint: string;
+    dueNowMinor: number;
+    refundNowMinor: number;
+    walletCreditNowMinor: number;
+    currency: string;
+    futureUsageMessage: string;
+  };
+  let cancellationReview = $state<CancellationReview | null>(null);
+  let cancellationReviewLoading = $state(false);
+  let cancellationReviewError = $state("");
+  let cancellationReviewSequence = 0;
   const promoteToPaidMutation = new PromoteToPaidStore();
+  const enablePrepaidUsageMutation = new EnablePrepaidUsageStore();
   const billingPortalMutation = new CreateStripeBillingPortalStore();
+  const pricingURL = `${getMarketingSiteUrl().replace(/\/$/, "")}/pricing`;
   const contactURL = `${getMarketingSiteUrl().replace(/\/$/, "")}/contact`;
 
   // Fragment stores for unmasking nested data
@@ -472,6 +499,24 @@
     }
   }
 
+  async function enableFundedUsage() {
+    changeTierLoadingId = "payg";
+    try {
+      const response = await enablePrepaidUsageMutation.mutate(null);
+      const result = response.data?.enablePrepaidUsage;
+      if (!result || response.errors?.length)
+        throw new Error(response.errors?.[0]?.message ?? "Could not enable PAYG usage");
+      await loadBillingData();
+      if (result.awaitingFunds) window.location.assign(resolve("/account/balance"));
+      else if (result.activated) toast.success("PAYG is active. Usage is paid from your balance.");
+      else toast.info("Your PAYG choice is saved; refresh billing to check activation.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not enable PAYG usage");
+    } finally {
+      changeTierLoadingId = null;
+    }
+  }
+
   async function activateFreeAccount() {
     const freeTier = availableTiers.find((tier) => (tier.tierName ?? "").toLowerCase() === "free");
     if (!freeTier?.id) {
@@ -484,7 +529,7 @@
       const result = response.data?.promoteToPaid;
       if (result?.__typename === "PromoteToPaidPayload") {
         toast.success(
-          "Free account activated; your prepaid balance remains available as account credit"
+          "Free is active with its usage limits. Your credit is retained until you choose PAYG or a paid plan"
         );
         await loadBillingData();
         return;
@@ -503,7 +548,11 @@
 
   // Opens the confirmation for a plan change, or sends a paid upgrade without
   // collection to provider setup first.
-  function chooseTier(tier: TierChoice) {
+  async function chooseTier(tier: TierChoice) {
+    const sequence = ++cancellationReviewSequence;
+    cancellationReview = null;
+    cancellationReviewError = "";
+    cancellationReviewLoading = false;
     if (!tier.id) {
       toast.error("Billing tier unavailable");
       return;
@@ -520,6 +569,24 @@
       return;
     }
     tierDialog = tier;
+    if (isDowngrade && isFreeTier(tier)) {
+      cancellationReviewLoading = true;
+      try {
+        const result = await freeCancellationPreview.mutate({ tierId: tier.id });
+        if (sequence !== cancellationReviewSequence || tierDialog?.id !== tier.id) return;
+        if (!result.data?.previewFreeCancellation || result.errors?.length)
+          throw new Error(
+            result.errors?.[0]?.message ?? "Could not prepare the cancellation review."
+          );
+        cancellationReview = result.data.previewFreeCancellation;
+      } catch (e) {
+        if (sequence === cancellationReviewSequence)
+          cancellationReviewError =
+            e instanceof Error ? e.message : "Could not prepare the cancellation review.";
+      } finally {
+        if (sequence === cancellationReviewSequence) cancellationReviewLoading = false;
+      }
+    }
   }
 
   const tierDialogFacts = $derived.by(() => {
@@ -543,8 +610,10 @@
     const tier = tierDialog;
     if (!tier?.id) return;
     const isDowngrade = tierDialogFacts?.isDowngrade ?? false;
+    const review = isDowngrade && isFreeTier(tier) ? cancellationReview : null;
+    if (isDowngrade && isFreeTier(tier) && !review) return;
     tierDialog = null;
-    await changeTier(tier.id, isDowngrade);
+    await changeTier(tier.id, isDowngrade, review);
   }
 
   // Selecting the current plan while a downgrade is staged cancels it.
@@ -553,11 +622,21 @@
     await changeTier(currentTier.id, false);
   }
 
-  async function changeTier(tierId: string, isDowngrade: boolean) {
+  async function changeTier(
+    tierId: string,
+    isDowngrade: boolean,
+    review: CancellationReview | null = null
+  ) {
     changeTierLoadingId = tierId;
     try {
-      const result = await changeTierMutation.mutate({ tierId });
-      const data = result.data?.changeBillingTier;
+      const result = review
+        ? await freeCancellationConfirm
+            .mutate({ tierId, quotedAt: review.quotedAt, fingerprint: review.fingerprint })
+            .then((r) => ({ data: r.data?.confirmFreeCancellation, errors: r.errors }))
+        : await changeTierMutation
+            .mutate({ tierId })
+            .then((r) => ({ data: r.data?.changeBillingTier, errors: r.errors }));
+      const data = result.data;
       if (data?.__typename === "ChangeBillingTierPayload") {
         if (data.pendingTier) {
           const effective = data.effectiveAt ? formatDate(data.effectiveAt) : "period end";
@@ -619,6 +698,17 @@
       minimumFractionDigits: precision,
       maximumFractionDigits: 9,
     }).format(value);
+  }
+
+  function paygRateUnit(rule: { meter: string; configJson: string }) {
+    if (rule.meter === "delivered_minutes") return "delivered minute";
+    if (rule.meter !== "storage_gb_seconds_cold") return null;
+    try {
+      const config = JSON.parse(rule.configJson);
+      return config.rated_unit === "gibibyte_month" ? "GiB-month" : null;
+    } catch {
+      return null;
+    }
   }
 
   function formatDate(dateString: string | null | undefined) {
@@ -1209,6 +1299,24 @@
                     {planChoiceNotice}
                   </p>
                 {/if}
+                {#if currentTier?.tierName === "payg"}
+                  <p
+                    class="mb-4 text-sm text-muted-foreground"
+                    data-testid="payg-exhaustion-policy"
+                  >
+                    When your PAYG credit is exhausted, eligible verified accounts return to Free
+                    and its limits after paid usage settles. Existing recordings keep their expiry
+                    dates. The next settled funding enables PAYG again unless you explicitly choose
+                    Free.
+                  </p>
+                {/if}
+                {#if isFreeTier(currentTier)}
+                  <p class="mb-4 text-sm text-muted-foreground" data-testid="funding-preference">
+                    {billingStatus?.subscription?.automaticPrepaidUsage
+                      ? "Confirmed funding activates PAYG with its own usage prices. Free allowances stay with the Free phase. Until billing shows PAYG, Free limits still apply; use the PAYG button to retry activation."
+                      : "Free and its usage limits remain active. Your credit is retained; choose Use balance for PAYG when you want to pay for usage."}
+                  </p>
+                {/if}
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {#each availableTiers as tier (tier.id ?? tier.tierName ?? tier.displayName)}
                     <div
@@ -1218,7 +1326,9 @@
                     >
                       <h4 class="text-lg font-semibold mb-2">{tier.displayName}</h4>
                       <div class="text-2xl font-bold text-primary mb-2">
-                        {#if tier.isEnterprise}
+                        {#if tier.tierName === "payg"}
+                          <span class="text-lg">Pay for usage from your balance</span>
+                        {:else if tier.isEnterprise}
                           <span class="text-lg">Contact us</span>
                         {:else}
                           {formatCurrency(tier.basePrice, tier.currency)}
@@ -1228,6 +1338,27 @@
                         {/if}
                       </div>
 
+                      {#if tier.tierName === "payg"}
+                        <div class="mb-4 space-y-1 text-sm" data-testid="payg-usage-prices">
+                          {#each tier.pricingRules ?? [] as rule (rule.meter)}
+                            {@const unit = paygRateUnit(rule)}
+                            {#if unit}
+                              <p>{formatUnitPrice(rule.unitPrice, rule.currency)} per {unit}</p>
+                            {/if}
+                          {/each}
+                          <!-- eslint-disable svelte/no-navigation-without-resolve -- prices are hosted on the external marketing site -->
+                          <a
+                            class="text-primary underline"
+                            href={pricingURL}
+                            target="_blank"
+                            rel="noopener noreferrer">Review all usage prices</a
+                          >
+                          <!-- eslint-enable svelte/no-navigation-without-resolve -->
+                          <p class="text-xs text-muted-foreground">
+                            Free plan allowances do not carry into PAYG.
+                          </p>
+                        </div>
+                      {/if}
                       {#if tier.description}
                         <p class="text-sm text-muted-foreground mb-4">{tier.description}</p>
                       {/if}
@@ -1254,6 +1385,14 @@
                         >
                           Current Plan
                         </div>
+                        {#if isFreeTier(currentTier) && billingStatus?.subscription?.automaticPrepaidUsage && !planChoiceNotice}
+                          <Button
+                            class="w-full mt-3"
+                            variant="outline"
+                            disabled={changeTierLoadingId !== null}
+                            onclick={activateFreeAccount}>Keep Free limits</Button
+                          >
+                        {/if}
                         {#if pendingTier}
                           <div
                             class="mt-3 border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-warning"
@@ -1290,6 +1429,12 @@
                             </Button>
                           {/if}
                         {/if}
+                      {:else if tier.tierName === "payg" && isFreeTier(currentTier) && !planChoiceNotice}
+                        <Button
+                          class="w-full mt-4"
+                          disabled={changeTierLoadingId !== null}
+                          onclick={enableFundedUsage}>Use balance for PAYG</Button
+                        >
                       {:else if !isPrepaid && (tier.tierLevel ?? 0) >= 1}
                         <Button
                           class="w-full mt-4"
@@ -1862,6 +2007,34 @@
       <div class="slab-body--padded">
         <dl class="space-y-3 text-sm">
           {#if tierDialogFacts.isDowngrade}
+            {#if tierDialogFacts.toFree}
+              {#if cancellationReviewLoading}<p role="status">
+                  Preparing your cancellation review…
+                </p>{/if}
+              {#if cancellationReviewError}<p role="alert" class="text-destructive">
+                  {cancellationReviewError}
+                </p>{/if}
+              {#if cancellationReview}
+                <div>
+                  <dt class="font-medium">Due now · cash refund · wallet credit</dt>
+                  <dd>
+                    {formatCents(cancellationReview.dueNowMinor, cancellationReview.currency)} · {formatCents(
+                      cancellationReview.refundNowMinor,
+                      cancellationReview.currency
+                    )} · {formatCents(
+                      cancellationReview.walletCreditNowMinor,
+                      cancellationReview.currency
+                    )}
+                  </dd>
+                </div>
+                <p class="text-muted-foreground">{cancellationReview.futureUsageMessage}</p>
+                <p class="text-xs text-muted-foreground">
+                  Effective {formatDate(cancellationReview.effectiveAt)}. This review expires {formatDate(
+                    cancellationReview.expiresAt
+                  )}. If billing changes, review again before confirming.
+                </p>
+              {/if}
+            {/if}
             <div>
               <dt class="font-medium">When</dt>
               <dd class="text-muted-foreground">
@@ -1928,6 +2101,9 @@
           variant="ghost"
           class="rounded-none h-12 flex-1 text-primary hover:text-primary/80"
           onclick={confirmTierChange}
+          disabled={tierDialogFacts.toFree &&
+            tierDialogFacts.isDowngrade &&
+            (cancellationReviewLoading || !cancellationReview)}
         >
           {tierDialogFacts.isDowngrade
             ? tierDialogFacts.toFree

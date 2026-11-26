@@ -1,0 +1,27 @@
+mutation PlatformRefundInvoice(
+  $tenantId: ID!
+  $invoiceId: ID!
+  $requestId: ID!
+  $reason: String!
+  $confirmed: Boolean!
+  $fingerprint: String!
+) {
+  platformRefundInvoice(
+    tenantId: $tenantId
+    invoiceId: $invoiceId
+    requestId: $requestId
+    reason: $reason
+    confirmed: $confirmed
+    fingerprint: $fingerprint
+  ) {
+    requestId
+    invoiceId
+    provider
+    amountMinor
+    currency
+    status
+    fingerprint
+    detail
+    providerRefundId
+  }
+}

@@ -592,6 +592,11 @@ func PreparePrepaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Lo
 	return preparePrepaidPhaseClose(ctx, db, logger, svc, tenantID, time.Time{}, false)
 }
 
+// PreparePrepaidPhaseCloseAt prices an operator-reviewed switch at its fixed boundary.
+func PreparePrepaidPhaseCloseAt(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PrepaidPhaseClose, error) {
+	return preparePrepaidPhaseClose(ctx, db, logger, svc, tenantID, at, false)
+}
+
 // PreparePrepaidGrantBoundary settles prior prepaid usage before a grant changes its prices.
 func PreparePrepaidGrantBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PrepaidPhaseClose, error) {
 	return preparePrepaidPhaseClose(ctx, db, logger, svc, tenantID, at, true)

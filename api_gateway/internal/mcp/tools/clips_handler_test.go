@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"testing"
 
 	"frameworks/api_gateway/internal/clients"
@@ -135,5 +136,20 @@ func TestHandleCreateClip_RequiresAuth(t *testing.T) {
 	checker := preflight.NewChecker(sc, clientstest.DiscardLogger())
 	if _, _, err := handleCreateClip(context.Background(), CreateClipInput{StreamID: "s1", Title: "x"}, sc, checker, clientstest.DiscardLogger()); err == nil {
 		t.Fatal("missing tenant should be an auth-required Go error")
+	}
+}
+
+func TestHandleCreateClip_StorageLimitIsStructured(t *testing.T) {
+	commo := &clientstest.FakeCommodore{CreateClipFn: func(context.Context, *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
+		return nil, grpcutil.StorageLimitError(11, 0, 10)
+	}}
+	sc, checker, ctx := clipSetup(commo, clientstest.SolventPurser())
+	result, _, err := handleCreateClip(ctx, CreateClipInput{StreamID: "s1", Title: "test"}, sc, checker, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	quota, ok := result.StructuredContent.(map[string]any)
+	if !result.IsError || !ok || quota["code"] != "STORAGE_LIMIT_REACHED" || quota["used_bytes"] != int64(11) || quota["limit_bytes"] != int64(10) {
+		t.Fatalf("MCP storage refusal lost actionable quota: %+v", result)
 	}
 }

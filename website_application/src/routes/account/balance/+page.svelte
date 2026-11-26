@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import AutomaticTopup from "$lib/components/AutomaticTopup.svelte";
   import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -58,6 +59,7 @@
   // Null until billing details report the tenant's currency; the top-up form needs it.
   let presentmentCurrency = $state<string | null>(null);
   let balance = $state<{
+    paymentGrace?: import("$lib/components/PrepaidBalanceWidget.svelte").PaymentGraceInfo | null;
     balanceCents: number;
     reservedBalanceCents: number;
     availableBalanceCents: number;
@@ -79,6 +81,13 @@
   // is credit its next invoice takes, so the spent-balance rule does not apply.
   let admittedOnBalance = $state(true);
   let suspended = $state(false);
+  let noticeNow = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => {
+      noticeNow = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
   const notice = $derived(
     balance
       ? balanceNotice({
@@ -86,6 +95,8 @@
           suspended,
           availableBalanceCents: balance.availableBalanceCents,
           isLowBalance: balance.isLowBalance,
+          paymentGrace: balance.paymentGrace,
+          now: noticeNow,
         })
       : null
   );
@@ -202,6 +213,7 @@
           availableBalanceCents: balanceResult.data.prepaidBalance.availableBalanceCents,
           currency: balanceResult.data.prepaidBalance.currency,
           isLowBalance: balanceResult.data.prepaidBalance.isLowBalance,
+          paymentGrace: balanceResult.data.prepaidBalance.paymentGrace,
         };
       }
 
@@ -498,6 +510,15 @@
                   <AlertIcon class="w-4 h-4 shrink-0 mt-0.5" />
                   <span class="text-sm">{BALANCE_NOTICES[notice]}</span>
                 </div>
+              {:else if notice === "grace"}
+                <p class="text-warning" role="status">
+                  {BALANCE_NOTICES.grace} Until {new Date(
+                    balance!.paymentGrace!.endsAt!
+                  ).toLocaleString()} or {formatCents(
+                    balance!.paymentGrace!.remainingCreditCents,
+                    LEDGER_CURRENCY
+                  )} more usage, whichever comes first.
+                </p>
               {:else if notice === "low"}
                 <div class="flex items-center gap-2 mt-3 text-warning">
                   <AlertIcon class="w-4 h-4" />
@@ -538,6 +559,19 @@
               <CoinsIcon class="w-4 h-4 text-success" />
               <h3>Top Up Balance</h3>
             </div>
+          </div>
+          <div class="slab-body--padded border-b border-border text-sm text-muted-foreground">
+            A settled top-up activates PAYG when automatic funded usage is enabled. Otherwise Free
+            limits remain active until you choose to use your balance for PAYG. PAYG pays for usage
+            from your EUR balance, with its own prices and no Free allowance carry-over. If you
+            chose Free, enable PAYG from the billing page when you want to spend the retained
+            balance. Adding credit to a paid monthly plan keeps that plan and applies the credit to
+            its invoices. When PAYG credit is exhausted, eligible verified accounts return to Free
+            and its limits after paid usage settles. Existing recordings keep their expiry dates.
+            Earlier Free usage still counts toward the same month's allowance.
+            <a class="text-primary underline" href={resolve("/account/billing")}
+              >Review plans and usage prices before funding</a
+            >.
           </div>
           {#if !presentmentCurrency}
             <div class="slab-body--padded">
@@ -816,6 +850,8 @@
             </div>
           </div>
         {/if}
+
+        <AutomaticTopup />
 
         <!-- Transaction History -->
         <div class="slab col-span-full">

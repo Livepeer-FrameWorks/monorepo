@@ -238,6 +238,11 @@ Infrastructure analytics. `streamId` arguments accept Stream.id (Relay global ID
 
 Lifecycle analytics for streams and artifacts. `streamId` arguments accept Stream.id (Relay global ID).
 
+- **recordingEventsConnection**: `StreamEventsConnection!` ([StreamEventsConnection](/builders/api-schema/analytics-types-s-v/#streameventsconnection)) — Latest recording outcomes and broadcast boundaries, without buffer/track noise.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
 - **streamEventsConnection**: `StreamEventsConnection!` ([StreamEventsConnection](/builders/api-schema/analytics-types-s-v/#streameventsconnection))
   - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
   - `streamId`: `ID!`

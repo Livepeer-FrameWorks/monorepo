@@ -1,0 +1,14 @@
+mutation PlatformDisableAutomaticTopup($tenantId: ID!, $reason: String!) {
+  platformDisableAutomaticTopup(tenantId: $tenantId, reason: $reason) {
+    enabled
+    thresholdEurCents
+    netAmountMinor
+    monthlyGrossLimitMinor
+    currency
+    pausedReason
+    monthlyReservedOrSpentMinor
+    available
+    unavailableReason
+    consentVersion
+  }
+}

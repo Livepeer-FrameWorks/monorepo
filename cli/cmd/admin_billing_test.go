@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"strings"
 	"testing"
+	"time"
 
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -60,8 +63,8 @@ func (f *fakeAdminBillingClient) AdminRecordInvoicePayment(_ context.Context, re
 	return f.paymentResp, nil
 }
 
-func (f *fakeAdminBillingClient) AdjustBalance(_ context.Context, tenantID string, amountCents int64, description string, _, _ *string) (*purserpb.BalanceTransaction, error) {
-	f.adjustCalls = append(f.adjustCalls, adjustBalanceCall{tenantID: tenantID, amountCents: amountCents, description: description})
+func (f *fakeAdminBillingClient) AdjustBalance(_ context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
+	f.adjustCalls = append(f.adjustCalls, adjustBalanceCall{tenantID: tenantID, amountCents: amountCents, description: description, referenceID: referenceID, referenceType: referenceType})
 	return f.adjustResp, nil
 }
 
@@ -222,4 +225,24 @@ func TestRunBillingSetClusterPricing(t *testing.T) {
 	if err := runBillingSetClusterPricing(context.Background(), &bytes.Buffer{}, errFake, "", "c-1", req, false); err == nil {
 		t.Fatal("expected set-pricing error to propagate")
 	}
+}
+
+func (f *fakeAdminBillingClient) PreviewAdminAssignTier(_ context.Context, _ *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignmentQuote, error) {
+	return &purserpb.AdminAssignmentQuote{QuotedAt: timestamppb.New(time.Now()), ExpiresAt: timestamppb.New(time.Now().Add(5 * time.Minute)), Fingerprint: strings.Repeat("a", 64), EffectsJson: "{}"}, nil
+}
+func (f *fakeAdminBillingClient) AdminAssignTierWithReview(ctx context.Context, req *purserpb.AdminAssignTierReviewedRequest) (*purserpb.AdminAssignTierResponse, error) {
+	return f.AdminAssignTier(ctx, req.Assignment)
+}
+func (f *fakeAdminBillingClient) AdminRefundInvoice(context.Context, *purserpb.AdminRefundInvoiceRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	return nil, fmt.Errorf("refund not configured")
+}
+func (f *fakeAdminBillingClient) GetAutomaticTopup(context.Context, *purserpb.GetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	return nil, fmt.Errorf("automatic top-up not configured")
+}
+func (f *fakeAdminBillingClient) AdminDisableAutomaticTopup(context.Context, *purserpb.AdminDisableAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error) {
+	return nil, fmt.Errorf("automatic top-up not configured")
+}
+
+func (f *fakeAdminBillingClient) AdminGetInvoiceRefund(context.Context, *purserpb.AdminGetInvoiceRefundRequest) (*purserpb.AdminRefundInvoiceResponse, error) {
+	return nil, fmt.Errorf("refund receipt not configured")
 }

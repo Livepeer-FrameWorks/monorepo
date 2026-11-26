@@ -3,25 +3,35 @@
   // balance, suspension on the settled balance. The billing and balance pages
   // both show this copy.
   export const BALANCE_RULES = [
-    { when: "Above €0", effect: "Streams, viewers and recordings run normally." },
+    { when: "Funded", effect: "Streams, viewers and recordings run normally." },
     {
-      when: "€0 or below",
+      when: "Payment grace",
       effect:
-        "Running streams and their viewers continue. New streams and new viewers are refused, and a viewer or encoder that disconnects cannot reconnect.",
+        "Previously funded accounts get temporary paid continuity, bounded by the displayed deadline and spending allowance. PAYG usage remains payable.",
     },
     {
-      when: "Below -€10 settled",
-      effect: "The account is suspended and running streams stop until a top-up.",
+      when: "Grace ends",
+      effect:
+        "Eligible accounts return to Free limits. Existing recordings have a recovery window; excess storage blocks new recording and uploads.",
     },
   ] as const;
 
   export const BALANCE_NOTICES = {
     suspended:
-      "Your account is suspended because its settled balance fell below -€10, so running streams stopped. Top up to stream again.",
+      "Paid service is restricted. Top up to settle outstanding usage and restore funded service.",
     spent:
-      "Balance spent. Running streams and their viewers continue, but new streams and new viewers are refused, and a viewer or encoder that disconnects cannot reconnect. Below -€10 settled, running streams stop.",
-    low: "Low balance. At €0 new streams and new viewers are refused; top up before then.",
+      "Prepaid balance exhausted. Paid continuity is unavailable or its grace limit has been reached. Eligible accounts return to Free limits; unpaid usage is retained. If the change is temporarily unavailable, existing broadcasts continue while new paid work is blocked. The existing negative-balance suspension threshold still applies.",
+    grace:
+      "Payment grace is active. Broadcasts and recording continue at PAYG rates within the remaining time and spending allowance.",
+    low: "Your prepaid balance is running low. Top up before it runs out to avoid restrictions.",
   } as const;
+
+  export type PaymentGraceInfo = {
+    active: boolean;
+    endsAt?: string | null;
+    remainingCreditCents: number;
+    mediaRecoveryUntil?: string | null;
+  };
 
   export type BalanceNotice = keyof typeof BALANCE_NOTICES;
 
@@ -32,9 +42,17 @@
     suspended: boolean;
     availableBalanceCents: number;
     isLowBalance: boolean;
+    paymentGrace?: PaymentGraceInfo | null;
+    now?: number;
   }): BalanceNotice | null {
     if (!facts.admittedOnBalance) return null;
     if (facts.suspended) return "suspended";
+    if (
+      facts.paymentGrace?.active &&
+      facts.paymentGrace.endsAt &&
+      new Date(facts.paymentGrace.endsAt).getTime() > (facts.now ?? Date.now())
+    )
+      return "grace";
     if (facts.availableBalanceCents <= 0) return "spent";
     if (facts.isLowBalance) return "low";
     return null;
@@ -67,7 +85,16 @@
   // The prepaid ledger is EUR; the response confirms it.
   let currency = $state("EUR");
   let isLowBalance = $state(false);
+  let paymentGrace = $state<PaymentGraceInfo | null>(null);
+  let drainRate = $state(0);
   let error = $state<string | null>(null);
+  let now = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
 
   $effect(() => {
     loadBalance();
@@ -84,6 +111,8 @@
         availableBalanceCents = result.data.prepaidBalance.availableBalanceCents;
         currency = result.data.prepaidBalance.currency;
         isLowBalance = result.data.prepaidBalance.isLowBalance;
+        paymentGrace = result.data.prepaidBalance.paymentGrace;
+        drainRate = result.data.prepaidBalance.drainRateCentsPerHour;
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "Failed to load balance";
@@ -95,7 +124,14 @@
   const balanceDisplay = $derived(formatCents(availableBalanceCents, currency));
   const admittedOnBalance = $derived(billingModel !== "postpaid");
   const notice = $derived(
-    balanceNotice({ admittedOnBalance, suspended, availableBalanceCents, isLowBalance })
+    balanceNotice({
+      admittedOnBalance,
+      suspended,
+      availableBalanceCents,
+      isLowBalance,
+      paymentGrace,
+      now,
+    })
   );
   const isSuspended = $derived(notice === "suspended");
   const isSpent = $derived(admittedOnBalance && availableBalanceCents <= 0);
@@ -140,6 +176,16 @@
             <AlertIcon class="w-4 h-4 text-destructive shrink-0 mt-0.5" />
             <span class="text-sm text-destructive">{BALANCE_NOTICES[notice]}</span>
           </div>
+        {:else if notice === "grace"}
+          <div class="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm" role="status">
+            <p>{BALANCE_NOTICES.grace}</p>
+            <p class="mt-1">
+              Until {new Date(paymentGrace!.endsAt!).toLocaleString()} or {formatCents(
+                paymentGrace!.remainingCreditCents,
+                currency
+              )} more usage, whichever comes first.
+            </p>
+          </div>
         {:else if notice === "low"}
           <div
             class="flex items-center gap-2 p-2 bg-warning/10 rounded-md border border-warning/30"
@@ -147,6 +193,20 @@
             <AlertIcon class="w-4 h-4 text-warning shrink-0" />
             <span class="text-sm text-warning">{BALANCE_NOTICES.low}</span>
           </div>
+        {/if}
+        {#if availableBalanceCents > 0 && drainRate > 0}
+          <p class="text-xs text-muted-foreground">
+            About {Math.max(1, Math.floor(availableBalanceCents / drainRate))} hours of prepaid balance
+            at the last hour's usage rate. Usage can change.
+          </p>
+        {/if}
+        {#if billingModel === "postpaid" && paymentGrace?.mediaRecoveryUntil}
+          <p class="text-sm text-warning" role="status">
+            Your previous paid media has a recovery window until {new Date(
+              paymentGrace.mediaRecoveryUntil
+            ).toLocaleString()}. Top up to retain paid storage, or export and remove excess media.
+            Existing recording expiry dates still apply.
+          </p>
         {/if}
       </div>
     {/if}

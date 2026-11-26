@@ -5541,14 +5541,9 @@ func storageCapDecision(currentBytes, additionalBytes, limitBytes int64) error {
 		return nil
 	}
 	overCap := currentBytes >= limitBytes
-	wouldOverCap := additionalBytes > 0 && currentBytes+additionalBytes > limitBytes
+	wouldOverCap := additionalBytes > 0 && additionalBytes > limitBytes-currentBytes
 	if !overCap && !wouldOverCap {
 		return nil
 	}
-	return status.Errorf(
-		codes.ResourceExhausted,
-		"storage cap reached (including retained originals): %.2f GB used of %.2f GB limit — delete content, disable original retention in /account/storage, or upgrade",
-		float64(currentBytes)/float64(1<<30),
-		float64(limitBytes)/float64(1<<30),
-	)
+	return grpcutil.StorageLimitError(currentBytes, max(additionalBytes, 0), limitBytes)
 }

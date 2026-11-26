@@ -65,14 +65,15 @@ func (q *Queries) DeleteSubscriptionPricingOverrides(ctx context.Context, subscr
 const ensureDefaultTenantSubscription = `-- name: EnsureDefaultTenantSubscription :execrows
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, billing_model, status,
-    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at
+    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at,
+    automatic_prepaid_usage
 ) VALUES (
     $1, $2::text::uuid, $3,
     $4, 'active',
     $5::timestamptz AT TIME ZONE 'UTC',
     ($5::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
     ($5::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
-    $5, $5
+    $5, $5, TRUE
 )
 ON CONFLICT (tenant_id) DO NOTHING
 `
@@ -178,7 +179,7 @@ SELECT id, tenant_id, tier_id, status, billing_email, started_at,
        pending_tier_id, pending_effective_at, pending_reason,
        COALESCE(created_at, TIMESTAMP 'epoch') AS created_at,
        COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
-       presentment_currency::text AS presentment_currency
+       presentment_currency::text AS presentment_currency, automatic_prepaid_usage
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -216,6 +217,7 @@ type GetCurrentTenantSubscriptionRow struct {
 	CreatedAt                sql.NullTime   `db:"created_at" json:"created_at"`
 	UpdatedAt                sql.NullTime   `db:"updated_at" json:"updated_at"`
 	PresentmentCurrency      string         `db:"presentment_currency" json:"presentment_currency"`
+	AutomaticPrepaidUsage    bool           `db:"automatic_prepaid_usage" json:"automatic_prepaid_usage"`
 }
 
 func (q *Queries) GetCurrentTenantSubscription(ctx context.Context, tenantID string) (GetCurrentTenantSubscriptionRow, error) {
@@ -252,6 +254,7 @@ func (q *Queries) GetCurrentTenantSubscription(ctx context.Context, tenantID str
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PresentmentCurrency,
+		&i.AutomaticPrepaidUsage,
 	)
 	return i, err
 }
@@ -382,14 +385,15 @@ const insertTenantSubscription = `-- name: InsertTenantSubscription :exec
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
     trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-    payment_method, custom_features, presentment_currency, created_at, updated_at
+    payment_method, custom_features, presentment_currency, created_at, updated_at,
+    automatic_prepaid_usage
 ) VALUES (
     $1, $2::text::uuid, $3::text::uuid,
     'active', $4, $5, $6,
     $7, $8,
     $9, $10,
     $11::text, $12::jsonb,
-    $13::text, $6, $6
+    $13::text, $6, $6, TRUE
 )
 `
 

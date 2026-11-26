@@ -331,6 +331,7 @@ type Querier interface {
 	HardDeleteFinalizedStream(ctx context.Context, arg HardDeleteFinalizedStreamParams) (int64, error)
 	// A live legacy successor can depend on an older ancestor for its original age.
 	HasLiveUnassignedRefreshToken(ctx context.Context, arg HasLiveUnassignedRefreshTokenParams) (bool, error)
+	HasPendingTenantMediaCreation(ctx context.Context, tenantID string) (bool, error)
 	HasUnsettledStreamIngestRevocation(ctx context.Context, arg HasUnsettledStreamIngestRevocationParams) (bool, error)
 	HasUserWallet(ctx context.Context, arg HasUserWalletParams) (bool, error)
 	InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error
@@ -503,6 +504,9 @@ type Querier interface {
 	// enqueues that follow are bounded statements without rereading the tenant's
 	// rows for each of them.
 	ListTenantMediaObjectRefreshTargets(ctx context.Context, tenantID string) ([]string, error)
+	// Business creation intents precede physical media. Include historical owners
+	// and tombstones so a routing change or delayed delete cannot hide paid storage.
+	ListTenantMediaOwnerCells(ctx context.Context, tenantID string) ([]string, error)
 	// The tenant's media-object authorities a cell decides on together with the
 	// tenant authority: the set a tenant change fans out over
 	// (ListTenantMediaObjectRefreshTargets). Each carries its current payload and

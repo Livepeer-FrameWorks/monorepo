@@ -187,7 +187,7 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 	result, err := resolver.DoCreateVodUpload(ctx, input)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create VOD upload")
-		return toolError(fmt.Sprintf("Failed to create VOD upload: %v", err))
+		return toolRPCError(err, "Failed to create VOD upload")
 	}
 
 	// Handle error results
@@ -266,7 +266,7 @@ func handleImportVodAsset(ctx context.Context, args ImportVodAssetInput, resolve
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to import VOD asset")
-		return toolError(fmt.Sprintf("Failed to import VOD asset: %v", err))
+		return toolRPCError(err, "Failed to import VOD asset")
 	}
 	switch r := result.(type) {
 	case *model.ValidationError:

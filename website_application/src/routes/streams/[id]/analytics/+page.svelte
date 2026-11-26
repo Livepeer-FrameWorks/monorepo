@@ -164,6 +164,8 @@
       STREAM_LIFECYCLE_UPDATE: "info",
       BUFFER_UPDATE: "quality_change",
       TRACK_LIST_UPDATE: "track_change",
+      RECORDING_ACTIVE: "dvr_start",
+      RECORDING_REFUSED: "error",
       DVR_START: "dvr_start",
       DVR_STOP: "dvr_stop",
       ERROR: "error",

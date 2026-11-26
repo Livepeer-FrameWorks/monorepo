@@ -1,0 +1,8 @@
+mutation PlatformAssignBillingTier($tenantId: ID!, $tierName: String!, $reason: String!) {
+  platformAssignBillingTier(tenantId: $tenantId, tierName: $tierName, reason: $reason) {
+    subscriptionId
+    tierName
+    billingModel
+    changed
+  }
+}

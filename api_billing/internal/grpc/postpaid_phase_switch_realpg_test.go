@@ -55,9 +55,30 @@ func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { 
 		tenantID, fmt.Sprintf("%x", sha256.Sum256([]byte("{}"))), strings.Repeat("9", 64), periodStart.Add(2*time.Hour), periodStart.Add(2*time.Hour+5*time.Minute))
 
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
-	if _, err := server.AdminAssignTier(operatorAssignCtx("7a000000-0000-4000-8000-000000000003"), &purserpb.AdminAssignTierRequest{
-		TenantId: tenantID, TierName: "payg", Reason: "moves to pay as you go",
-	}); err != nil {
+	operator := operatorAssignCtx("7a000000-0000-4000-8000-000000000003")
+	request := &purserpb.AdminAssignTierRequest{TenantId: tenantID, TierName: "payg", Reason: "moves to pay as you go"}
+	var numberBefore int64
+	var calledBefore bool
+	if err := db.QueryRow(`SELECT last_value,is_called FROM purser.billing_invoice_number_seq`).Scan(&numberBefore, &calledBefore); err != nil {
+		t.Fatal(err)
+	}
+	quote, err := server.PreviewAdminAssignTier(operator, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var numberAfter int64
+	var calledAfter bool
+	var invoices int
+	if err := db.QueryRow(`SELECT last_value,is_called FROM purser.billing_invoice_number_seq`).Scan(&numberAfter, &calledAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1`, tenantID).Scan(&invoices); err != nil {
+		t.Fatal(err)
+	}
+	if invoices != 0 || numberBefore != numberAfter || calledBefore != calledAfter {
+		t.Fatalf("financial preview issued a document or consumed its number: documents=%d sequence=%d/%t -> %d/%t", invoices, numberBefore, calledBefore, numberAfter, calledAfter)
+	}
+	if _, err := server.AdminAssignTierWithReview(operator, &purserpb.AdminAssignTierReviewedRequest{Assignment: request, QuotedAt: quote.QuotedAt, ExpectedFingerprint: quote.Fingerprint}); err != nil {
 		t.Fatalf("AdminAssignTier: %v", err)
 	}
 	var model string

@@ -600,7 +600,9 @@ WHERE payment_id = sqlc.arg(payment_id)::text::uuid
 -- name: SetProviderPaymentIntentStatus :exec
 UPDATE purser.payment_provider_intents
 SET status = sqlc.arg(status), updated_at = NOW()
-WHERE id = sqlc.arg(intent_id)::text::uuid;
+WHERE id = sqlc.arg(intent_id)::text::uuid
+  AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND status NOT IN ('succeeded', 'expired', 'cancelled', 'terminal_failed');
 
 -- name: GetActiveMollieCollectionDetails :one
 SELECT mc.mollie_customer_id,
@@ -644,7 +646,8 @@ WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid;
 -- A live provider subscription must confirm the target first, so the local tier
 -- and the next provider charge cannot disagree.
 UPDATE purser.tenant_subscriptions
-SET tier_id = sqlc.arg(pending_tier_id)::text::uuid, updated_at = NOW()
+SET tier_id = sqlc.arg(pending_tier_id)::text::uuid, updated_at = NOW(),
+    automatic_prepaid_usage = CASE WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=sqlc.arg(pending_tier_id)::text::uuid)='free' THEN FALSE ELSE automatic_prepaid_usage END
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND pending_tier_id = sqlc.arg(pending_tier_id)::text::uuid
   AND (pending_reason IS DISTINCT FROM 'downgrade'

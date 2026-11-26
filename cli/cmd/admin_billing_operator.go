@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"regexp"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"frameworks/cli/internal/ux"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -133,16 +135,17 @@ func formatEURCents(cents int64) string {
 }
 
 type billingCreditRequest struct {
-	Target billingTenantTarget
-	Amount string
-	Reason string
-	Debit  bool
+	Target      billingTenantTarget
+	Amount      string
+	Reason      string
+	Debit       bool
+	ReferenceID string
 }
 
 // runBillingCredit adjusts a tenant's EUR prepaid balance. Purser's
 // AdjustBalance creates the balance row when the tenant has none, records the
 // description as the ledger reason, and records the calling operator as the
-// transaction's actor. The tenant's tier and billing model are not touched.
+// transaction's actor. Eligible funded Free accounts activate prepaid PAYG.
 func runBillingCredit(ctx context.Context, w io.Writer, p adminBillingClient, lookup adminUserLookupClient, jwt string, req billingCreditRequest, outputJSON bool) error {
 	if err := req.Target.validate(); err != nil {
 		return err
@@ -164,11 +167,24 @@ func runBillingCredit(ctx context.Context, w io.Writer, p adminBillingClient, lo
 		verb, description = "Debited", "operator debit: "+reason
 	}
 
+	id := strings.TrimSpace(req.ReferenceID)
+	if id == "" {
+		id = uuid.NewString()
+	}
+	if referenceErr := validateUUID(id); referenceErr != nil {
+		return fmt.Errorf("--reference-id: %w", referenceErr)
+	}
+	kind := "operator_adjustment"
+	referenceID, referenceType := &id, &kind
+
 	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
 	defer cancel()
-	txn, err := p.AdjustBalance(cctx, tenantID, cents, description, nil, nil)
+	txn, err := p.AdjustBalance(cctx, tenantID, cents, description, referenceID, referenceType)
 	if err != nil {
-		return fmt.Errorf("adjust balance for tenant %s: %w", tenantID, err)
+		return fmt.Errorf("adjust balance for tenant %s: %w; retry this operation with --reference-id %s", tenantID, err, id)
+	}
+	if txn == nil || txn.GetAmountCents() != cents {
+		return fmt.Errorf("balance operation returned a different amount; inspect its reference before retrying")
 	}
 	if outputJSON {
 		return writeProtoJSON(w, txn)
@@ -185,6 +201,7 @@ func runBillingCredit(ctx context.Context, w io.Writer, p adminBillingClient, lo
 	fields = append(fields,
 		ux.ResultField{Key: "balance", OK: true, Detail: formatEURCents(txn.GetBalanceAfterCents())},
 		ux.ResultField{Key: "transaction", OK: true, Detail: txn.GetId()},
+		ux.ResultField{Key: "retry reference", OK: true, Detail: id},
 		ux.ResultField{Key: "reason", OK: true, Detail: description},
 	)
 	ux.Result(w, fields)
@@ -192,6 +209,8 @@ func runBillingCredit(ctx context.Context, w io.Writer, p adminBillingClient, lo
 }
 
 type billingSetTierRequest struct {
+	Review       string
+	QuotedAt     string
 	Target       billingTenantTarget
 	Tier         string
 	BillingModel string
@@ -224,9 +243,23 @@ func runBillingSetTier(ctx context.Context, w io.Writer, p adminBillingClient, l
 
 	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
 	defer cancel()
-	resp, err := p.AdminAssignTier(cctx, &purserpb.AdminAssignTierRequest{
-		TenantId: tenantID, TierName: tier, BillingModel: model, Reason: reason,
-	})
+	assignment := &purserpb.AdminAssignTierRequest{TenantId: tenantID, TierName: tier, BillingModel: model, Reason: reason}
+	if req.Review == "" {
+		quote, previewErr := p.PreviewAdminAssignTier(cctx, assignment)
+		if previewErr != nil {
+			return fmt.Errorf("price tier assignment: %w", previewErr)
+		}
+		if outputJSON {
+			return writeProtoJSON(w, quote)
+		}
+		fmt.Fprintf(w, "Tenant: %s\nFinancial effects: %s\nQuoted at: %s\nExpires at: %s\nConfirm with --review %s --quoted-at %s and the same tenant, tier, model and reason.\n", tenantID, quote.GetEffectsJson(), quote.GetQuotedAt().AsTime().Format(time.RFC3339Nano), quote.GetExpiresAt().AsTime().Format(time.RFC3339Nano), quote.GetFingerprint(), quote.GetQuotedAt().AsTime().Format(time.RFC3339Nano))
+		return nil
+	}
+	quotedAt, parseErr := time.Parse(time.RFC3339Nano, req.QuotedAt)
+	if parseErr != nil {
+		return fmt.Errorf("--quoted-at must match the preview timestamp: %w", parseErr)
+	}
+	resp, err := p.AdminAssignTierWithReview(cctx, &purserpb.AdminAssignTierReviewedRequest{Assignment: assignment, QuotedAt: timestamppb.New(quotedAt), ExpectedFingerprint: req.Review})
 	if err != nil {
 		return fmt.Errorf("assign tier %s to tenant %s: %w", tier, tenantID, err)
 	}
@@ -290,9 +323,13 @@ func newAdminBillingCreditCmd() *cobra.Command {
 		Use:   "credit",
 		Short: "Add (or with --debit, remove) EUR prepaid balance for a tenant",
 		Long: `Add EUR prepaid balance to a tenant, addressed by --tenant-id or by the
-email of one of its users. The tenant's tier and billing model stay as they
-are: prepaid tenants spend the balance on usage, postpaid tenants have it
-applied as credit when their invoice closes.
+email of one of its users. Eligible funded Free accounts activate prepaid PAYG.
+Prepaid accounts spend credit on usage; paid postpaid plans retain their terms
+and apply credit when their invoice closes. This does not refund a card payment.
+
+Every adjustment has a retry reference, printed before it is sent. Pass
+--reference-id <uuid> to choose one or retry. Reusing the same reference
+returns its original receipt; different money under that reference is refused.
 
 Purser records "operator credit: <reason>" as the transaction's reason and,
 when you are logged in, your user as its actor. --email needs a
@@ -310,6 +347,10 @@ platform-operator session ('frameworks login'). A negative --amount
 				return err
 			}
 			defer cleanup()
+			if strings.TrimSpace(req.ReferenceID) == "" {
+				req.ReferenceID = uuid.NewString()
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "Adjustment retry reference: %s (reuse with --reference-id if the result is uncertain)\n", req.ReferenceID)
 			return runBillingCredit(cmd.Context(), cmd.OutOrStdout(), p, lookup, jwt, req, output == "json")
 		},
 	}
@@ -317,6 +358,7 @@ platform-operator session ('frameworks login'). A negative --amount
 	cmd.Flags().StringVar(&target.Email, "email", "", "email of a user in the tenant (needs a platform-operator session)")
 	cmd.Flags().StringVar(&req.Amount, "amount", "", "EUR amount with at most two decimals, e.g. 25.00 (required)")
 	cmd.Flags().StringVar(&req.Reason, "reason", "", "why the balance changes; recorded on the transaction (required)")
+	cmd.Flags().StringVar(&req.ReferenceID, "reference-id", "", "stable UUID for this adjustment; reuse it when retrying the same operation")
 	cmd.Flags().BoolVar(&req.Debit, "debit", false, "confirm a negative --amount that removes balance")
 	return cmd
 }
@@ -327,26 +369,20 @@ func newAdminBillingSetTierCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set-tier",
 		Short: "Put a tenant on a billing tier as an operator decision",
-		Long: `Assign a billing tier to a tenant, addressed by --tenant-id or by the email of
-one of its users. The change applies immediately, in either direction, and does
-not require the tenant to have a Stripe or Mollie subscription or a billing
-profile. Purser refuses inactive tiers and a billing model the tier does not
-run: level-0 tiers such as payg run prepaid, all other tiers run postpaid.
-Without --billing-model the tier's model is used.
+		Long: `Preview an immediate tier assignment for an existing tenant, addressed by
+--tenant-id or --email. Review the closing invoice, wallet movement, carried
+charges and retained unused fee. Apply within five minutes with the returned
+--review and --quoted-at and the same tenant, tier, billing model and reason.
+Changed billing or usage requires another preview. No cash refund is issued.
 
-Purser reconciles cluster access for the new tier, refreshes cached tenant
-limits, and records billing.subscription_updated with --reason and the
-calling identity (your user when logged in).
+This reviewed path supports Purser-owned arrangements. Native Stripe/Mollie
+subscriptions and operator grants use their dedicated recovery or grant commands.
+Inactive tiers and incompatible billing models are refused. Without
+--billing-model, the catalog determines prepaid or postpaid. Initialize an
+account with no subscription before reviewing an assignment.
 
-When the tenant has a staged downgrade and keeps its Stripe or Mollie
-subscription, set-tier clears the downgrade and queues the provider step that
-reprices that subscription to the assigned tier; its retries and errors appear
-as tier_downgrade work in 'frameworks admin billing recovery list'.
-
-A postpaid paid tier admits rated work only once its charges can be collected:
-the tenant's own Stripe or Mollie setup, or an operator arrangement. To bill a
-tenant differently (no monthly fee, invoices you collect by hand, nothing owed
-until a date), use 'frameworks admin billing grant set --tier ...' instead.`,
+The committed assignment reconciles cluster access, refreshes cached limits and
+records the calling identity and --reason on the subscription audit event.`,
 		Example: `  frameworks admin billing set-tier --email owner@example.com --tier production --reason "upgraded after card setup"
   frameworks admin billing set-tier --tenant-id <uuid> --tier payg --billing-model prepaid --reason "back to pay as you go"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -364,6 +400,8 @@ until a date), use 'frameworks admin billing grant set --tier ...' instead.`,
 	}
 	cmd.Flags().StringVar(&target.TenantID, "tenant-id", "", "tenant UUID")
 	cmd.Flags().StringVar(&target.Email, "email", "", "email of a user in the tenant (needs a platform-operator session)")
+	cmd.Flags().StringVar(&req.Review, "review", "", "fingerprint of the priced preview to apply")
+	cmd.Flags().StringVar(&req.QuotedAt, "quoted-at", "", "exact RFC3339 timestamp from the preview")
 	cmd.Flags().StringVar(&req.Tier, "tier", "", "tier name, e.g. payg, free, supporter, developer, production (required)")
 	cmd.Flags().StringVar(&req.BillingModel, "billing-model", "", "prepaid|postpaid (default: the model the tier runs)")
 	cmd.Flags().StringVar(&req.Reason, "reason", "", "why the tier changes; recorded on the audit event (required)")

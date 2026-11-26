@@ -26,22 +26,26 @@ import (
 // 4. Helmsman deletes local files (and notifies Foghorn)
 // 5. PurgeDeletedJob eventually hard-deletes the DB record
 type RetentionJob struct {
-	db            *sql.DB
-	logger        logging.Logger
-	interval      time.Duration
-	retentionDays int // Age horizon for failed artifacts with no retention deadline
-	decklogClient *decklog.BatchedClient
-	stopCh        chan struct{}
-	wg            sync.WaitGroup
+	recoveryClient mediaRecoveryClient
+	recoveryMu     sync.Mutex
+	recoveryCursor string
+	db             *sql.DB
+	logger         logging.Logger
+	interval       time.Duration
+	retentionDays  int // Age horizon for failed artifacts with no retention deadline
+	decklogClient  *decklog.BatchedClient
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 // RetentionConfig holds configuration for the retention job
 type RetentionConfig struct {
-	DB            *sql.DB
-	Logger        logging.Logger
-	Interval      time.Duration // How often to run (default: 1 hour)
-	RetentionDays int           // Failed-artifact age horizon (default: 30 days)
-	DecklogClient *decklog.BatchedClient
+	RecoveryClient mediaRecoveryClient
+	DB             *sql.DB
+	Logger         logging.Logger
+	Interval       time.Duration // How often to run (default: 1 hour)
+	RetentionDays  int           // Failed-artifact age horizon (default: 30 days)
+	DecklogClient  *decklog.BatchedClient
 }
 
 // NewRetentionJob creates a new retention job
@@ -55,12 +59,13 @@ func NewRetentionJob(cfg RetentionConfig) *RetentionJob {
 		retentionDays = 30
 	}
 	return &RetentionJob{
-		db:            cfg.DB,
-		logger:        cfg.Logger,
-		interval:      interval,
-		retentionDays: retentionDays,
-		decklogClient: cfg.DecklogClient,
-		stopCh:        make(chan struct{}),
+		recoveryClient: cfg.RecoveryClient,
+		db:             cfg.DB,
+		logger:         cfg.Logger,
+		interval:       interval,
+		retentionDays:  retentionDays,
+		decklogClient:  cfg.DecklogClient,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -103,6 +108,9 @@ func (j *RetentionJob) scan() {
 	defer cancel()
 
 	j.logger.Info("Starting retention scan")
+	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, time.Minute)
+	j.scanMediaRecovery(recoveryCtx)
+	recoveryCancel()
 
 	// Retention only acts on terminal artifacts. An active DVR (recording /
 	// finalizing) is never killed by retention: retention_until on a DVR is
@@ -169,6 +177,10 @@ func (j *RetentionJob) expireArtifactTx(
 	sizeBytes sql.NullInt64,
 	retentionUntil sql.NullTime,
 ) bool {
+	return j.expireArtifactWithGuard(ctx, hash, artifactType, internalName, tenantID, userID, sizeBytes, retentionUntil, nil)
+}
+
+func (j *RetentionJob) expireArtifactWithGuard(ctx context.Context, hash, artifactType string, internalName, tenantID, userID sql.NullString, sizeBytes sql.NullInt64, retentionUntil sql.NullTime, guard func(*sql.Tx) (string, error)) bool {
 	// FAIL CLOSED on an unknown artifact type: expiry applies type-specific deletion + cascade
 	// semantics, and defaulting a future/malformed type to VOD deletion could delete the wrong bytes
 	// or skip a required cascade. Only the known types are expired here; anything else is left in place
@@ -190,9 +202,13 @@ func (j *RetentionJob) expireArtifactTx(
 		// Guarded soft-delete that RE-EVALUATES the full expiry predicate (not just terminal status),
 		// so a concurrent retention change since candidate selection actually prevents deletion.
 		stage = "expire"
-		deletedTenantID, scanErr := foghorndb.New(tx).ExpireArtifactIfStillEligible(ctx, foghorndb.ExpireArtifactIfStillEligibleParams{
-			ArtifactHash: hash, RetentionDays: int32(j.retentionDays),
-		})
+		var deletedTenantID string
+		var scanErr error
+		if guard != nil {
+			deletedTenantID, scanErr = guard(tx)
+		} else {
+			deletedTenantID, scanErr = foghorndb.New(tx).ExpireArtifactIfStillEligible(ctx, foghorndb.ExpireArtifactIfStillEligibleParams{ArtifactHash: hash, RetentionDays: int32(j.retentionDays)})
+		}
 		if scanErr != nil {
 			return scanErr
 		}

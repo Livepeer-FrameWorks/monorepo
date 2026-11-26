@@ -33,6 +33,7 @@ query GetBillingStatus {
       ...BillingTierFields
     }
     subscription {
+      automaticPrepaidUsage
       id
       tenantId
       tierId

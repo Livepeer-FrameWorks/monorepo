@@ -2394,16 +2394,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		{
 			var dvrIntent []byte
 			if recording {
-				userID := streamValidation.UserId
-				dvrReq = &sharedpb.StartDVRRequest{
-					TenantId:      streamValidation.TenantId,
-					InternalName:  streamValidation.InternalName,
-					UserId:        &userID,
-					ClusterId:     streamValidation.GetOriginClusterId(),
-					DvrPolicy:     streamValidation.GetDvrPolicy(),
-					ProcessesJson: streamValidation.GetDvrProcessesJson(),
-				}
-				applyStreamDVRChapterPolicy(dvrReq, streamValidation.GetDvrChapterMode(), streamValidation.GetDvrChapterIntervalSeconds())
+				dvrReq = managedStreamDVRRequest(streamValidation)
 				b, mErr := protojson.Marshal(dvrReq)
 				if mErr != nil {
 					p.logger.WithError(mErr).WithField("internal_name", streamValidation.InternalName).

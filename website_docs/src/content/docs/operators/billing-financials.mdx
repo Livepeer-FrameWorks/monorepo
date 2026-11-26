@@ -135,3 +135,47 @@ Resolve missing-tax, missing-document and coverage exceptions explicitly. The
 archive supplies no `journal.csv`, balanced journal, reconciled prepaid schedule,
 bank match or close approval. Moving money from Stripe does not remove the need
 to account for the associated sales, tax and fees.
+
+## Reviewed account repair
+
+Use a platform-operator session. Plan assignments now preview by default:
+
+```bash
+frameworks admin billing set-tier --tenant-id <tenant-uuid> --tier payg --reason "Reviewed customer billing repair"
+```
+
+Review the closing invoice, wallet movement and retained unused paid fee. Apply
+with the returned `--review <fingerprint> --quoted-at <timestamp>` and identical
+arguments within five minutes. A changed source requires a fresh preview.
+Native provider subscriptions and operator grants use their existing dedicated
+recovery commands.
+
+A wallet credit uses `billing credit --reference-id <stable-uuid>` and is not a
+cash refund. For a completed invoice's full original card payment:
+
+```bash
+frameworks admin billing refund-invoice --tenant-id <tenant-uuid> --invoice-id <invoice-uuid> --reference-id <stable-uuid> --reason "Approved original-payment return"
+```
+
+The default only previews. Confirm with its exact `--confirm <fingerprint>` and
+the same arguments. Reuse the reference after a lost response. Inspect without
+another mutation:
+
+```bash
+frameworks admin billing refund-invoice --tenant-id <tenant-uuid> --reference-id <stable-uuid> --inspect
+frameworks admin billing automatic-topup inspect --tenant-id <tenant-uuid>
+frameworks admin billing automatic-topup disable --tenant-id <tenant-uuid> --reason "Customer requested automatic funding stop"
+```
+
+Refund approval holds invoice collection while the provider returns the money.
+A pending bank return is not a settled refund. Settlement creates an original-tax
+credit note and a `refunded` invoice without rewriting issued amounts or adding
+wallet credit. Refunding does not cancel the subscription. Reconcile earlier
+goodwill before returning the same amount in cash. Split payments, partial
+returns, existing adjustments and incomplete original tax evidence require
+manual reconciliation. A failed return keeps collection held for review.
+
+The platform tenant panel provides the same reviewed assignment, wallet,
+entitlement, checkout recovery, full-refund and automatic-funding disable actions.
+An entitlement retention limit of zero permits uncapped retention; the actual
+account or recording policy still controls expiry.

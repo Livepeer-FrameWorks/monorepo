@@ -98,7 +98,7 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create clip")
-		return toolError(fmt.Sprintf("Failed to create clip: %v", err))
+		return toolRPCError(err, "Failed to create clip")
 	}
 
 	result := CreateClipResult{

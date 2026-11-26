@@ -28,6 +28,14 @@ mkdir "$task_dir/source"
 git -C "$source_root" archive "$revision" | tar -xf - -C "$task_dir/source"
 cp "$repo_root/pkg/mist/testdata/Dockerfile.source-contract" "$task_dir/Dockerfile"
 
+# Resolve only the pinned non-processing wraps before the network-isolated build.
+# Meson verifies archive hashes and applies the patches declared by this export.
+if [[ "${MIST_PREFETCH_SUBPROJECTS:-0}" == 1 ]]; then
+  docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+    --entrypoint meson -v "$task_dir/source:/source" "$builder_id" \
+    subprojects download --sourcedir /source mbedtls libsrtp2 usrsctp libsrt librist
+fi
+
 # Build only the immutable export, never the sibling checkout or its build trees.
 # Retain the export and images for diagnosis; nothing is published or deployed.
 echo "Mist source-contract export: $task_dir"
@@ -44,6 +52,21 @@ if [[ "$actual_revision" != "$revision" ]]; then
   echo "ERROR: rebuilt image lost its source revision" >&2
   exit 1
 fi
+docker run --rm --network=none --entrypoint MistInEBML "$result_id" --help >/dev/null
+docker run --rm --network=none --entrypoint MistController "$result_id" --help >/dev/null
+
+# Native socket fixtures need a non-loopback interface and a multicast route.
+native_container="fw-mist-native-tests-${nonce}"
+cleanup_native_tests() {
+  docker rm -f "$native_container" >/dev/null 2>&1 || true
+}
+trap cleanup_native_tests EXIT
+docker run --rm --name "$native_container" --network bridge \
+  --entrypoint meson "$result_id" test -C /contract-build \
+  --no-rebuild --num-processes 4 --print-errorlogs
+cleanup_native_tests
+trap - EXIT
+
 echo "Mist source-contract image: $result_id ($result_tag)"
 
 # MIST_INSTALL_TREE_OUT=<file.tar.gz> also writes the build's install prefix as a

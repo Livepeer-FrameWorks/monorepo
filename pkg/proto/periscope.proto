@@ -884,6 +884,8 @@ message GetNetworkLiveStatsResponse {
 
 service StreamAnalyticsService {
   rpc GetStreamEvents(GetStreamEventsRequest) returns (GetStreamEventsResponse);
+  // Recording state excludes noisy buffer/track events so a failure remains discoverable.
+  rpc GetStreamRecordingEvents(GetStreamEventsRequest) returns (GetStreamEventsResponse);
   rpc GetBufferEvents(GetBufferEventsRequest) returns (GetBufferEventsResponse);
   rpc GetStreamHealthMetrics(GetStreamHealthMetricsRequest) returns (GetStreamHealthMetricsResponse);
   // Stream status for Control/Data plane separation

@@ -1,0 +1,18 @@
+mutation PlatformAdjustBalance(
+  $tenantId: ID!
+  $amountCents: Int!
+  $reason: String!
+  $referenceId: ID!
+) {
+  platformAdjustBalance(
+    tenantId: $tenantId
+    amountCents: $amountCents
+    reason: $reason
+    referenceId: $referenceId
+  ) {
+    id
+    amountCents
+    balanceAfterCents
+    description
+  }
+}

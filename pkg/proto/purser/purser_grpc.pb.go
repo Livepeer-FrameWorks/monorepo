@@ -32,6 +32,8 @@ const (
 	BillingService_CreateBillingTier_FullMethodName                = "/purser.BillingService/CreateBillingTier"
 	BillingService_UpdateBillingTier_FullMethodName                = "/purser.BillingService/UpdateBillingTier"
 	BillingService_GetTenantAdmissionStatus_FullMethodName         = "/purser.BillingService/GetTenantAdmissionStatus"
+	BillingService_GetMediaRecoveryStatus_FullMethodName           = "/purser.BillingService/GetMediaRecoveryStatus"
+	BillingService_CommitMediaRecoveryExpiry_FullMethodName        = "/purser.BillingService/CommitMediaRecoveryExpiry"
 	BillingService_GetTenantBillingStatus_FullMethodName           = "/purser.BillingService/GetTenantBillingStatus"
 	BillingService_ListTenantBillingSnapshots_FullMethodName       = "/purser.BillingService/ListTenantBillingSnapshots"
 )
@@ -59,6 +61,9 @@ type BillingServiceClient interface {
 	// ===== CROSS-SERVICE BILLING STATUS =====
 	// Bounded admission-only status for latency-sensitive service calls.
 	GetTenantAdmissionStatus(ctx context.Context, in *GetTenantAdmissionStatusRequest, opts ...grpc.CallOption) (*GetTenantAdmissionStatusResponse, error)
+	// Owning-cell recovery cleanup uses a fresh read and a serialized expiry receipt.
+	GetMediaRecoveryStatus(ctx context.Context, in *GetMediaRecoveryStatusRequest, opts ...grpc.CallOption) (*MediaRecoveryStatus, error)
+	CommitMediaRecoveryExpiry(ctx context.Context, in *CommitMediaRecoveryExpiryRequest, opts ...grpc.CallOption) (*MediaRecoveryStatus, error)
 	// Full entitlement, allowance, retention, and pricing snapshot.
 	GetTenantBillingStatus(ctx context.Context, in *GetTenantBillingStatusRequest, opts ...grpc.CallOption) (*GetTenantBillingStatusResponse, error)
 	// Cross-tenant billing snapshot for the platform-operator god view.
@@ -175,6 +180,26 @@ func (c *billingServiceClient) GetTenantAdmissionStatus(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *billingServiceClient) GetMediaRecoveryStatus(ctx context.Context, in *GetMediaRecoveryStatusRequest, opts ...grpc.CallOption) (*MediaRecoveryStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaRecoveryStatus)
+	err := c.cc.Invoke(ctx, BillingService_GetMediaRecoveryStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingServiceClient) CommitMediaRecoveryExpiry(ctx context.Context, in *CommitMediaRecoveryExpiryRequest, opts ...grpc.CallOption) (*MediaRecoveryStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaRecoveryStatus)
+	err := c.cc.Invoke(ctx, BillingService_CommitMediaRecoveryExpiry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *billingServiceClient) GetTenantBillingStatus(ctx context.Context, in *GetTenantBillingStatusRequest, opts ...grpc.CallOption) (*GetTenantBillingStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetTenantBillingStatusResponse)
@@ -218,6 +243,9 @@ type BillingServiceServer interface {
 	// ===== CROSS-SERVICE BILLING STATUS =====
 	// Bounded admission-only status for latency-sensitive service calls.
 	GetTenantAdmissionStatus(context.Context, *GetTenantAdmissionStatusRequest) (*GetTenantAdmissionStatusResponse, error)
+	// Owning-cell recovery cleanup uses a fresh read and a serialized expiry receipt.
+	GetMediaRecoveryStatus(context.Context, *GetMediaRecoveryStatusRequest) (*MediaRecoveryStatus, error)
+	CommitMediaRecoveryExpiry(context.Context, *CommitMediaRecoveryExpiryRequest) (*MediaRecoveryStatus, error)
 	// Full entitlement, allowance, retention, and pricing snapshot.
 	GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error)
 	// Cross-tenant billing snapshot for the platform-operator god view.
@@ -263,6 +291,12 @@ func (UnimplementedBillingServiceServer) UpdateBillingTier(context.Context, *Upd
 }
 func (UnimplementedBillingServiceServer) GetTenantAdmissionStatus(context.Context, *GetTenantAdmissionStatusRequest) (*GetTenantAdmissionStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantAdmissionStatus not implemented")
+}
+func (UnimplementedBillingServiceServer) GetMediaRecoveryStatus(context.Context, *GetMediaRecoveryStatusRequest) (*MediaRecoveryStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaRecoveryStatus not implemented")
+}
+func (UnimplementedBillingServiceServer) CommitMediaRecoveryExpiry(context.Context, *CommitMediaRecoveryExpiryRequest) (*MediaRecoveryStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method CommitMediaRecoveryExpiry not implemented")
 }
 func (UnimplementedBillingServiceServer) GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantBillingStatus not implemented")
@@ -471,6 +505,42 @@ func _BillingService_GetTenantAdmissionStatus_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingService_GetMediaRecoveryStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMediaRecoveryStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).GetMediaRecoveryStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_GetMediaRecoveryStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).GetMediaRecoveryStatus(ctx, req.(*GetMediaRecoveryStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingService_CommitMediaRecoveryExpiry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitMediaRecoveryExpiryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).CommitMediaRecoveryExpiry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_CommitMediaRecoveryExpiry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).CommitMediaRecoveryExpiry(ctx, req.(*CommitMediaRecoveryExpiryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BillingService_GetTenantBillingStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetTenantBillingStatusRequest)
 	if err := dec(in); err != nil {
@@ -555,6 +625,14 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BillingService_GetTenantAdmissionStatus_Handler,
 		},
 		{
+			MethodName: "GetMediaRecoveryStatus",
+			Handler:    _BillingService_GetMediaRecoveryStatus_Handler,
+		},
+		{
+			MethodName: "CommitMediaRecoveryExpiry",
+			Handler:    _BillingService_CommitMediaRecoveryExpiry_Handler,
+		},
+		{
 			MethodName: "GetTenantBillingStatus",
 			Handler:    _BillingService_GetTenantBillingStatus_Handler,
 		},
@@ -568,11 +646,12 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SubscriptionService_GetSubscription_FullMethodName      = "/purser.SubscriptionService/GetSubscription"
-	SubscriptionService_CreateSubscription_FullMethodName   = "/purser.SubscriptionService/CreateSubscription"
-	SubscriptionService_UpdateSubscription_FullMethodName   = "/purser.SubscriptionService/UpdateSubscription"
-	SubscriptionService_GetBillingDetails_FullMethodName    = "/purser.SubscriptionService/GetBillingDetails"
-	SubscriptionService_UpdateBillingDetails_FullMethodName = "/purser.SubscriptionService/UpdateBillingDetails"
+	SubscriptionService_GetSubscription_FullMethodName                         = "/purser.SubscriptionService/GetSubscription"
+	SubscriptionService_CreateSubscription_FullMethodName                      = "/purser.SubscriptionService/CreateSubscription"
+	SubscriptionService_UpdateSubscription_FullMethodName                      = "/purser.SubscriptionService/UpdateSubscription"
+	SubscriptionService_UpdateSubscriptionWithEntitlementReview_FullMethodName = "/purser.SubscriptionService/UpdateSubscriptionWithEntitlementReview"
+	SubscriptionService_GetBillingDetails_FullMethodName                       = "/purser.SubscriptionService/GetBillingDetails"
+	SubscriptionService_UpdateBillingDetails_FullMethodName                    = "/purser.SubscriptionService/UpdateBillingDetails"
 )
 
 // SubscriptionServiceClient is the client API for SubscriptionService service.
@@ -584,6 +663,9 @@ type SubscriptionServiceClient interface {
 	GetSubscription(ctx context.Context, in *GetSubscriptionRequest, opts ...grpc.CallOption) (*GetSubscriptionResponse, error)
 	CreateSubscription(ctx context.Context, in *CreateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error)
 	UpdateSubscription(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error)
+	// Requires an explicit entitlement precondition and audit reason. A distinct
+	// method prevents older servers from silently ignoring the reviewed map.
+	UpdateSubscriptionWithEntitlementReview(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error)
 	// ===== BILLING DETAILS MANAGEMENT =====
 	// Get billing details for a tenant (company, VAT, address)
 	GetBillingDetails(ctx context.Context, in *GetBillingDetailsRequest, opts ...grpc.CallOption) (*BillingDetails, error)
@@ -629,6 +711,16 @@ func (c *subscriptionServiceClient) UpdateSubscription(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *subscriptionServiceClient) UpdateSubscriptionWithEntitlementReview(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantSubscription)
+	err := c.cc.Invoke(ctx, SubscriptionService_UpdateSubscriptionWithEntitlementReview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *subscriptionServiceClient) GetBillingDetails(ctx context.Context, in *GetBillingDetailsRequest, opts ...grpc.CallOption) (*BillingDetails, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BillingDetails)
@@ -658,6 +750,9 @@ type SubscriptionServiceServer interface {
 	GetSubscription(context.Context, *GetSubscriptionRequest) (*GetSubscriptionResponse, error)
 	CreateSubscription(context.Context, *CreateSubscriptionRequest) (*TenantSubscription, error)
 	UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error)
+	// Requires an explicit entitlement precondition and audit reason. A distinct
+	// method prevents older servers from silently ignoring the reviewed map.
+	UpdateSubscriptionWithEntitlementReview(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error)
 	// ===== BILLING DETAILS MANAGEMENT =====
 	// Get billing details for a tenant (company, VAT, address)
 	GetBillingDetails(context.Context, *GetBillingDetailsRequest) (*BillingDetails, error)
@@ -681,6 +776,9 @@ func (UnimplementedSubscriptionServiceServer) CreateSubscription(context.Context
 }
 func (UnimplementedSubscriptionServiceServer) UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateSubscription not implemented")
+}
+func (UnimplementedSubscriptionServiceServer) UpdateSubscriptionWithEntitlementReview(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSubscriptionWithEntitlementReview not implemented")
 }
 func (UnimplementedSubscriptionServiceServer) GetBillingDetails(context.Context, *GetBillingDetailsRequest) (*BillingDetails, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBillingDetails not implemented")
@@ -763,6 +861,24 @@ func _SubscriptionService_UpdateSubscription_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SubscriptionService_UpdateSubscriptionWithEntitlementReview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SubscriptionServiceServer).UpdateSubscriptionWithEntitlementReview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SubscriptionService_UpdateSubscriptionWithEntitlementReview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SubscriptionServiceServer).UpdateSubscriptionWithEntitlementReview(ctx, req.(*UpdateSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SubscriptionService_GetBillingDetails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBillingDetailsRequest)
 	if err := dec(in); err != nil {
@@ -817,6 +933,10 @@ var SubscriptionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateSubscription",
 			Handler:    _SubscriptionService_UpdateSubscription_Handler,
+		},
+		{
+			MethodName: "UpdateSubscriptionWithEntitlementReview",
+			Handler:    _SubscriptionService_UpdateSubscriptionWithEntitlementReview_Handler,
 		},
 		{
 			MethodName: "GetBillingDetails",
@@ -2173,6 +2293,7 @@ var ClusterPricingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PrepaidService_EnablePrepaidUsage_FullMethodName             = "/purser.PrepaidService/EnablePrepaidUsage"
 	PrepaidService_GetPrepaidBalance_FullMethodName              = "/purser.PrepaidService/GetPrepaidBalance"
 	PrepaidService_TopupBalance_FullMethodName                   = "/purser.PrepaidService/TopupBalance"
 	PrepaidService_DeductBalance_FullMethodName                  = "/purser.PrepaidService/DeductBalance"
@@ -2189,7 +2310,16 @@ const (
 	PrepaidService_GetCryptoTopup_FullMethodName                 = "/purser.PrepaidService/GetCryptoTopup"
 	PrepaidService_PromoteToPaid_FullMethodName                  = "/purser.PrepaidService/PromoteToPaid"
 	PrepaidService_ChangeBillingTier_FullMethodName              = "/purser.PrepaidService/ChangeBillingTier"
+	PrepaidService_PreviewFreeCancellation_FullMethodName        = "/purser.PrepaidService/PreviewFreeCancellation"
+	PrepaidService_ConfirmFreeCancellation_FullMethodName        = "/purser.PrepaidService/ConfirmFreeCancellation"
 	PrepaidService_AdminAssignTier_FullMethodName                = "/purser.PrepaidService/AdminAssignTier"
+	PrepaidService_GetAutomaticTopup_FullMethodName              = "/purser.PrepaidService/GetAutomaticTopup"
+	PrepaidService_SetAutomaticTopup_FullMethodName              = "/purser.PrepaidService/SetAutomaticTopup"
+	PrepaidService_AdminDisableAutomaticTopup_FullMethodName     = "/purser.PrepaidService/AdminDisableAutomaticTopup"
+	PrepaidService_AdminGetInvoiceRefund_FullMethodName          = "/purser.PrepaidService/AdminGetInvoiceRefund"
+	PrepaidService_AdminRefundInvoice_FullMethodName             = "/purser.PrepaidService/AdminRefundInvoice"
+	PrepaidService_PreviewAdminAssignTier_FullMethodName         = "/purser.PrepaidService/PreviewAdminAssignTier"
+	PrepaidService_AdminAssignTierWithReview_FullMethodName      = "/purser.PrepaidService/AdminAssignTierWithReview"
 	PrepaidService_AdminListCheckoutRecovery_FullMethodName      = "/purser.PrepaidService/AdminListCheckoutRecovery"
 	PrepaidService_AdminRetryProviderWebhook_FullMethodName      = "/purser.PrepaidService/AdminRetryProviderWebhook"
 	PrepaidService_AdminRecoverCheckout_FullMethodName           = "/purser.PrepaidService/AdminRecoverCheckout"
@@ -2210,6 +2340,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PrepaidServiceClient interface {
+	// Opt back into balance-funded usage without replacing a paid subscription.
+	EnablePrepaidUsage(ctx context.Context, in *EnablePrepaidUsageRequest, opts ...grpc.CallOption) (*EnablePrepaidUsageResponse, error)
 	// Get current prepaid balance for a tenant
 	GetPrepaidBalance(ctx context.Context, in *GetPrepaidBalanceRequest, opts ...grpc.CallOption) (*PrepaidBalance, error)
 	// Top up balance (admin/system - crypto detection triggers this)
@@ -2256,12 +2388,21 @@ type PrepaidServiceClient interface {
 	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
+	PreviewFreeCancellation(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*FreeCancellationQuote, error)
+	ConfirmFreeCancellation(ctx context.Context, in *ConfirmFreeCancellationRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
 	// Operator assignment of a tenant's tier and billing model. Requires service
 	// or platform-operator authentication. It applies immediately in either
 	// direction and skips the payment-collection and billing-profile checks the
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
+	GetAutomaticTopup(ctx context.Context, in *GetAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error)
+	SetAutomaticTopup(ctx context.Context, in *SetAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error)
+	AdminDisableAutomaticTopup(ctx context.Context, in *AdminDisableAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error)
+	AdminGetInvoiceRefund(ctx context.Context, in *AdminGetInvoiceRefundRequest, opts ...grpc.CallOption) (*AdminRefundInvoiceResponse, error)
+	AdminRefundInvoice(ctx context.Context, in *AdminRefundInvoiceRequest, opts ...grpc.CallOption) (*AdminRefundInvoiceResponse, error)
+	PreviewAdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignmentQuote, error)
+	AdminAssignTierWithReview(ctx context.Context, in *AdminAssignTierReviewedRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
 	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
 	AdminListCheckoutRecovery(ctx context.Context, in *AdminListCheckoutRecoveryRequest, opts ...grpc.CallOption) (*AdminListCheckoutRecoveryResponse, error)
 	// Retries one reviewed blocked provider callback; never edits payment evidence.
@@ -2307,6 +2448,16 @@ type prepaidServiceClient struct {
 
 func NewPrepaidServiceClient(cc grpc.ClientConnInterface) PrepaidServiceClient {
 	return &prepaidServiceClient{cc}
+}
+
+func (c *prepaidServiceClient) EnablePrepaidUsage(ctx context.Context, in *EnablePrepaidUsageRequest, opts ...grpc.CallOption) (*EnablePrepaidUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnablePrepaidUsageResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_EnablePrepaidUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *prepaidServiceClient) GetPrepaidBalance(ctx context.Context, in *GetPrepaidBalanceRequest, opts ...grpc.CallOption) (*PrepaidBalance, error) {
@@ -2469,10 +2620,100 @@ func (c *prepaidServiceClient) ChangeBillingTier(ctx context.Context, in *Change
 	return out, nil
 }
 
+func (c *prepaidServiceClient) PreviewFreeCancellation(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*FreeCancellationQuote, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FreeCancellationQuote)
+	err := c.cc.Invoke(ctx, PrepaidService_PreviewFreeCancellation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) ConfirmFreeCancellation(ctx context.Context, in *ConfirmFreeCancellationRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeBillingTierResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_ConfirmFreeCancellation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminAssignTierResponse)
 	err := c.cc.Invoke(ctx, PrepaidService_AdminAssignTier_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) GetAutomaticTopup(ctx context.Context, in *GetAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AutomaticTopupSettings)
+	err := c.cc.Invoke(ctx, PrepaidService_GetAutomaticTopup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) SetAutomaticTopup(ctx context.Context, in *SetAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AutomaticTopupSettings)
+	err := c.cc.Invoke(ctx, PrepaidService_SetAutomaticTopup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminDisableAutomaticTopup(ctx context.Context, in *AdminDisableAutomaticTopupRequest, opts ...grpc.CallOption) (*AutomaticTopupSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AutomaticTopupSettings)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminDisableAutomaticTopup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminGetInvoiceRefund(ctx context.Context, in *AdminGetInvoiceRefundRequest, opts ...grpc.CallOption) (*AdminRefundInvoiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRefundInvoiceResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminGetInvoiceRefund_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminRefundInvoice(ctx context.Context, in *AdminRefundInvoiceRequest, opts ...grpc.CallOption) (*AdminRefundInvoiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRefundInvoiceResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRefundInvoice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) PreviewAdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignmentQuote, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminAssignmentQuote)
+	err := c.cc.Invoke(ctx, PrepaidService_PreviewAdminAssignTier_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminAssignTierWithReview(ctx context.Context, in *AdminAssignTierReviewedRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminAssignTierResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminAssignTierWithReview_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2623,6 +2864,8 @@ func (c *prepaidServiceClient) AdminListPrepaidDoubleCharges(ctx context.Context
 // All implementations must embed UnimplementedPrepaidServiceServer
 // for forward compatibility.
 type PrepaidServiceServer interface {
+	// Opt back into balance-funded usage without replacing a paid subscription.
+	EnablePrepaidUsage(context.Context, *EnablePrepaidUsageRequest) (*EnablePrepaidUsageResponse, error)
 	// Get current prepaid balance for a tenant
 	GetPrepaidBalance(context.Context, *GetPrepaidBalanceRequest) (*PrepaidBalance, error)
 	// Top up balance (admin/system - crypto detection triggers this)
@@ -2669,12 +2912,21 @@ type PrepaidServiceServer interface {
 	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error)
+	PreviewFreeCancellation(context.Context, *ChangeBillingTierRequest) (*FreeCancellationQuote, error)
+	ConfirmFreeCancellation(context.Context, *ConfirmFreeCancellationRequest) (*ChangeBillingTierResponse, error)
 	// Operator assignment of a tenant's tier and billing model. Requires service
 	// or platform-operator authentication. It applies immediately in either
 	// direction and skips the payment-collection and billing-profile checks the
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error)
+	GetAutomaticTopup(context.Context, *GetAutomaticTopupRequest) (*AutomaticTopupSettings, error)
+	SetAutomaticTopup(context.Context, *SetAutomaticTopupRequest) (*AutomaticTopupSettings, error)
+	AdminDisableAutomaticTopup(context.Context, *AdminDisableAutomaticTopupRequest) (*AutomaticTopupSettings, error)
+	AdminGetInvoiceRefund(context.Context, *AdminGetInvoiceRefundRequest) (*AdminRefundInvoiceResponse, error)
+	AdminRefundInvoice(context.Context, *AdminRefundInvoiceRequest) (*AdminRefundInvoiceResponse, error)
+	PreviewAdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignmentQuote, error)
+	AdminAssignTierWithReview(context.Context, *AdminAssignTierReviewedRequest) (*AdminAssignTierResponse, error)
 	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
 	AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error)
 	// Retries one reviewed blocked provider callback; never edits payment evidence.
@@ -2722,6 +2974,9 @@ type PrepaidServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedPrepaidServiceServer struct{}
 
+func (UnimplementedPrepaidServiceServer) EnablePrepaidUsage(context.Context, *EnablePrepaidUsageRequest) (*EnablePrepaidUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnablePrepaidUsage not implemented")
+}
 func (UnimplementedPrepaidServiceServer) GetPrepaidBalance(context.Context, *GetPrepaidBalanceRequest) (*PrepaidBalance, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPrepaidBalance not implemented")
 }
@@ -2770,8 +3025,35 @@ func (UnimplementedPrepaidServiceServer) PromoteToPaid(context.Context, *Promote
 func (UnimplementedPrepaidServiceServer) ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ChangeBillingTier not implemented")
 }
+func (UnimplementedPrepaidServiceServer) PreviewFreeCancellation(context.Context, *ChangeBillingTierRequest) (*FreeCancellationQuote, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewFreeCancellation not implemented")
+}
+func (UnimplementedPrepaidServiceServer) ConfirmFreeCancellation(context.Context, *ConfirmFreeCancellationRequest) (*ChangeBillingTierResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmFreeCancellation not implemented")
+}
 func (UnimplementedPrepaidServiceServer) AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminAssignTier not implemented")
+}
+func (UnimplementedPrepaidServiceServer) GetAutomaticTopup(context.Context, *GetAutomaticTopupRequest) (*AutomaticTopupSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAutomaticTopup not implemented")
+}
+func (UnimplementedPrepaidServiceServer) SetAutomaticTopup(context.Context, *SetAutomaticTopupRequest) (*AutomaticTopupSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetAutomaticTopup not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminDisableAutomaticTopup(context.Context, *AdminDisableAutomaticTopupRequest) (*AutomaticTopupSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminDisableAutomaticTopup not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminGetInvoiceRefund(context.Context, *AdminGetInvoiceRefundRequest) (*AdminRefundInvoiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminGetInvoiceRefund not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRefundInvoice(context.Context, *AdminRefundInvoiceRequest) (*AdminRefundInvoiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRefundInvoice not implemented")
+}
+func (UnimplementedPrepaidServiceServer) PreviewAdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignmentQuote, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewAdminAssignTier not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminAssignTierWithReview(context.Context, *AdminAssignTierReviewedRequest) (*AdminAssignTierResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminAssignTierWithReview not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminListCheckoutRecovery not implemented")
@@ -2834,6 +3116,24 @@ func RegisterPrepaidServiceServer(s grpc.ServiceRegistrar, srv PrepaidServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&PrepaidService_ServiceDesc, srv)
+}
+
+func _PrepaidService_EnablePrepaidUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnablePrepaidUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).EnablePrepaidUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_EnablePrepaidUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).EnablePrepaidUsage(ctx, req.(*EnablePrepaidUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _PrepaidService_GetPrepaidBalance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -3124,6 +3424,42 @@ func _PrepaidService_ChangeBillingTier_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_PreviewFreeCancellation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeBillingTierRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).PreviewFreeCancellation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_PreviewFreeCancellation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).PreviewFreeCancellation(ctx, req.(*ChangeBillingTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_ConfirmFreeCancellation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmFreeCancellationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).ConfirmFreeCancellation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_ConfirmFreeCancellation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).ConfirmFreeCancellation(ctx, req.(*ConfirmFreeCancellationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminAssignTier_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminAssignTierRequest)
 	if err := dec(in); err != nil {
@@ -3138,6 +3474,132 @@ func _PrepaidService_AdminAssignTier_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PrepaidServiceServer).AdminAssignTier(ctx, req.(*AdminAssignTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_GetAutomaticTopup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAutomaticTopupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).GetAutomaticTopup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_GetAutomaticTopup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).GetAutomaticTopup(ctx, req.(*GetAutomaticTopupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_SetAutomaticTopup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAutomaticTopupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).SetAutomaticTopup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_SetAutomaticTopup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).SetAutomaticTopup(ctx, req.(*SetAutomaticTopupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminDisableAutomaticTopup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminDisableAutomaticTopupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminDisableAutomaticTopup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminDisableAutomaticTopup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminDisableAutomaticTopup(ctx, req.(*AdminDisableAutomaticTopupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminGetInvoiceRefund_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminGetInvoiceRefundRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminGetInvoiceRefund(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminGetInvoiceRefund_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminGetInvoiceRefund(ctx, req.(*AdminGetInvoiceRefundRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminRefundInvoice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRefundInvoiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRefundInvoice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRefundInvoice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRefundInvoice(ctx, req.(*AdminRefundInvoiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_PreviewAdminAssignTier_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminAssignTierRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).PreviewAdminAssignTier(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_PreviewAdminAssignTier_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).PreviewAdminAssignTier(ctx, req.(*AdminAssignTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminAssignTierWithReview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminAssignTierReviewedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminAssignTierWithReview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminAssignTierWithReview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminAssignTierWithReview(ctx, req.(*AdminAssignTierReviewedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3402,6 +3864,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*PrepaidServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "EnablePrepaidUsage",
+			Handler:    _PrepaidService_EnablePrepaidUsage_Handler,
+		},
+		{
 			MethodName: "GetPrepaidBalance",
 			Handler:    _PrepaidService_GetPrepaidBalance_Handler,
 		},
@@ -3466,8 +3932,44 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PrepaidService_ChangeBillingTier_Handler,
 		},
 		{
+			MethodName: "PreviewFreeCancellation",
+			Handler:    _PrepaidService_PreviewFreeCancellation_Handler,
+		},
+		{
+			MethodName: "ConfirmFreeCancellation",
+			Handler:    _PrepaidService_ConfirmFreeCancellation_Handler,
+		},
+		{
 			MethodName: "AdminAssignTier",
 			Handler:    _PrepaidService_AdminAssignTier_Handler,
+		},
+		{
+			MethodName: "GetAutomaticTopup",
+			Handler:    _PrepaidService_GetAutomaticTopup_Handler,
+		},
+		{
+			MethodName: "SetAutomaticTopup",
+			Handler:    _PrepaidService_SetAutomaticTopup_Handler,
+		},
+		{
+			MethodName: "AdminDisableAutomaticTopup",
+			Handler:    _PrepaidService_AdminDisableAutomaticTopup_Handler,
+		},
+		{
+			MethodName: "AdminGetInvoiceRefund",
+			Handler:    _PrepaidService_AdminGetInvoiceRefund_Handler,
+		},
+		{
+			MethodName: "AdminRefundInvoice",
+			Handler:    _PrepaidService_AdminRefundInvoice_Handler,
+		},
+		{
+			MethodName: "PreviewAdminAssignTier",
+			Handler:    _PrepaidService_PreviewAdminAssignTier_Handler,
+		},
+		{
+			MethodName: "AdminAssignTierWithReview",
+			Handler:    _PrepaidService_AdminAssignTierWithReview_Handler,
 		},
 		{
 			MethodName: "AdminListCheckoutRecovery",

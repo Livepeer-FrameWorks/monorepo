@@ -422,6 +422,12 @@ func (s *PeriscopeServer) countAsync(ctx context.Context, query string, args ...
 // ============================================================================
 
 func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.GetStreamEventsRequest) (*periscopepb.GetStreamEventsResponse, error) {
+	return s.getStreamEvents(ctx, req, false)
+}
+func (s *PeriscopeServer) GetStreamRecordingEvents(ctx context.Context, req *periscopepb.GetStreamEventsRequest) (*periscopepb.GetStreamEventsResponse, error) {
+	return s.getStreamEvents(ctx, req, true)
+}
+func (s *PeriscopeServer) getStreamEvents(ctx context.Context, req *periscopepb.GetStreamEventsRequest, recordingOnly bool) (*periscopepb.GetStreamEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -451,8 +457,11 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 		       source_region, cluster_id, stream_origin_region, stream_origin_cluster_id, schema_version
 		FROM periscope.stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
-		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
+		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update','recording_refused','recording_active')
 	`
+	if recordingOnly {
+		query += " AND event_type IN ('recording_refused','recording_active','stream_start','stream_end')"
+	}
 	args := []any{tenantID, streamID, startTime, endTime}
 
 	// Add keyset pagination condition (direction-aware)
@@ -600,7 +609,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT count(*) FROM periscope.stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
-		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
+		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update','recording_refused','recording_active')
 	`, tenantID, streamID, startTime, endTime).Scan(&total); err != nil {
 		s.logger.WithError(err).Warn("Failed to get stream events total count")
 	}

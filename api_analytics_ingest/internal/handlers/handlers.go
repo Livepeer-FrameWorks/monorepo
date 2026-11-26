@@ -3206,12 +3206,21 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		return fmt.Errorf("unexpected payload for dvr_lifecycle")
 	}
 	dvrData := tp.DvrLifecycleData
+	if dvrData == nil {
+		return fmt.Errorf("missing dvr lifecycle data")
+	}
+	if dvrData.GetStatus() == ipcpb.DVRLifecycleData_STATUS_FAILED || dvrData.GetStatus() == ipcpb.DVRLifecycleData_STATUS_RECORDING {
+		if err := h.writeRecordingAdmissionEvent(ctx, event, &mt, dvrData); err != nil {
+			return err
+		}
+	}
+	// A rejected start has no artifact identity to project.
+	if dvrData.GetDvrHash() == "" {
+		return nil
+	}
 
 	tenantID := event.TenantID
 	var internalName string
-	if dvrData.TenantId != nil && *dvrData.TenantId != "" {
-		tenantID = *dvrData.TenantId
-	}
 	if dvrData.StreamInternalName != nil {
 		// Normalize internal name by stripping any prefix for consistent analytics keys
 		internalName = mist.ExtractInternalName(*dvrData.StreamInternalName)
@@ -3320,6 +3329,35 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 
 	return nil
+}
+
+func (h *AnalyticsHandler) writeRecordingAdmissionEvent(ctx context.Context, event kafka.AnalyticsEvent, mt *ipcpb.MistTrigger, data *ipcpb.DVRLifecycleData) error {
+	eventType, code, message := "recording_active", "RECORDING_ACTIVE", "Recording is capturing media."
+	if data.GetStatus() == ipcpb.DVRLifecycleData_STATUS_FAILED {
+		eventType, code, message = "recording_refused", "RECORDING_START_FAILED", "Recording failed. Contact support if this continues."
+		if strings.Contains(strings.ToLower(data.GetError()), "storage limit reached") {
+			code, message = "STORAGE_LIMIT_REACHED", "Recording failed because the storage limit was reached. Review storage and billing."
+		}
+	}
+	payload, err := json.Marshal(map[string]string{"code": code, "message": message})
+	if err != nil {
+		return err
+	}
+	batch, err := periscopeingestdb.PrepareStreamLifecycleEvent(ctx, h.clickhouse)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = batch.Close() }()
+	env := analyticsEnvelopeColumns(event)
+	if err := batch.Append(periscopeingestdb.StreamLifecycleEventRow{
+		Timestamp: event.Timestamp, EventID: parseUUID(event.EventID), TenantID: parseUUID(event.TenantID), StreamID: parseUUID(mistTriggerStreamID(mt)),
+		InternalName: mist.ExtractInternalName(data.GetStreamInternalName()), NodeID: data.GetNodeId(), ClusterID: mt.GetClusterId(), EventType: eventType,
+		EventData: string(payload), SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+	}); err != nil {
+		return err
+	}
+	return batch.Send()
 }
 
 // processVodLifecycle handles VOD upload lifecycle events

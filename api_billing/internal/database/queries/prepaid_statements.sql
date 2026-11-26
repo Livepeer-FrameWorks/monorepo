@@ -160,7 +160,7 @@ INSERT INTO purser.billing_invoices (
     presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     sqlc.arg(tenant_id)::text::uuid,
-    'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
+    purser.next_billing_document_number('STM'),
     'prepaid_statement', 'paid', 'EUR', 0,
     sqlc.arg(finalized_at)::timestamptz, sqlc.arg(finalized_at)::timestamptz,
     sqlc.arg(base_amount)::text::numeric, sqlc.arg(metered_amount)::text::numeric,
@@ -178,7 +178,7 @@ RETURNING id::text AS id, invoice_number;
 -- An open draft of the period, left by postpaid billing earlier in the period,
 -- becomes the period's statement, for the statement's period.
 UPDATE purser.billing_invoices
-SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
+SET invoice_number = purser.next_billing_document_number('STM'),
     document_kind = 'prepaid_statement',
     status = 'paid',
     currency = 'EUR',

@@ -59,6 +59,7 @@ type Service struct {
 	stripeClient               *billingstripe.Client
 	decklogClient              *decklogclient.BatchedClient
 	convergeTenantEntitlements func(context.Context, string) error
+	freeTierEligibility        func(context.Context, string, FreeTierLimits) (bool, error)
 	// chargeAdvanceBaseFee is the JobManager's advance base-fee charge, set by
 	// NewJobManager, used when a payment-method setup activates a tier.
 	chargeAdvanceBaseFee func(context.Context, string) error
@@ -75,6 +76,12 @@ type Service struct {
 // served and remains stable for the process lifetime.
 func (s *Service) SetTenantEntitlementConverger(converger func(context.Context, string) error) {
 	s.convergeTenantEntitlements = converger
+}
+
+// SetFreeTierEligibilityReader uses Commodore's verified identity and owning-cell resource proof.
+// An absent reader or an older Commodore response cannot enable Free service.
+func (s *Service) SetFreeTierEligibilityReader(reader func(context.Context, string, FreeTierLimits) (bool, error)) {
+	s.freeTierEligibility = reader
 }
 
 type quartermasterCommercialClient interface {

@@ -94,7 +94,11 @@ func billingRefusal(reason, message string) error {
 }
 
 func refusalStatus(reason, message string) *status.Status {
-	st := status.New(codes.FailedPrecondition, message)
+	return billingStatusWithMessage(codes.FailedPrecondition, reason, message)
+}
+
+func billingStatusWithMessage(code codes.Code, reason, message string) *status.Status {
+	st := status.New(code, message)
 	withDetails, err := st.WithDetails(&errdetails.ErrorInfo{
 		Reason:   reason,
 		Domain:   billingErrorDomain,

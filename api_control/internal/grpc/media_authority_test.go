@@ -1190,3 +1190,14 @@ func TestExpiredUnsweptGrantCannotSignAnAllow(t *testing.T) {
 		t.Fatalf("expired unswept grant decision=%v until=%s", payload.GetBillingDecision(), until)
 	}
 }
+
+func TestExpiredPaymentGracePreservesExistingBroadcasts(t *testing.T) {
+	issued := time.Now().UTC()
+	payload, _, _, _, err := buildTenantAuthority(&quartermasterpb.Tenant{Id: "grace-expired", IsActive: true}, &quartermasterpb.GetTenantEntitlementResponse{}, &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid", BalanceCents: -1}, &purserpb.GetTenantAdmissionStatusResponse{ValidUntil: timestamppb.New(issued.Add(-time.Second)), PrepaidGraceValidity: true}, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sharedauthority.PrepaidBalanceSpent(payload) {
+		t.Fatalf("grace deadline revoked existing sessions instead of only refusing new work: %+v", payload)
+	}
+}

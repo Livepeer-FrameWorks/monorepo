@@ -2203,10 +2203,10 @@ features:
           docs: { required: true }
         surfaces:
           graphql:
-            mutations: [changeBillingTier, createStripeBillingPortal]
+            mutations: [changeBillingTier, createStripeBillingPortal, enablePrepaidUsage]
             queries: [billingStatus, billingTiers, billingLifecycle]
           mcp:
-            tools: [change_billing_tier]
+            tools: [change_billing_tier, enable_prepaid_usage]
           webapp:
             routes: ["/account/billing"]
           docs:

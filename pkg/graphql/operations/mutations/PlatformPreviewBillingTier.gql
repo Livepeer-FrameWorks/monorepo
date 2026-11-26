@@ -1,0 +1,8 @@
+mutation PlatformPreviewBillingTier($tenantId: ID!, $tierName: String!, $reason: String!) {
+  platformPreviewBillingTier(tenantId: $tenantId, tierName: $tierName, reason: $reason) {
+    quotedAt
+    expiresAt
+    fingerprint
+    effectsJson
+  }
+}

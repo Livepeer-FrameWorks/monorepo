@@ -20,11 +20,5 @@ class GetPrepaidBalance(BaseModel):
     "Get the current prepaid balance for the tenant, held in EUR.\nOnly available for tenants with billing_model = 'prepaid'."
 
 
-class GetPrepaidBalancePrepaidBalance(PrepaidBalanceDefault):
-    """Prepaid balance for wallet-based accounts.
-    Wallet-only accounts MUST use prepaid billing (balance-based, pay first)."""
-
-    pass
-
-
+GetPrepaidBalancePrepaidBalance = PrepaidBalanceDefault
 GetPrepaidBalance.model_rebuild()

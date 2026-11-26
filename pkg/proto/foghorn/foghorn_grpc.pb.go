@@ -1705,6 +1705,7 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	TenantControlService_GetTenantMediaFootprint_FullMethodName        = "/foghorn.TenantControlService/GetTenantMediaFootprint"
 	TenantControlService_GetStreamIngestStates_FullMethodName          = "/foghorn.TenantControlService/GetStreamIngestStates"
 	TenantControlService_TerminateTenantStreams_FullMethodName         = "/foghorn.TenantControlService/TerminateTenantStreams"
 	TenantControlService_TerminateStreamSessions_FullMethodName        = "/foghorn.TenantControlService/TerminateStreamSessions"
@@ -1719,6 +1720,8 @@ const (
 //
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceClient interface {
+	// Point-in-time origin-owned media, used before a voluntary Free transition.
+	GetTenantMediaFootprint(ctx context.Context, in *GetTenantMediaFootprintRequest, opts ...grpc.CallOption) (*TenantMediaFootprint, error)
 	GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
@@ -1741,6 +1744,16 @@ type tenantControlServiceClient struct {
 
 func NewTenantControlServiceClient(cc grpc.ClientConnInterface) TenantControlServiceClient {
 	return &tenantControlServiceClient{cc}
+}
+
+func (c *tenantControlServiceClient) GetTenantMediaFootprint(ctx context.Context, in *GetTenantMediaFootprintRequest, opts ...grpc.CallOption) (*TenantMediaFootprint, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantMediaFootprint)
+	err := c.cc.Invoke(ctx, TenantControlService_GetTenantMediaFootprint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *tenantControlServiceClient) GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error) {
@@ -1809,6 +1822,8 @@ func (c *tenantControlServiceClient) InvalidatePlaybackAuth(ctx context.Context,
 //
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceServer interface {
+	// Point-in-time origin-owned media, used before a voluntary Free transition.
+	GetTenantMediaFootprint(context.Context, *GetTenantMediaFootprintRequest) (*TenantMediaFootprint, error)
 	GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
@@ -1833,6 +1848,9 @@ type TenantControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedTenantControlServiceServer struct{}
 
+func (UnimplementedTenantControlServiceServer) GetTenantMediaFootprint(context.Context, *GetTenantMediaFootprintRequest) (*TenantMediaFootprint, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantMediaFootprint not implemented")
+}
 func (UnimplementedTenantControlServiceServer) GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStreamIngestStates not implemented")
 }
@@ -1870,6 +1888,24 @@ func RegisterTenantControlServiceServer(s grpc.ServiceRegistrar, srv TenantContr
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&TenantControlService_ServiceDesc, srv)
+}
+
+func _TenantControlService_GetTenantMediaFootprint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantMediaFootprintRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantControlServiceServer).GetTenantMediaFootprint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantControlService_GetTenantMediaFootprint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantControlServiceServer).GetTenantMediaFootprint(ctx, req.(*GetTenantMediaFootprintRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _TenantControlService_GetStreamIngestStates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1987,6 +2023,10 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "foghorn.TenantControlService",
 	HandlerType: (*TenantControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetTenantMediaFootprint",
+			Handler:    _TenantControlService_GetTenantMediaFootprint_Handler,
+		},
 		{
 			MethodName: "GetStreamIngestStates",
 			Handler:    _TenantControlService_GetStreamIngestStates_Handler,

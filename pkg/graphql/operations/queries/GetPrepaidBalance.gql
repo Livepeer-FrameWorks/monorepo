@@ -8,6 +8,13 @@ query GetPrepaidBalance {
     currency
     lowBalanceThresholdCents
     isLowBalance
+    drainRateCentsPerHour
+    paymentGrace {
+      active
+      endsAt
+      remainingCreditCents
+      mediaRecoveryUntil
+    }
     createdAt
     updatedAt
   }

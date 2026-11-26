@@ -91,7 +91,7 @@ func TestStreamEventsReturnsStreamEndWithoutStatus(t *testing.T) {
 			"eu", "cluster-eu", "eu", "cluster-eu", uint8(1),
 		}
 	}
-	mock.ExpectQuery(`(?s)FROM periscope\.stream_event_log`).
+	mock.ExpectQuery(`(?s)FROM periscope\.stream_event_log.*recording_refused`).
 		WillReturnRows(sqlmock.NewRows(columns).
 			AddRow(row("event-1", "stream_start", "live", start)...).
 			AddRow(row("event-2", "stream_end", nil, start.Add(time.Minute))...))

@@ -23,6 +23,7 @@
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import TenantBillingActions from "$lib/components/admin/TenantBillingActions.svelte";
   import {
     Table,
     TableBody,
@@ -220,6 +221,12 @@
 
           <TabsContent value="billing">
             {#if billing}
+              {#key tenantId}<TenantBillingActions
+                  {tenantId}
+                  entitlements={billing.subscription?.entitlementOverrides ?? []}
+                  automaticPrepaidUsage={billing.subscription?.automaticPrepaidUsage ?? null}
+                  onChanged={() => loadTab("billing", true)}
+                />{/key}
               {#if billing.snapshot}
                 <div class="mb-4 flex flex-wrap items-center gap-2">
                   <Badge>{billing.snapshot.tierName}</Badge>
@@ -240,6 +247,23 @@
                     )}
                   </span>
                 </div>
+              {/if}
+
+              {#if billing.prepaidBalance?.paymentGrace}
+                {@const grace = billing.prepaidBalance.paymentGrace}
+                {#if grace.active && grace.endsAt}
+                  <p class="mb-3 text-sm text-warning">
+                    Payment grace: {formatCents(
+                      grace.remainingCreditCents,
+                      billing.prepaidBalance.currency
+                    )} remaining, until {new Date(grace.endsAt).toLocaleString()}.
+                  </p>
+                {/if}
+                {#if grace.mediaRecoveryUntil}
+                  <p class="mb-3 text-sm text-warning">
+                    Media recovery window: {new Date(grace.mediaRecoveryUntil).toLocaleString()}.
+                  </p>
+                {/if}
               {/if}
 
               {#if billing.lifecycle}

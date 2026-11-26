@@ -328,6 +328,17 @@ func (jm *JobManager) rateInvoiceForTenant(
 	}
 	sort.Strings(clusterIDs)
 
+	freeRemaining := map[rating.Meter]decimal.Decimal{}
+	if tier.TierName == "free" {
+		for _, rule := range tier.Rules {
+			prior, err := priorFreeAllowanceUsage(ctx, jm.db, tenantID, phase.splitStart(), phase.start, string(rule.Meter))
+			if err != nil {
+				return nil, err
+			}
+			freeRemaining[rule.Meter] = decimal.Max(rule.IncludedQuantity.Sub(prior), decimal.Zero)
+		}
+	}
+
 	periodSuffix := periodStart.Format("200601")
 	platformWaiver := appconfig.Runtime().WaiveUsageCharges
 
@@ -386,12 +397,20 @@ func (jm *JobManager) rateInvoiceForTenant(
 			continue
 		}
 
+		rules := resolved.MeteredRules
+		usesFreeAllowance := tier.TierName == "free" && resolved.PricingSource == pricing.SourceTier
+		if usesFreeAllowance {
+			rules = append([]rating.Rule(nil), rules...)
+			for i := range rules {
+				rules[i].IncludedQuantity = decimal.Min(rules[i].IncludedQuantity, freeRemaining[rules[i].Meter])
+			}
+		}
 		// Build a rating Input scoped to this cluster's usage and rules.
 		// BasePrice is zero — the base subscription is rated once above.
 		input := rating.Input{
 			Currency:          resolved.Currency,
 			BasePrice:         decimal.Zero,
-			Rules:             resolved.MeteredRules,
+			Rules:             rules,
 			Usage:             usageMapFromAggregates(usageData),
 			Quantities:        perClusterDimensioned[cid],
 			PeriodStart:       periodStart,
@@ -401,6 +420,13 @@ func (jm *JobManager) rateInvoiceForTenant(
 		res, err := rating.Rate(input)
 		if err != nil {
 			return nil, fmt.Errorf("rate cluster %s: %w", cid, err)
+		}
+
+		if usesFreeAllowance {
+			for _, line := range res.UsageLines {
+				consumed := decimal.Min(decimal.Max(line.Quantity, decimal.Zero), line.IncludedQuantity)
+				freeRemaining[line.Meter] = decimal.Max(freeRemaining[line.Meter].Sub(consumed), decimal.Zero)
+			}
 		}
 
 		// Tag each line with cluster attribution and append the

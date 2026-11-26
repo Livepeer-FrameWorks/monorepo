@@ -656,7 +656,7 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 	return resp, nil
 }
 
-func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetStreamEventsResponse, error) {
+func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, recordingOnly ...bool) (*periscopepb.GetStreamEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, middleware.ErrTenantContextRequired
@@ -664,6 +664,10 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 
 	// Build cache key including pagination parameters
 	keyParts := []string{tenantID, streamID, timeKey(startTime), timeKey(endTime)}
+	onlyRecording := len(recordingOnly) > 0 && recordingOnly[0]
+	if onlyRecording {
+		keyParts = append(keyParts, "recording_state")
+	}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -678,6 +682,9 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		if onlyRecording {
+			return r.Clients.Periscope.GetStreamRecordingEvents(ctx, tenantID, streamID, tr, opts)
+		}
 		return r.Clients.Periscope.GetStreamEvents(ctx, tenantID, streamID, tr, opts)
 	}, skipCache)
 	if err != nil {

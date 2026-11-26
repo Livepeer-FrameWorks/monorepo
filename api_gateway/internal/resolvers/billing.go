@@ -1084,8 +1084,9 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	r.Logger.WithField("tenant_id", tenantID).Info("Updating subscription custom terms")
 
 	// Build the update request
-	req := &purserpb.UpdateSubscriptionRequest{
-		TenantId: tenantID,
+	req := &purserpb.UpdateSubscriptionRequest{TenantId: tenantID}
+	if input.Reason != nil {
+		req.Reason = strings.TrimSpace(*input.Reason)
 	}
 
 	// Convert custom features input to proto
@@ -1124,6 +1125,13 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		}
 	}
 
+	if input.ExpectedEntitlementOverrides != nil {
+		req.CheckEntitlementOverrides = true
+		req.ExpectedEntitlementOverrides = make(map[string]string, len(input.ExpectedEntitlementOverrides))
+		for _, entry := range input.ExpectedEntitlementOverrides {
+			req.ExpectedEntitlementOverrides[entry.Key] = entry.Value
+		}
+	}
 	if input.EntitlementOverrides != nil {
 		if len(input.EntitlementOverrides) == 0 {
 			req.ClearEntitlementOverrides = true
@@ -1137,7 +1145,16 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	}
 
 	// Call Purser to update the subscription
-	subscription, err := r.Clients.Purser.UpdateSubscription(ctx, req)
+	var subscription *purserpb.TenantSubscription
+	var err error
+	if req.GetCheckEntitlementOverrides() {
+		subscription, err = r.Clients.Purser.UpdateSubscriptionWithEntitlementReview(ctx, req)
+	} else {
+		subscription, err = r.Clients.Purser.UpdateSubscription(ctx, req)
+	}
+	if status.Code(err) == codes.Unimplemented {
+		return nil, middleware.InvalidInput("Upgrade Purser before applying reviewed entitlement edits.")
+	}
 	if err != nil {
 		r.Logger.WithError(err).
 			WithField("tenant_id", tenantID).
@@ -1189,6 +1206,7 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context) (*model.PrepaidBalan
 	}
 
 	return &model.PrepaidBalance{
+		PaymentGrace:             resp.GetPaymentGrace(),
 		ID:                       resp.Id,
 		TenantID:                 resp.TenantId,
 		BalanceCents:             int(resp.BalanceCents),
@@ -1832,7 +1850,7 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 
 // DoChangeBillingTier changes a postpaid tenant's billing tier. Purser owns
 // the immediate-vs-scheduled semantics and cluster-access reconciliation.
-func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (model.ChangeBillingTierResult, error) {
+func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string, reviewed ...*purserpb.ConfirmFreeCancellationRequest) (model.ChangeBillingTierResult, error) {
 	if err := requireBillingScope(ctx, "billing:write"); err != nil {
 		return nil, err
 	}
@@ -1861,7 +1879,16 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 		}, nil
 	}
 
-	resp, err := r.Clients.Purser.ChangeBillingTier(ctx, tenantID, tierID)
+	var resp *purserpb.ChangeBillingTierResponse
+	var err error
+	if len(reviewed) > 0 && reviewed[0] != nil {
+		req := reviewed[0]
+		req.TenantId = tenantID
+		req.TierId = tierID
+		resp, err = r.Clients.Purser.ConfirmFreeCancellation(ctx, req)
+	} else {
+		resp, err = r.Clients.Purser.ChangeBillingTier(ctx, tenantID, tierID)
+	}
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).WithField("tier_id", tierID).Log(gatewayerrors.LogLevel(err), "Failed to change billing tier")
 		return billingMutationError(err, "Could not change the plan", "TIER_CHANGE_FAILED", "tier_id"), nil

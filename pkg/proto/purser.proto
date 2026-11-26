@@ -45,6 +45,9 @@ service BillingService {
   // ===== CROSS-SERVICE BILLING STATUS =====
   // Bounded admission-only status for latency-sensitive service calls.
   rpc GetTenantAdmissionStatus(GetTenantAdmissionStatusRequest) returns (GetTenantAdmissionStatusResponse);
+  // Owning-cell recovery cleanup uses a fresh read and a serialized expiry receipt.
+  rpc GetMediaRecoveryStatus(GetMediaRecoveryStatusRequest) returns (MediaRecoveryStatus);
+  rpc CommitMediaRecoveryExpiry(CommitMediaRecoveryExpiryRequest) returns (MediaRecoveryStatus);
 
   // Full entitlement, allowance, retention, and pricing snapshot.
   rpc GetTenantBillingStatus(GetTenantBillingStatusRequest) returns (GetTenantBillingStatusResponse);
@@ -60,6 +63,9 @@ service SubscriptionService {
   rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
   rpc CreateSubscription(CreateSubscriptionRequest) returns (TenantSubscription);
   rpc UpdateSubscription(UpdateSubscriptionRequest) returns (TenantSubscription);
+  // Requires an explicit entitlement precondition and audit reason. A distinct
+  // method prevents older servers from silently ignoring the reviewed map.
+  rpc UpdateSubscriptionWithEntitlementReview(UpdateSubscriptionRequest) returns (TenantSubscription);
 
   // ===== BILLING DETAILS MANAGEMENT =====
   // Get billing details for a tenant (company, VAT, address)
@@ -158,8 +164,31 @@ service ClusterPricingService {
 // ============================================================================
 
 // Bounded billing authority check for viewer and tenant admission.
+message GetMediaRecoveryStatusRequest { string tenant_id = 1; }
+message CommitMediaRecoveryExpiryRequest {
+ string tenant_id = 1;
+ google.protobuf.Timestamp expected_cutoff_at = 2;
+ google.protobuf.Timestamp expected_recovery_until = 3;
+}
+message MediaRecoveryStatus {
+ bool eligible = 1;
+ google.protobuf.Timestamp cutoff_at = 2;
+ google.protobuf.Timestamp recovery_until = 3;
+ // Assets through this cutoff have already expired, even if funding resumes later.
+ google.protobuf.Timestamp committed_cutoff_at = 4;
+}
+
 message GetTenantAdmissionStatusRequest {
   string tenant_id = 1;
+}
+
+
+// Temporary paid continuity; this never changes the ledger balance or prices.
+message PaymentGrace {
+  bool active = 1;
+  google.protobuf.Timestamp ends_at = 2;
+  int64 remaining_credit_cents = 3;
+  google.protobuf.Timestamp media_recovery_until = 4;
 }
 
 message GetTenantAdmissionStatusResponse {
@@ -176,6 +205,9 @@ message GetTenantAdmissionStatusResponse {
   int32 tier_level = 10;
   // Signed admission must be renewed at this deadline.
   google.protobuf.Timestamp valid_until = 11;
+  PaymentGrace payment_grace = 12;
+  // True when valid_until bounds a prepaid grace snapshot, rather than an operator grant.
+  bool prepaid_grace_validity = 13;
 }
 
 // Full billing status check for entitlement- and pricing-aware calls.
@@ -259,6 +291,7 @@ message GetTenantBillingStatusResponse {
   string tier_name = 15;           // free, pro, business, or custom catalog name
   // True while a grant past its deadline awaits reconciliation.
   bool grant_expired = 16;
+  PaymentGrace payment_grace = 17;
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
@@ -571,6 +604,7 @@ message TenantSubscription {
   // Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived
   // from the billing country. The prepaid ledger is always EUR.
   string presentment_currency = 35;
+  bool automatic_prepaid_usage = 36;
 }
 
 message BillingAddress {
@@ -617,6 +651,9 @@ message UpdateSubscriptionRequest {
   map<string, string> entitlement_overrides = 12;
   bool clear_pricing_overrides = 13;
   bool clear_entitlement_overrides = 14;
+  string reason = 15; // audit reason for operator custom terms
+  map<string,string> expected_entitlement_overrides = 16;
+  bool check_entitlement_overrides = 17; // compare under the subscription lock before replacing
 }
 
 // ============================================================================
@@ -1199,6 +1236,8 @@ message MarketplaceClusterPricing {
 // ============================================================================
 
 service PrepaidService {
+  // Opt back into balance-funded usage without replacing a paid subscription.
+  rpc EnablePrepaidUsage(EnablePrepaidUsageRequest) returns (EnablePrepaidUsageResponse);
   // Get current prepaid balance for a tenant
   rpc GetPrepaidBalance(GetPrepaidBalanceRequest) returns (PrepaidBalance);
 
@@ -1260,6 +1299,8 @@ service PrepaidService {
   // returns a pending upgrade. Downgrades apply at the current period's end.
   // Prepaid → postpaid transition stays on PromoteToPaid.
   rpc ChangeBillingTier(ChangeBillingTierRequest) returns (ChangeBillingTierResponse);
+  rpc PreviewFreeCancellation(ChangeBillingTierRequest) returns (FreeCancellationQuote);
+  rpc ConfirmFreeCancellation(ConfirmFreeCancellationRequest) returns (ChangeBillingTierResponse);
 
   // Operator assignment of a tenant's tier and billing model. Requires service
   // or platform-operator authentication. It applies immediately in either
@@ -1267,6 +1308,13 @@ service PrepaidService {
   // self-serve paths enforce; the tier must be active and support the billing
   // model. Records a billing.subscription_updated event carrying the reason.
   rpc AdminAssignTier(AdminAssignTierRequest) returns (AdminAssignTierResponse);
+  rpc GetAutomaticTopup(GetAutomaticTopupRequest) returns (AutomaticTopupSettings);
+  rpc SetAutomaticTopup(SetAutomaticTopupRequest) returns (AutomaticTopupSettings);
+  rpc AdminDisableAutomaticTopup(AdminDisableAutomaticTopupRequest) returns (AutomaticTopupSettings);
+  rpc AdminGetInvoiceRefund(AdminGetInvoiceRefundRequest) returns (AdminRefundInvoiceResponse);
+  rpc AdminRefundInvoice(AdminRefundInvoiceRequest) returns (AdminRefundInvoiceResponse);
+  rpc PreviewAdminAssignTier(AdminAssignTierRequest) returns (AdminAssignmentQuote);
+  rpc AdminAssignTierWithReview(AdminAssignTierReviewedRequest) returns (AdminAssignTierResponse);
 
   // Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
   rpc AdminListCheckoutRecovery(AdminListCheckoutRecoveryRequest) returns (AdminListCheckoutRecoveryResponse);
@@ -1327,6 +1375,7 @@ message PrepaidBalance {
   int64 drain_rate_cents_per_hour = 9;  // Estimated spend rate per hour (based on last hour)
   int64 reserved_balance_cents = 10;     // Provisional active-work reservation
   int64 available_balance_cents = 11;    // Settled balance less active reservation
+  PaymentGrace payment_grace = 12;
 }
 
 // Single balance transaction (top-up, usage, refund, etc.)
@@ -1628,6 +1677,19 @@ message AdminAssignTierRequest {
   string billing_model = 3;
   // Why the operator assigned the tier; recorded on the audit event.
   string reason = 4;
+}
+
+message AdminAssignmentQuote {
+  google.protobuf.Timestamp quoted_at = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  string fingerprint = 3;
+  // Exact staged financial effects; money fields specify their currency.
+  string effects_json = 4;
+}
+message AdminAssignTierReviewedRequest {
+  AdminAssignTierRequest assignment = 1;
+  google.protobuf.Timestamp quoted_at = 2;
+  string expected_fingerprint = 3;
 }
 
 message AdminAssignTierResponse {
@@ -2464,3 +2526,67 @@ message TranscodeLadder {
   string description = 3;
   string renditions_json = 4; // JSON array of Transcode renditions (Mist process option names)
 }
+
+message EnablePrepaidUsageRequest {
+  string tenant_id = 1;
+}
+message EnablePrepaidUsageResponse {
+  bool activated = 1;
+  bool awaiting_funds = 2;
+  string tier_name = 3;
+  string billing_model = 4;
+}
+
+message AdminRefundInvoiceRequest {
+ string tenant_id=1;
+ string invoice_id=2;
+ string request_id=3;
+ string reason=4;
+ bool confirmed=5;
+ string expected_fingerprint=6;
+}
+message AdminRefundInvoiceResponse {
+ string request_id=1;
+ string invoice_id=2;
+ string provider=3;
+ int64 amount_minor=4;
+ string currency=5;
+ string status=6;
+ string fingerprint=7;
+ string detail=8;
+ string provider_refund_id=9;
+}
+
+message GetAutomaticTopupRequest {string tenant_id=1;}
+message SetAutomaticTopupRequest {
+ string tenant_id=1;bool enabled=2;int64 threshold_eur_cents=3;
+ int64 net_amount_minor=4;int64 monthly_gross_limit_minor=5;
+ string currency=6;string consent_version=7;
+}
+message AdminDisableAutomaticTopupRequest {string tenant_id=1;string reason=2;}
+message AutomaticTopupSettings {
+ bool enabled=1;int64 threshold_eur_cents=2;int64 net_amount_minor=3;
+ int64 monthly_gross_limit_minor=4;string currency=5;string paused_reason=6;
+ int64 monthly_reserved_or_spent_minor=7;bool available=8;string unavailable_reason=9;
+ string consent_version=10;
+}
+
+message FreeCancellationQuote {
+ google.protobuf.Timestamp quoted_at=1;
+ google.protobuf.Timestamp expires_at=2;
+ google.protobuf.Timestamp effective_at=3;
+ string fingerprint=4;
+ int64 due_now_minor=5;
+ int64 refund_now_minor=6;
+ int64 wallet_credit_now_minor=7;
+ string currency=8;
+ string future_usage_message=9;
+}
+message ConfirmFreeCancellationRequest {
+ string tenant_id=1;
+ string tier_id=2;
+ google.protobuf.Timestamp quoted_at=3;
+ string expected_fingerprint=4;
+}
+
+message AdminGetInvoiceRefundRequest {string tenant_id=1;string request_id=2;}

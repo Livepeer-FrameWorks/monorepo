@@ -77,7 +77,7 @@ const (
 	// for unchanged source state. Reconciliation then re-issues every authority
 	// in use once; nothing else would, because an unchanged compile publishes
 	// nothing.
-	mediaAuthorityCompilerRevision = 3
+	mediaAuthorityCompilerRevision = 4
 	// Queue gauges and the sweeps that settle deliveries nothing will ever make.
 	// Neither is needed to deliver, so they run off the one-second delivery tick.
 	// Each replica observes once a minute; the alerts on these gauges wait
@@ -1187,6 +1187,9 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 	case admission.GetValidUntil() != nil && !admission.GetValidUntil().AsTime().After(issuedAt):
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED
 		payload.DecisionReason = sharedauthority.ReasonOperatorGrantExpired
+		if admission.GetPrepaidGraceValidity() {
+			payload.DecisionReason = sharedauthority.ReasonPrepaidBalanceUnavailable
+		}
 		validUntil = issuedAt.Add(expiredOperatorGrantDenyValidity)
 	case billing.GetIsSuspended():
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED
@@ -1195,9 +1198,17 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 	// must not be frozen into a 24-hour signed decision because the reservation
 	// window can expire without a database mutation. Offline authority follows
 	// the durable prepaid balance and explicit suspension state only.
-	case model == mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID && billing.GetBalanceCents() <= 0:
+	case model == mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID && billing.GetBalanceCents() <= 0 && !billing.GetPaymentGrace().GetActive():
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED
 		payload.DecisionReason = sharedauthority.ReasonPrepaidBalanceUnavailable
+	}
+	if grace := billing.GetPaymentGrace(); grace.GetActive() {
+		if grace.EndsAt == nil || !grace.EndsAt.AsTime().After(issuedAt) {
+			payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED
+			payload.DecisionReason = sharedauthority.ReasonPrepaidBalanceUnavailable
+		} else if grace.EndsAt.AsTime().Before(validUntil) {
+			validUntil = grace.EndsAt.AsTime()
+		}
 	}
 	positive := payload.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
 	// A spent prepaid balance signs no grants, but stays delivered to the cells

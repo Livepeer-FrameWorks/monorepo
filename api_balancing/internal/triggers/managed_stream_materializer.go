@@ -10,7 +10,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // managedDVRStartSuppression caps how often the materializer dispatches
@@ -158,16 +157,8 @@ func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, 
 	managedDVRStarts.m[key] = now
 	managedDVRStarts.Unlock()
 
-	userID := streamCtx.GetUserId()
-	req := &sharedpb.StartDVRRequest{
-		TenantId:      streamCtx.GetTenantId(),
-		InternalName:  streamCtx.GetInternalName(),
-		UserId:        &userID,
-		ClusterId:     streamCtx.GetOriginClusterId(),
-		DvrPolicy:     streamCtx.GetDvrPolicy(),
-		ProcessesJson: streamCtx.GetDvrProcessesJson(),
-	}
-	applyStreamDVRChapterPolicy(req, streamCtx.GetDvrChapterMode(), streamCtx.GetDvrChapterIntervalSeconds())
+	req := managedStreamDVRRequest(streamCtx)
+
 	dvrCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var err error

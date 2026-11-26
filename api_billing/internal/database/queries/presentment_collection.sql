@@ -388,7 +388,7 @@ ORDER BY cluster_id;
 
 -- name: InsertUnusedBaseFeeCreditNote :exec
 INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
-SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),i.tenant_id,'invoice',i.id,'unused_base_fee',sqlc.arg(reference_id)::text,sqlc.arg(amount_minor)::bigint,sqlc.arg(currency)::text,'Unused subscription period',jsonb_build_object('unused_from',sqlc.arg(unused_from)::timestamptz)
+SELECT purser.next_billing_document_number('CN'),i.tenant_id,'invoice',i.id,'unused_base_fee',sqlc.arg(reference_id)::text,sqlc.arg(amount_minor)::bigint,sqlc.arg(currency)::text,'Unused subscription period',jsonb_build_object('unused_from',sqlc.arg(unused_from)::timestamptz)
 FROM purser.billing_invoices i WHERE i.tenant_id=sqlc.arg(tenant_id)::text::uuid AND i.id=sqlc.arg(invoice_id)::text::uuid AND i.tax_status='ready'
 ON CONFLICT(source_document_type,source_document_id,reversal_reference_type,reversal_reference_id) DO NOTHING;
 

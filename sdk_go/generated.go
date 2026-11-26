@@ -6938,6 +6938,56 @@ func (v *AuthSessionDefaultFields) GetExpiresAt() time.Time { return v.ExpiresAt
 // GetCurrent returns AuthSessionDefaultFields.Current, and is useful for accessing the field via an interface.
 func (v *AuthSessionDefaultFields) GetCurrent() bool { return v.Current }
 
+// AutomaticTopupSettingsDefaultFields includes the GraphQL fields of AutomaticTopupSettings requested by the fragment AutomaticTopupSettingsDefaultFields.
+type AutomaticTopupSettingsDefaultFields struct {
+	Enabled                     bool   `json:"enabled"`
+	ThresholdEurCents           int    `json:"thresholdEurCents"`
+	NetAmountMinor              int    `json:"netAmountMinor"`
+	MonthlyGrossLimitMinor      int    `json:"monthlyGrossLimitMinor"`
+	Currency                    string `json:"currency"`
+	PausedReason                string `json:"pausedReason"`
+	MonthlyReservedOrSpentMinor int    `json:"monthlyReservedOrSpentMinor"`
+	Available                   bool   `json:"available"`
+	UnavailableReason           string `json:"unavailableReason"`
+	ConsentVersion              string `json:"consentVersion"`
+}
+
+// GetEnabled returns AutomaticTopupSettingsDefaultFields.Enabled, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetEnabled() bool { return v.Enabled }
+
+// GetThresholdEurCents returns AutomaticTopupSettingsDefaultFields.ThresholdEurCents, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetThresholdEurCents() int { return v.ThresholdEurCents }
+
+// GetNetAmountMinor returns AutomaticTopupSettingsDefaultFields.NetAmountMinor, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetNetAmountMinor() int { return v.NetAmountMinor }
+
+// GetMonthlyGrossLimitMinor returns AutomaticTopupSettingsDefaultFields.MonthlyGrossLimitMinor, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetMonthlyGrossLimitMinor() int {
+	return v.MonthlyGrossLimitMinor
+}
+
+// GetCurrency returns AutomaticTopupSettingsDefaultFields.Currency, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetCurrency() string { return v.Currency }
+
+// GetPausedReason returns AutomaticTopupSettingsDefaultFields.PausedReason, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetPausedReason() string { return v.PausedReason }
+
+// GetMonthlyReservedOrSpentMinor returns AutomaticTopupSettingsDefaultFields.MonthlyReservedOrSpentMinor, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetMonthlyReservedOrSpentMinor() int {
+	return v.MonthlyReservedOrSpentMinor
+}
+
+// GetAvailable returns AutomaticTopupSettingsDefaultFields.Available, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetAvailable() bool { return v.Available }
+
+// GetUnavailableReason returns AutomaticTopupSettingsDefaultFields.UnavailableReason, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetUnavailableReason() string {
+	return v.UnavailableReason
+}
+
+// GetConsentVersion returns AutomaticTopupSettingsDefaultFields.ConsentVersion, and is useful for accessing the field via an interface.
+func (v *AutomaticTopupSettingsDefaultFields) GetConsentVersion() string { return v.ConsentVersion }
+
 // AvailableClusterDefaultFields includes the GraphQL fields of AvailableCluster requested by the fragment AvailableClusterDefaultFields.
 type AvailableClusterDefaultFields struct {
 	ClusterId   string   `json:"clusterId"`
@@ -8425,22 +8475,24 @@ func (v *BillingStatusDefaultFieldsRecentPaymentsInvoicePaymentConversionCurrenc
 
 // BillingStatusDefaultFieldsSubscriptionTenantSubscription includes the requested fields of the GraphQL type TenantSubscription.
 type BillingStatusDefaultFieldsSubscriptionTenantSubscription struct {
-	Id                   string                                                                                         `json:"id"`
-	TenantId             string                                                                                         `json:"tenantId"`
-	TierId               string                                                                                         `json:"tierId"`
-	Status               string                                                                                         `json:"status"`
-	BillingEmail         string                                                                                         `json:"billingEmail"`
-	StartedAt            time.Time                                                                                      `json:"startedAt"`
-	TrialEndsAt          *time.Time                                                                                     `json:"trialEndsAt"`
-	NextBillingDate      *time.Time                                                                                     `json:"nextBillingDate"`
-	CancelledAt          *time.Time                                                                                     `json:"cancelledAt"`
-	CustomFeatures       *BillingStatusDefaultFieldsSubscriptionTenantSubscriptionCustomFeaturesBillingFeatures         `json:"customFeatures"`
-	PricingOverrides     []BillingStatusDefaultFieldsSubscriptionTenantSubscriptionPricingOverridesPricingRule          `json:"pricingOverrides"`
-	EntitlementOverrides []BillingStatusDefaultFieldsSubscriptionTenantSubscriptionEntitlementOverridesEntitlementEntry `json:"entitlementOverrides"`
-	PaymentMethod        *string                                                                                        `json:"paymentMethod"`
-	BillingModel         string                                                                                         `json:"billingModel"`
-	PendingTier          *BillingStatusDefaultFieldsSubscriptionTenantSubscriptionPendingTierBillingTier                `json:"pendingTier"`
-	PendingEffectiveAt   *time.Time                                                                                     `json:"pendingEffectiveAt"`
+	// Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it.
+	AutomaticPrepaidUsage bool                                                                                           `json:"automaticPrepaidUsage"`
+	Id                    string                                                                                         `json:"id"`
+	TenantId              string                                                                                         `json:"tenantId"`
+	TierId                string                                                                                         `json:"tierId"`
+	Status                string                                                                                         `json:"status"`
+	BillingEmail          string                                                                                         `json:"billingEmail"`
+	StartedAt             time.Time                                                                                      `json:"startedAt"`
+	TrialEndsAt           *time.Time                                                                                     `json:"trialEndsAt"`
+	NextBillingDate       *time.Time                                                                                     `json:"nextBillingDate"`
+	CancelledAt           *time.Time                                                                                     `json:"cancelledAt"`
+	CustomFeatures        *BillingStatusDefaultFieldsSubscriptionTenantSubscriptionCustomFeaturesBillingFeatures         `json:"customFeatures"`
+	PricingOverrides      []BillingStatusDefaultFieldsSubscriptionTenantSubscriptionPricingOverridesPricingRule          `json:"pricingOverrides"`
+	EntitlementOverrides  []BillingStatusDefaultFieldsSubscriptionTenantSubscriptionEntitlementOverridesEntitlementEntry `json:"entitlementOverrides"`
+	PaymentMethod         *string                                                                                        `json:"paymentMethod"`
+	BillingModel          string                                                                                         `json:"billingModel"`
+	PendingTier           *BillingStatusDefaultFieldsSubscriptionTenantSubscriptionPendingTierBillingTier                `json:"pendingTier"`
+	PendingEffectiveAt    *time.Time                                                                                     `json:"pendingEffectiveAt"`
 	// Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
 	// BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
 	// confirmed) or stripe_checkout (a checkout awaiting payment).
@@ -8449,6 +8501,11 @@ type BillingStatusDefaultFieldsSubscriptionTenantSubscription struct {
 	PresentmentCurrency string    `json:"presentmentCurrency"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+// GetAutomaticPrepaidUsage returns BillingStatusDefaultFieldsSubscriptionTenantSubscription.AutomaticPrepaidUsage, and is useful for accessing the field via an interface.
+func (v *BillingStatusDefaultFieldsSubscriptionTenantSubscription) GetAutomaticPrepaidUsage() bool {
+	return v.AutomaticPrepaidUsage
 }
 
 // GetId returns BillingStatusDefaultFieldsSubscriptionTenantSubscription.Id, and is useful for accessing the field via an interface.
@@ -14453,6 +14510,437 @@ func (v *CompleteVodUploadResponse) __premarshalJSON() (*__premarshalCompleteVod
 		if err != nil {
 			return nil, fmt.Errorf(
 				"unable to marshal CompleteVodUploadResponse.CompleteVodUpload: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// ConfirmFreeCancellationConfirmFreeCancellationAuthError includes the requested fields of the GraphQL type AuthError.
+type ConfirmFreeCancellationConfirmFreeCancellationAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns ConfirmFreeCancellationConfirmFreeCancellationAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns ConfirmFreeCancellationConfirmFreeCancellationAuthError.Message, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns ConfirmFreeCancellationConfirmFreeCancellationAuthError.Code, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ConfirmFreeCancellationConfirmFreeCancellationAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ConfirmFreeCancellationConfirmFreeCancellationAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalConfirmFreeCancellationConfirmFreeCancellationAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) __premarshalJSON() (*__premarshalConfirmFreeCancellationConfirmFreeCancellationAuthError, error) {
+	var retval __premarshalConfirmFreeCancellationConfirmFreeCancellationAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload includes the requested fields of the GraphQL type ChangeBillingTierPayload.
+// The GraphQL type's documentation follows.
+//
+// Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+// pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
+type ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload struct {
+	Typename                              *string `json:"__typename"`
+	ChangeBillingTierPayloadDefaultFields `json:"-"`
+}
+
+// GetTypename returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.Typename, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetTypename() *string {
+	return v.Typename
+}
+
+// GetSuccess returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.Success, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetSuccess() bool {
+	return v.ChangeBillingTierPayloadDefaultFields.Success
+}
+
+// GetMessage returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.Message, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetMessage() string {
+	return v.ChangeBillingTierPayloadDefaultFields.Message
+}
+
+// GetAppliedTier returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.AppliedTier, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetAppliedTier() *ChangeBillingTierPayloadDefaultFieldsAppliedTierBillingTier {
+	return v.ChangeBillingTierPayloadDefaultFields.AppliedTier
+}
+
+// GetPendingTier returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.PendingTier, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetPendingTier() *ChangeBillingTierPayloadDefaultFieldsPendingTierBillingTier {
+	return v.ChangeBillingTierPayloadDefaultFields.PendingTier
+}
+
+// GetEffectiveAt returns ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload.EffectiveAt, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) GetEffectiveAt() *time.Time {
+	return v.ChangeBillingTierPayloadDefaultFields.EffectiveAt
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ChangeBillingTierPayloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload struct {
+	Typename *string `json:"__typename"`
+
+	Success bool `json:"success"`
+
+	Message string `json:"message"`
+
+	AppliedTier *ChangeBillingTierPayloadDefaultFieldsAppliedTierBillingTier `json:"appliedTier"`
+
+	PendingTier *ChangeBillingTierPayloadDefaultFieldsPendingTierBillingTier `json:"pendingTier"`
+
+	EffectiveAt *time.Time `json:"effectiveAt"`
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) __premarshalJSON() (*__premarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload, error) {
+	var retval __premarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload
+
+	retval.Typename = v.Typename
+	retval.Success = v.ChangeBillingTierPayloadDefaultFields.Success
+	retval.Message = v.ChangeBillingTierPayloadDefaultFields.Message
+	retval.AppliedTier = v.ChangeBillingTierPayloadDefaultFields.AppliedTier
+	retval.PendingTier = v.ChangeBillingTierPayloadDefaultFields.PendingTier
+	retval.EffectiveAt = v.ChangeBillingTierPayloadDefaultFields.EffectiveAt
+	return &retval, nil
+}
+
+// ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult includes the requested fields of the GraphQL interface ChangeBillingTierResult.
+//
+// ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult is implemented by the following types:
+// ConfirmFreeCancellationConfirmFreeCancellationAuthError
+// ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload
+// ConfirmFreeCancellationConfirmFreeCancellationValidationError
+type ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult interface {
+	implementsGraphQLInterfaceConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationAuthError) implementsGraphQLInterfaceConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult() {
+}
+func (v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload) implementsGraphQLInterfaceConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult() {
+}
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) implementsGraphQLInterfaceConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult() {
+}
+
+func __unmarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult(b []byte, v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(ConfirmFreeCancellationConfirmFreeCancellationAuthError)
+		return json.Unmarshal(b, *v)
+	case "ChangeBillingTierPayload":
+		*v = new(ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(ConfirmFreeCancellationConfirmFreeCancellationValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing ChangeBillingTierResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult(v *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *ConfirmFreeCancellationConfirmFreeCancellationAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalConfirmFreeCancellationConfirmFreeCancellationAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload:
+		typename = "ChangeBillingTierPayload"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierPayload
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ConfirmFreeCancellationConfirmFreeCancellationValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalConfirmFreeCancellationConfirmFreeCancellationValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult: "%T"`, v)
+	}
+}
+
+// ConfirmFreeCancellationConfirmFreeCancellationValidationError includes the requested fields of the GraphQL type ValidationError.
+type ConfirmFreeCancellationConfirmFreeCancellationValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns ConfirmFreeCancellationConfirmFreeCancellationValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns ConfirmFreeCancellationConfirmFreeCancellationValidationError.Message, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns ConfirmFreeCancellationConfirmFreeCancellationValidationError.Code, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns ConfirmFreeCancellationConfirmFreeCancellationValidationError.Field, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns ConfirmFreeCancellationConfirmFreeCancellationValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ConfirmFreeCancellationConfirmFreeCancellationValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ConfirmFreeCancellationConfirmFreeCancellationValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalConfirmFreeCancellationConfirmFreeCancellationValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ConfirmFreeCancellationConfirmFreeCancellationValidationError) __premarshalJSON() (*__premarshalConfirmFreeCancellationConfirmFreeCancellationValidationError, error) {
+	var retval __premarshalConfirmFreeCancellationConfirmFreeCancellationValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// ConfirmFreeCancellationResponse is returned by ConfirmFreeCancellation on success.
+type ConfirmFreeCancellationResponse struct {
+	ConfirmFreeCancellation ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult `json:"-"`
+}
+
+// GetConfirmFreeCancellation returns ConfirmFreeCancellationResponse.ConfirmFreeCancellation, and is useful for accessing the field via an interface.
+func (v *ConfirmFreeCancellationResponse) GetConfirmFreeCancellation() ConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult {
+	return v.ConfirmFreeCancellation
+}
+
+func (v *ConfirmFreeCancellationResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ConfirmFreeCancellationResponse
+		ConfirmFreeCancellation json.RawMessage `json:"confirmFreeCancellation"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ConfirmFreeCancellationResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.ConfirmFreeCancellation
+		src := firstPass.ConfirmFreeCancellation
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal ConfirmFreeCancellationResponse.ConfirmFreeCancellation: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalConfirmFreeCancellationResponse struct {
+	ConfirmFreeCancellation json.RawMessage `json:"confirmFreeCancellation"`
+}
+
+func (v *ConfirmFreeCancellationResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ConfirmFreeCancellationResponse) __premarshalJSON() (*__premarshalConfirmFreeCancellationResponse, error) {
+	var retval __premarshalConfirmFreeCancellationResponse
+
+	{
+
+		dst := &retval.ConfirmFreeCancellation
+		src := v.ConfirmFreeCancellation
+		var err error
+		*dst, err = __marshalConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal ConfirmFreeCancellationResponse.ConfirmFreeCancellation: %w", err)
 		}
 	}
 	return &retval, nil
@@ -29674,6 +30162,121 @@ func (v *EffectiveRetentionFields) GetRetentionUntil() *time.Time { return v.Ret
 // GetSource returns EffectiveRetentionFields.Source, and is useful for accessing the field via an interface.
 func (v *EffectiveRetentionFields) GetSource() RetentionSource { return v.Source }
 
+// EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload includes the requested fields of the GraphQL type EnablePrepaidUsagePayload.
+// The GraphQL type's documentation follows.
+//
+// The funded-usage arrangement after opting into PAYG.
+type EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload struct {
+	EnablePrepaidUsagePayloadDefaultFields `json:"-"`
+}
+
+// GetActivated returns EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload.Activated, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) GetActivated() bool {
+	return v.EnablePrepaidUsagePayloadDefaultFields.Activated
+}
+
+// GetAwaitingFunds returns EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload.AwaitingFunds, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) GetAwaitingFunds() bool {
+	return v.EnablePrepaidUsagePayloadDefaultFields.AwaitingFunds
+}
+
+// GetTierName returns EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload.TierName, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) GetTierName() string {
+	return v.EnablePrepaidUsagePayloadDefaultFields.TierName
+}
+
+// GetBillingModel returns EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload.BillingModel, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) GetBillingModel() string {
+	return v.EnablePrepaidUsagePayloadDefaultFields.BillingModel
+}
+
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.EnablePrepaidUsagePayloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalEnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload struct {
+	Activated bool `json:"activated"`
+
+	AwaitingFunds bool `json:"awaitingFunds"`
+
+	TierName string `json:"tierName"`
+
+	BillingModel string `json:"billingModel"`
+}
+
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload) __premarshalJSON() (*__premarshalEnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload, error) {
+	var retval __premarshalEnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload
+
+	retval.Activated = v.EnablePrepaidUsagePayloadDefaultFields.Activated
+	retval.AwaitingFunds = v.EnablePrepaidUsagePayloadDefaultFields.AwaitingFunds
+	retval.TierName = v.EnablePrepaidUsagePayloadDefaultFields.TierName
+	retval.BillingModel = v.EnablePrepaidUsagePayloadDefaultFields.BillingModel
+	return &retval, nil
+}
+
+// EnablePrepaidUsagePayloadDefaultFields includes the GraphQL fields of EnablePrepaidUsagePayload requested by the fragment EnablePrepaidUsagePayloadDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// The funded-usage arrangement after opting into PAYG.
+type EnablePrepaidUsagePayloadDefaultFields struct {
+	Activated     bool   `json:"activated"`
+	AwaitingFunds bool   `json:"awaitingFunds"`
+	TierName      string `json:"tierName"`
+	BillingModel  string `json:"billingModel"`
+}
+
+// GetActivated returns EnablePrepaidUsagePayloadDefaultFields.Activated, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsagePayloadDefaultFields) GetActivated() bool { return v.Activated }
+
+// GetAwaitingFunds returns EnablePrepaidUsagePayloadDefaultFields.AwaitingFunds, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsagePayloadDefaultFields) GetAwaitingFunds() bool { return v.AwaitingFunds }
+
+// GetTierName returns EnablePrepaidUsagePayloadDefaultFields.TierName, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsagePayloadDefaultFields) GetTierName() string { return v.TierName }
+
+// GetBillingModel returns EnablePrepaidUsagePayloadDefaultFields.BillingModel, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsagePayloadDefaultFields) GetBillingModel() string { return v.BillingModel }
+
+// EnablePrepaidUsageResponse is returned by EnablePrepaidUsage on success.
+type EnablePrepaidUsageResponse struct {
+	// Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved.
+	EnablePrepaidUsage EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload `json:"enablePrepaidUsage"`
+}
+
+// GetEnablePrepaidUsage returns EnablePrepaidUsageResponse.EnablePrepaidUsage, and is useful for accessing the field via an interface.
+func (v *EnablePrepaidUsageResponse) GetEnablePrepaidUsage() EnablePrepaidUsageEnablePrepaidUsageEnablePrepaidUsagePayload {
+	return v.EnablePrepaidUsage
+}
+
 // EnableWebhookEndpointEnableWebhookEndpoint includes the requested fields of the GraphQL type WebhookEndpoint.
 // The GraphQL type's documentation follows.
 //
@@ -30503,6 +31106,53 @@ func (v *FederationSummaryDefaultFieldsEventCountsFederationEventCount) GetFailu
 // GetAvgLatencyMs returns FederationSummaryDefaultFieldsEventCountsFederationEventCount.AvgLatencyMs, and is useful for accessing the field via an interface.
 func (v *FederationSummaryDefaultFieldsEventCountsFederationEventCount) GetAvgLatencyMs() float64 {
 	return v.AvgLatencyMs
+}
+
+// FreeCancellationReviewDefaultFields includes the GraphQL fields of FreeCancellationReview requested by the fragment FreeCancellationReviewDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero.
+type FreeCancellationReviewDefaultFields struct {
+	QuotedAt             time.Time `json:"quotedAt"`
+	ExpiresAt            time.Time `json:"expiresAt"`
+	EffectiveAt          time.Time `json:"effectiveAt"`
+	Fingerprint          string    `json:"fingerprint"`
+	DueNowMinor          int       `json:"dueNowMinor"`
+	RefundNowMinor       int       `json:"refundNowMinor"`
+	WalletCreditNowMinor int       `json:"walletCreditNowMinor"`
+	Currency             string    `json:"currency"`
+	FutureUsageMessage   string    `json:"futureUsageMessage"`
+}
+
+// GetQuotedAt returns FreeCancellationReviewDefaultFields.QuotedAt, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetQuotedAt() time.Time { return v.QuotedAt }
+
+// GetExpiresAt returns FreeCancellationReviewDefaultFields.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetExpiresAt() time.Time { return v.ExpiresAt }
+
+// GetEffectiveAt returns FreeCancellationReviewDefaultFields.EffectiveAt, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetEffectiveAt() time.Time { return v.EffectiveAt }
+
+// GetFingerprint returns FreeCancellationReviewDefaultFields.Fingerprint, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetFingerprint() string { return v.Fingerprint }
+
+// GetDueNowMinor returns FreeCancellationReviewDefaultFields.DueNowMinor, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetDueNowMinor() int { return v.DueNowMinor }
+
+// GetRefundNowMinor returns FreeCancellationReviewDefaultFields.RefundNowMinor, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetRefundNowMinor() int { return v.RefundNowMinor }
+
+// GetWalletCreditNowMinor returns FreeCancellationReviewDefaultFields.WalletCreditNowMinor, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetWalletCreditNowMinor() int {
+	return v.WalletCreditNowMinor
+}
+
+// GetCurrency returns FreeCancellationReviewDefaultFields.Currency, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetCurrency() string { return v.Currency }
+
+// GetFutureUsageMessage returns FreeCancellationReviewDefaultFields.FutureUsageMessage, and is useful for accessing the field via an interface.
+func (v *FreeCancellationReviewDefaultFields) GetFutureUsageMessage() string {
+	return v.FutureUsageMessage
 }
 
 // Why an account moves to the Free plan.
@@ -32933,6 +33583,142 @@ type GetAuthSessionsConnectionResponse struct {
 // GetAuthSessionsConnection returns GetAuthSessionsConnectionResponse.AuthSessionsConnection, and is useful for accessing the field via an interface.
 func (v *GetAuthSessionsConnectionResponse) GetAuthSessionsConnection() GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection {
 	return v.AuthSessionsConnection
+}
+
+// GetAutomaticTopupAutomaticTopupAutomaticTopupSettings includes the requested fields of the GraphQL type AutomaticTopupSettings.
+type GetAutomaticTopupAutomaticTopupAutomaticTopupSettings struct {
+	AutomaticTopupSettingsDefaultFields `json:"-"`
+}
+
+// GetEnabled returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.Enabled, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetEnabled() bool {
+	return v.AutomaticTopupSettingsDefaultFields.Enabled
+}
+
+// GetThresholdEurCents returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.ThresholdEurCents, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetThresholdEurCents() int {
+	return v.AutomaticTopupSettingsDefaultFields.ThresholdEurCents
+}
+
+// GetNetAmountMinor returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.NetAmountMinor, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetNetAmountMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.NetAmountMinor
+}
+
+// GetMonthlyGrossLimitMinor returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.MonthlyGrossLimitMinor, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetMonthlyGrossLimitMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.MonthlyGrossLimitMinor
+}
+
+// GetCurrency returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.Currency, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetCurrency() string {
+	return v.AutomaticTopupSettingsDefaultFields.Currency
+}
+
+// GetPausedReason returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.PausedReason, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetPausedReason() string {
+	return v.AutomaticTopupSettingsDefaultFields.PausedReason
+}
+
+// GetMonthlyReservedOrSpentMinor returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.MonthlyReservedOrSpentMinor, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetMonthlyReservedOrSpentMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.MonthlyReservedOrSpentMinor
+}
+
+// GetAvailable returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.Available, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetAvailable() bool {
+	return v.AutomaticTopupSettingsDefaultFields.Available
+}
+
+// GetUnavailableReason returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.UnavailableReason, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetUnavailableReason() string {
+	return v.AutomaticTopupSettingsDefaultFields.UnavailableReason
+}
+
+// GetConsentVersion returns GetAutomaticTopupAutomaticTopupAutomaticTopupSettings.ConsentVersion, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) GetConsentVersion() string {
+	return v.AutomaticTopupSettingsDefaultFields.ConsentVersion
+}
+
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetAutomaticTopupAutomaticTopupAutomaticTopupSettings
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetAutomaticTopupAutomaticTopupAutomaticTopupSettings = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AutomaticTopupSettingsDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetAutomaticTopupAutomaticTopupAutomaticTopupSettings struct {
+	Enabled bool `json:"enabled"`
+
+	ThresholdEurCents int `json:"thresholdEurCents"`
+
+	NetAmountMinor int `json:"netAmountMinor"`
+
+	MonthlyGrossLimitMinor int `json:"monthlyGrossLimitMinor"`
+
+	Currency string `json:"currency"`
+
+	PausedReason string `json:"pausedReason"`
+
+	MonthlyReservedOrSpentMinor int `json:"monthlyReservedOrSpentMinor"`
+
+	Available bool `json:"available"`
+
+	UnavailableReason string `json:"unavailableReason"`
+
+	ConsentVersion string `json:"consentVersion"`
+}
+
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetAutomaticTopupAutomaticTopupAutomaticTopupSettings) __premarshalJSON() (*__premarshalGetAutomaticTopupAutomaticTopupAutomaticTopupSettings, error) {
+	var retval __premarshalGetAutomaticTopupAutomaticTopupAutomaticTopupSettings
+
+	retval.Enabled = v.AutomaticTopupSettingsDefaultFields.Enabled
+	retval.ThresholdEurCents = v.AutomaticTopupSettingsDefaultFields.ThresholdEurCents
+	retval.NetAmountMinor = v.AutomaticTopupSettingsDefaultFields.NetAmountMinor
+	retval.MonthlyGrossLimitMinor = v.AutomaticTopupSettingsDefaultFields.MonthlyGrossLimitMinor
+	retval.Currency = v.AutomaticTopupSettingsDefaultFields.Currency
+	retval.PausedReason = v.AutomaticTopupSettingsDefaultFields.PausedReason
+	retval.MonthlyReservedOrSpentMinor = v.AutomaticTopupSettingsDefaultFields.MonthlyReservedOrSpentMinor
+	retval.Available = v.AutomaticTopupSettingsDefaultFields.Available
+	retval.UnavailableReason = v.AutomaticTopupSettingsDefaultFields.UnavailableReason
+	retval.ConsentVersion = v.AutomaticTopupSettingsDefaultFields.ConsentVersion
+	return &retval, nil
+}
+
+// GetAutomaticTopupResponse is returned by GetAutomaticTopup on success.
+type GetAutomaticTopupResponse struct {
+	AutomaticTopup GetAutomaticTopupAutomaticTopupAutomaticTopupSettings `json:"automaticTopup"`
+}
+
+// GetAutomaticTopup returns GetAutomaticTopupResponse.AutomaticTopup, and is useful for accessing the field via an interface.
+func (v *GetAutomaticTopupResponse) GetAutomaticTopup() GetAutomaticTopupAutomaticTopupAutomaticTopupSettings {
+	return v.AutomaticTopup
 }
 
 // GetBalanceTransactionsConnectionBalanceTransactionsConnection includes the requested fields of the GraphQL type BalanceTransactionsConnection.
@@ -56746,12 +57532,13 @@ func (v *GetPlayerBootTimeSeriesResponse) GetAnalytics() GetPlayerBootTimeSeries
 }
 
 // GetPrepaidBalancePrepaidBalance includes the requested fields of the GraphQL type PrepaidBalance.
-// The GraphQL type's documentation follows.
-//
-// Prepaid balance for wallet-based accounts.
-// Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
 type GetPrepaidBalancePrepaidBalance struct {
 	PrepaidBalanceDefaultFields `json:"-"`
+}
+
+// GetPaymentGrace returns GetPrepaidBalancePrepaidBalance.PaymentGrace, and is useful for accessing the field via an interface.
+func (v *GetPrepaidBalancePrepaidBalance) GetPaymentGrace() *PrepaidBalanceDefaultFieldsPaymentGrace {
+	return v.PrepaidBalanceDefaultFields.PaymentGrace
 }
 
 // GetId returns GetPrepaidBalancePrepaidBalance.Id, and is useful for accessing the field via an interface.
@@ -56833,6 +57620,8 @@ func (v *GetPrepaidBalancePrepaidBalance) UnmarshalJSON(b []byte) error {
 }
 
 type __premarshalGetPrepaidBalancePrepaidBalance struct {
+	PaymentGrace *PrepaidBalanceDefaultFieldsPaymentGrace `json:"paymentGrace"`
+
 	Id string `json:"id"`
 
 	TenantId string `json:"tenantId"`
@@ -56867,6 +57656,7 @@ func (v *GetPrepaidBalancePrepaidBalance) MarshalJSON() ([]byte, error) {
 func (v *GetPrepaidBalancePrepaidBalance) __premarshalJSON() (*__premarshalGetPrepaidBalancePrepaidBalance, error) {
 	var retval __premarshalGetPrepaidBalancePrepaidBalance
 
+	retval.PaymentGrace = v.PrepaidBalanceDefaultFields.PaymentGrace
 	retval.Id = v.PrepaidBalanceDefaultFields.Id
 	retval.TenantId = v.PrepaidBalanceDefaultFields.TenantId
 	retval.BalanceCents = v.PrepaidBalanceDefaultFields.BalanceCents
@@ -59019,6 +59809,514 @@ func (v *GetRecentPullSourceEventsStreamRecentPullSourceEventsPullSourceEvent) _
 	retval.Detail = v.PullSourceEventDefaultFields.Detail
 	retval.CreatedAt = v.PullSourceEventDefaultFields.CreatedAt
 	return &retval, nil
+}
+
+// GetRecordingEventsConnectionAnalytics includes the requested fields of the GraphQL type Analytics.
+// The GraphQL type's documentation follows.
+//
+// Unified analytics surface for all platform metrics.
+// Organized into logical domains: usage, health, lifecycle, and infrastructure.
+type GetRecordingEventsConnectionAnalytics struct {
+	// Lifecycle analytics: stream events, artifacts, connections.
+	Lifecycle GetRecordingEventsConnectionAnalyticsLifecycle `json:"lifecycle"`
+}
+
+// GetLifecycle returns GetRecordingEventsConnectionAnalytics.Lifecycle, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalytics) GetLifecycle() GetRecordingEventsConnectionAnalyticsLifecycle {
+	return v.Lifecycle
+}
+
+// GetRecordingEventsConnectionAnalyticsLifecycle includes the requested fields of the GraphQL type AnalyticsLifecycle.
+// The GraphQL type's documentation follows.
+//
+// Lifecycle analytics for streams and artifacts.
+// `streamId` arguments accept Stream.id (Relay global ID).
+type GetRecordingEventsConnectionAnalyticsLifecycle struct {
+	// Latest recording outcomes and broadcast boundaries, without buffer/track noise.
+	RecordingEventsConnection GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection `json:"recordingEventsConnection"`
+}
+
+// GetRecordingEventsConnection returns GetRecordingEventsConnectionAnalyticsLifecycle.RecordingEventsConnection, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycle) GetRecordingEventsConnection() GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection {
+	return v.RecordingEventsConnection
+}
+
+// GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection includes the requested fields of the GraphQL type StreamEventsConnection.
+type GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection struct {
+	Edges      []GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge `json:"edges"`
+	PageInfo   GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo               `json:"pageInfo"`
+	TotalCount int                                                                                                                 `json:"totalCount"`
+}
+
+// GetEdges returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection) GetEdges() []GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection) GetPageInfo() GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge includes the requested fields of the GraphQL type StreamEventEdge.
+type GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge struct {
+	Cursor string                                                                                                                           `json:"cursor"`
+	Node   GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent `json:"node"`
+}
+
+// GetCursor returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge.Node, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdge) GetNode() GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent {
+	return v.Node
+}
+
+// GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent includes the requested fields of the GraphQL type StreamEvent.
+type GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent struct {
+	StreamEventDefaultFields `json:"-"`
+}
+
+// GetId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Id, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetId() string {
+	return v.StreamEventDefaultFields.Id
+}
+
+// GetEventId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.EventId, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetEventId() string {
+	return v.StreamEventDefaultFields.EventId
+}
+
+// GetStreamId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.StreamId, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetStreamId() *string {
+	return v.StreamEventDefaultFields.StreamId
+}
+
+// GetStream returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Stream, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetStream() *StreamEventDefaultFieldsStream {
+	return v.StreamEventDefaultFields.Stream
+}
+
+// GetNodeId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.NodeId, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetNodeId() *string {
+	return v.StreamEventDefaultFields.NodeId
+}
+
+// GetType returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Type, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetType() StreamEventType {
+	return v.StreamEventDefaultFields.Type
+}
+
+// GetStatus returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Status, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetStatus() *StreamStatus {
+	return v.StreamEventDefaultFields.Status
+}
+
+// GetTimestamp returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Timestamp, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetTimestamp() time.Time {
+	return v.StreamEventDefaultFields.Timestamp
+}
+
+// GetDetails returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Details, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetDetails() *string {
+	return v.StreamEventDefaultFields.Details
+}
+
+// GetPayload returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Payload, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPayload() *json.RawMessage {
+	return v.StreamEventDefaultFields.Payload
+}
+
+// GetSource returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Source, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetSource() StreamEventSource {
+	return v.StreamEventDefaultFields.Source
+}
+
+// GetBufferState returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.BufferState, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetBufferState() *string {
+	return v.StreamEventDefaultFields.BufferState
+}
+
+// GetHasIssues returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.HasIssues, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetHasIssues() *bool {
+	return v.StreamEventDefaultFields.HasIssues
+}
+
+// GetTrackCount returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.TrackCount, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetTrackCount() *int {
+	return v.StreamEventDefaultFields.TrackCount
+}
+
+// GetQualityTier returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.QualityTier, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetQualityTier() *string {
+	return v.StreamEventDefaultFields.QualityTier
+}
+
+// GetPrimaryWidth returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.PrimaryWidth, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPrimaryWidth() *int {
+	return v.StreamEventDefaultFields.PrimaryWidth
+}
+
+// GetPrimaryHeight returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.PrimaryHeight, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPrimaryHeight() *int {
+	return v.StreamEventDefaultFields.PrimaryHeight
+}
+
+// GetPrimaryFps returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.PrimaryFps, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPrimaryFps() *float64 {
+	return v.StreamEventDefaultFields.PrimaryFps
+}
+
+// GetPrimaryCodec returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.PrimaryCodec, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPrimaryCodec() *string {
+	return v.StreamEventDefaultFields.PrimaryCodec
+}
+
+// GetPrimaryBitrate returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.PrimaryBitrate, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetPrimaryBitrate() *int {
+	return v.StreamEventDefaultFields.PrimaryBitrate
+}
+
+// GetDownloadedBytes returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.DownloadedBytes, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetDownloadedBytes() *float64 {
+	return v.StreamEventDefaultFields.DownloadedBytes
+}
+
+// GetUploadedBytes returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.UploadedBytes, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetUploadedBytes() *float64 {
+	return v.StreamEventDefaultFields.UploadedBytes
+}
+
+// GetTotalViewers returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.TotalViewers, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetTotalViewers() *int {
+	return v.StreamEventDefaultFields.TotalViewers
+}
+
+// GetTotalInputs returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.TotalInputs, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetTotalInputs() *int {
+	return v.StreamEventDefaultFields.TotalInputs
+}
+
+// GetTotalOutputs returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.TotalOutputs, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetTotalOutputs() *int {
+	return v.StreamEventDefaultFields.TotalOutputs
+}
+
+// GetViewerSeconds returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.ViewerSeconds, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetViewerSeconds() *float64 {
+	return v.StreamEventDefaultFields.ViewerSeconds
+}
+
+// GetRequestUrl returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.RequestUrl, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetRequestUrl() *string {
+	return v.StreamEventDefaultFields.RequestUrl
+}
+
+// GetProtocol returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Protocol, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetProtocol() *string {
+	return v.StreamEventDefaultFields.Protocol
+}
+
+// GetLatitude returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Latitude, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetLatitude() *float64 {
+	return v.StreamEventDefaultFields.Latitude
+}
+
+// GetLongitude returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Longitude, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetLongitude() *float64 {
+	return v.StreamEventDefaultFields.Longitude
+}
+
+// GetLocation returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.Location, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetLocation() *string {
+	return v.StreamEventDefaultFields.Location
+}
+
+// GetCountryCode returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.CountryCode, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetCountryCode() *string {
+	return v.StreamEventDefaultFields.CountryCode
+}
+
+// GetCity returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.City, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetCity() *string {
+	return v.StreamEventDefaultFields.City
+}
+
+// GetSourceRegion returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.SourceRegion, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetSourceRegion() string {
+	return v.StreamEventDefaultFields.SourceRegion
+}
+
+// GetSourceClusterId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.SourceClusterId, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetSourceClusterId() string {
+	return v.StreamEventDefaultFields.SourceClusterId
+}
+
+// GetStreamOriginRegion returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.StreamOriginRegion, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetStreamOriginRegion() string {
+	return v.StreamEventDefaultFields.StreamOriginRegion
+}
+
+// GetStreamOriginClusterId returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.StreamOriginClusterId, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetStreamOriginClusterId() string {
+	return v.StreamEventDefaultFields.StreamOriginClusterId
+}
+
+// GetSchemaVersion returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent.SchemaVersion, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) GetSchemaVersion() int {
+	return v.StreamEventDefaultFields.SchemaVersion
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.StreamEventDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent struct {
+	Id string `json:"id"`
+
+	EventId string `json:"eventId"`
+
+	StreamId *string `json:"streamId"`
+
+	Stream *StreamEventDefaultFieldsStream `json:"stream"`
+
+	NodeId *string `json:"nodeId"`
+
+	Type StreamEventType `json:"type"`
+
+	Status *StreamStatus `json:"status"`
+
+	Timestamp time.Time `json:"timestamp"`
+
+	Details *string `json:"details"`
+
+	Payload *json.RawMessage `json:"payload"`
+
+	Source StreamEventSource `json:"source"`
+
+	BufferState *string `json:"bufferState"`
+
+	HasIssues *bool `json:"hasIssues"`
+
+	TrackCount *int `json:"trackCount"`
+
+	QualityTier *string `json:"qualityTier"`
+
+	PrimaryWidth *int `json:"primaryWidth"`
+
+	PrimaryHeight *int `json:"primaryHeight"`
+
+	PrimaryFps *float64 `json:"primaryFps"`
+
+	PrimaryCodec *string `json:"primaryCodec"`
+
+	PrimaryBitrate *int `json:"primaryBitrate"`
+
+	DownloadedBytes *float64 `json:"downloadedBytes"`
+
+	UploadedBytes *float64 `json:"uploadedBytes"`
+
+	TotalViewers *int `json:"totalViewers"`
+
+	TotalInputs *int `json:"totalInputs"`
+
+	TotalOutputs *int `json:"totalOutputs"`
+
+	ViewerSeconds *float64 `json:"viewerSeconds"`
+
+	RequestUrl *string `json:"requestUrl"`
+
+	Protocol *string `json:"protocol"`
+
+	Latitude *float64 `json:"latitude"`
+
+	Longitude *float64 `json:"longitude"`
+
+	Location *string `json:"location"`
+
+	CountryCode *string `json:"countryCode"`
+
+	City *string `json:"city"`
+
+	SourceRegion string `json:"sourceRegion"`
+
+	SourceClusterId string `json:"sourceClusterId"`
+
+	StreamOriginRegion string `json:"streamOriginRegion"`
+
+	StreamOriginClusterId string `json:"streamOriginClusterId"`
+
+	SchemaVersion int `json:"schemaVersion"`
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent) __premarshalJSON() (*__premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent, error) {
+	var retval __premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionEdgesStreamEventEdgeNodeStreamEvent
+
+	retval.Id = v.StreamEventDefaultFields.Id
+	retval.EventId = v.StreamEventDefaultFields.EventId
+	retval.StreamId = v.StreamEventDefaultFields.StreamId
+	retval.Stream = v.StreamEventDefaultFields.Stream
+	retval.NodeId = v.StreamEventDefaultFields.NodeId
+	retval.Type = v.StreamEventDefaultFields.Type
+	retval.Status = v.StreamEventDefaultFields.Status
+	retval.Timestamp = v.StreamEventDefaultFields.Timestamp
+	retval.Details = v.StreamEventDefaultFields.Details
+	retval.Payload = v.StreamEventDefaultFields.Payload
+	retval.Source = v.StreamEventDefaultFields.Source
+	retval.BufferState = v.StreamEventDefaultFields.BufferState
+	retval.HasIssues = v.StreamEventDefaultFields.HasIssues
+	retval.TrackCount = v.StreamEventDefaultFields.TrackCount
+	retval.QualityTier = v.StreamEventDefaultFields.QualityTier
+	retval.PrimaryWidth = v.StreamEventDefaultFields.PrimaryWidth
+	retval.PrimaryHeight = v.StreamEventDefaultFields.PrimaryHeight
+	retval.PrimaryFps = v.StreamEventDefaultFields.PrimaryFps
+	retval.PrimaryCodec = v.StreamEventDefaultFields.PrimaryCodec
+	retval.PrimaryBitrate = v.StreamEventDefaultFields.PrimaryBitrate
+	retval.DownloadedBytes = v.StreamEventDefaultFields.DownloadedBytes
+	retval.UploadedBytes = v.StreamEventDefaultFields.UploadedBytes
+	retval.TotalViewers = v.StreamEventDefaultFields.TotalViewers
+	retval.TotalInputs = v.StreamEventDefaultFields.TotalInputs
+	retval.TotalOutputs = v.StreamEventDefaultFields.TotalOutputs
+	retval.ViewerSeconds = v.StreamEventDefaultFields.ViewerSeconds
+	retval.RequestUrl = v.StreamEventDefaultFields.RequestUrl
+	retval.Protocol = v.StreamEventDefaultFields.Protocol
+	retval.Latitude = v.StreamEventDefaultFields.Latitude
+	retval.Longitude = v.StreamEventDefaultFields.Longitude
+	retval.Location = v.StreamEventDefaultFields.Location
+	retval.CountryCode = v.StreamEventDefaultFields.CountryCode
+	retval.City = v.StreamEventDefaultFields.City
+	retval.SourceRegion = v.StreamEventDefaultFields.SourceRegion
+	retval.SourceClusterId = v.StreamEventDefaultFields.SourceClusterId
+	retval.StreamOriginRegion = v.StreamEventDefaultFields.StreamOriginRegion
+	retval.StreamOriginClusterId = v.StreamEventDefaultFields.StreamOriginClusterId
+	retval.SchemaVersion = v.StreamEventDefaultFields.SchemaVersion
+	return &retval, nil
+}
+
+// GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo struct {
+	PageInfoDefaultFields `json:"-"`
+}
+
+// GetStartCursor returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoDefaultFields.StartCursor
+}
+
+// GetEndCursor returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoDefaultFields.EndCursor
+}
+
+// GetHasNextPage returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoDefaultFields.HasNextPage
+}
+
+// GetHasPreviousPage returns GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoDefaultFields.HasPreviousPage
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo) __premarshalJSON() (*__premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo, error) {
+	var retval __premarshalGetRecordingEventsConnectionAnalyticsLifecycleRecordingEventsConnectionStreamEventsConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoDefaultFields.StartCursor
+	retval.EndCursor = v.PageInfoDefaultFields.EndCursor
+	retval.HasNextPage = v.PageInfoDefaultFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoDefaultFields.HasPreviousPage
+	return &retval, nil
+}
+
+// GetRecordingEventsConnectionResponse is returned by GetRecordingEventsConnection on success.
+type GetRecordingEventsConnectionResponse struct {
+	// Unified analytics surface providing access to all platform metrics.
+	// Combines data from Periscope (historical) and Signalman (real-time).
+	Analytics GetRecordingEventsConnectionAnalytics `json:"analytics"`
+}
+
+// GetAnalytics returns GetRecordingEventsConnectionResponse.Analytics, and is useful for accessing the field via an interface.
+func (v *GetRecordingEventsConnectionResponse) GetAnalytics() GetRecordingEventsConnectionAnalytics {
+	return v.Analytics
 }
 
 // GetReviewClusterMediaConsentChangeResponse is returned by GetReviewClusterMediaConsentChange on success.
@@ -72957,6 +74255,8 @@ const (
 	InvoiceStatusFailed InvoiceStatus = "FAILED"
 	// Invoice requires operator review and cannot be paid.
 	InvoiceStatusManualReview InvoiceStatus = "MANUAL_REVIEW"
+	// The original payment was returned with an original-tax credit note.
+	InvoiceStatusRefunded InvoiceStatus = "REFUNDED"
 	// Invoice cancelled.
 	InvoiceStatusCancelled InvoiceStatus = "CANCELLED"
 )
@@ -72968,6 +74268,7 @@ var AllInvoiceStatus = []InvoiceStatus{
 	InvoiceStatusOverdue,
 	InvoiceStatusFailed,
 	InvoiceStatusManualReview,
+	InvoiceStatusRefunded,
 	InvoiceStatusCancelled,
 }
 
@@ -83796,11 +85097,9 @@ func (v *PlayerBootTimeSeriesBucketDefaultFields) GetP95TtfMs() float64 { return
 func (v *PlayerBootTimeSeriesBucketDefaultFields) GetP99TtfMs() float64 { return v.P99TtfMs }
 
 // PrepaidBalanceDefaultFields includes the GraphQL fields of PrepaidBalance requested by the fragment PrepaidBalanceDefaultFields.
-// The GraphQL type's documentation follows.
-//
-// Prepaid balance for wallet-based accounts.
-// Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
 type PrepaidBalanceDefaultFields struct {
+	// Temporary paid continuity and any media recovery deadline.
+	PaymentGrace *PrepaidBalanceDefaultFieldsPaymentGrace `json:"paymentGrace"`
 	// Unique balance record identifier.
 	Id string `json:"id"`
 	// Owning tenant identifier.
@@ -83823,6 +85122,11 @@ type PrepaidBalanceDefaultFields struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When the balance was last updated.
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// GetPaymentGrace returns PrepaidBalanceDefaultFields.PaymentGrace, and is useful for accessing the field via an interface.
+func (v *PrepaidBalanceDefaultFields) GetPaymentGrace() *PrepaidBalanceDefaultFieldsPaymentGrace {
+	return v.PaymentGrace
 }
 
 // GetId returns PrepaidBalanceDefaultFields.Id, and is useful for accessing the field via an interface.
@@ -83859,6 +85163,165 @@ func (v *PrepaidBalanceDefaultFields) GetCreatedAt() time.Time { return v.Create
 
 // GetUpdatedAt returns PrepaidBalanceDefaultFields.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *PrepaidBalanceDefaultFields) GetUpdatedAt() time.Time { return v.UpdatedAt }
+
+// PrepaidBalanceDefaultFieldsPaymentGrace includes the requested fields of the GraphQL type PaymentGrace.
+// The GraphQL type's documentation follows.
+//
+// Prepaid balance for wallet-based accounts.
+// Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+type PrepaidBalanceDefaultFieldsPaymentGrace struct {
+	Active               bool       `json:"active"`
+	EndsAt               *time.Time `json:"endsAt"`
+	RemainingCreditCents int        `json:"remainingCreditCents"`
+	MediaRecoveryUntil   *time.Time `json:"mediaRecoveryUntil"`
+}
+
+// GetActive returns PrepaidBalanceDefaultFieldsPaymentGrace.Active, and is useful for accessing the field via an interface.
+func (v *PrepaidBalanceDefaultFieldsPaymentGrace) GetActive() bool { return v.Active }
+
+// GetEndsAt returns PrepaidBalanceDefaultFieldsPaymentGrace.EndsAt, and is useful for accessing the field via an interface.
+func (v *PrepaidBalanceDefaultFieldsPaymentGrace) GetEndsAt() *time.Time { return v.EndsAt }
+
+// GetRemainingCreditCents returns PrepaidBalanceDefaultFieldsPaymentGrace.RemainingCreditCents, and is useful for accessing the field via an interface.
+func (v *PrepaidBalanceDefaultFieldsPaymentGrace) GetRemainingCreditCents() int {
+	return v.RemainingCreditCents
+}
+
+// GetMediaRecoveryUntil returns PrepaidBalanceDefaultFieldsPaymentGrace.MediaRecoveryUntil, and is useful for accessing the field via an interface.
+func (v *PrepaidBalanceDefaultFieldsPaymentGrace) GetMediaRecoveryUntil() *time.Time {
+	return v.MediaRecoveryUntil
+}
+
+// PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview includes the requested fields of the GraphQL type FreeCancellationReview.
+// The GraphQL type's documentation follows.
+//
+// Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero.
+type PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview struct {
+	FreeCancellationReviewDefaultFields `json:"-"`
+}
+
+// GetQuotedAt returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.QuotedAt, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetQuotedAt() time.Time {
+	return v.FreeCancellationReviewDefaultFields.QuotedAt
+}
+
+// GetExpiresAt returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetExpiresAt() time.Time {
+	return v.FreeCancellationReviewDefaultFields.ExpiresAt
+}
+
+// GetEffectiveAt returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.EffectiveAt, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetEffectiveAt() time.Time {
+	return v.FreeCancellationReviewDefaultFields.EffectiveAt
+}
+
+// GetFingerprint returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.Fingerprint, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetFingerprint() string {
+	return v.FreeCancellationReviewDefaultFields.Fingerprint
+}
+
+// GetDueNowMinor returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.DueNowMinor, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetDueNowMinor() int {
+	return v.FreeCancellationReviewDefaultFields.DueNowMinor
+}
+
+// GetRefundNowMinor returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.RefundNowMinor, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetRefundNowMinor() int {
+	return v.FreeCancellationReviewDefaultFields.RefundNowMinor
+}
+
+// GetWalletCreditNowMinor returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.WalletCreditNowMinor, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetWalletCreditNowMinor() int {
+	return v.FreeCancellationReviewDefaultFields.WalletCreditNowMinor
+}
+
+// GetCurrency returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.Currency, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetCurrency() string {
+	return v.FreeCancellationReviewDefaultFields.Currency
+}
+
+// GetFutureUsageMessage returns PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview.FutureUsageMessage, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) GetFutureUsageMessage() string {
+	return v.FreeCancellationReviewDefaultFields.FutureUsageMessage
+}
+
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.FreeCancellationReviewDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalPreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview struct {
+	QuotedAt time.Time `json:"quotedAt"`
+
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	EffectiveAt time.Time `json:"effectiveAt"`
+
+	Fingerprint string `json:"fingerprint"`
+
+	DueNowMinor int `json:"dueNowMinor"`
+
+	RefundNowMinor int `json:"refundNowMinor"`
+
+	WalletCreditNowMinor int `json:"walletCreditNowMinor"`
+
+	Currency string `json:"currency"`
+
+	FutureUsageMessage string `json:"futureUsageMessage"`
+}
+
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview) __premarshalJSON() (*__premarshalPreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview, error) {
+	var retval __premarshalPreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview
+
+	retval.QuotedAt = v.FreeCancellationReviewDefaultFields.QuotedAt
+	retval.ExpiresAt = v.FreeCancellationReviewDefaultFields.ExpiresAt
+	retval.EffectiveAt = v.FreeCancellationReviewDefaultFields.EffectiveAt
+	retval.Fingerprint = v.FreeCancellationReviewDefaultFields.Fingerprint
+	retval.DueNowMinor = v.FreeCancellationReviewDefaultFields.DueNowMinor
+	retval.RefundNowMinor = v.FreeCancellationReviewDefaultFields.RefundNowMinor
+	retval.WalletCreditNowMinor = v.FreeCancellationReviewDefaultFields.WalletCreditNowMinor
+	retval.Currency = v.FreeCancellationReviewDefaultFields.Currency
+	retval.FutureUsageMessage = v.FreeCancellationReviewDefaultFields.FutureUsageMessage
+	return &retval, nil
+}
+
+// PreviewFreeCancellationResponse is returned by PreviewFreeCancellation on success.
+type PreviewFreeCancellationResponse struct {
+	PreviewFreeCancellation PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview `json:"previewFreeCancellation"`
+}
+
+// GetPreviewFreeCancellation returns PreviewFreeCancellationResponse.PreviewFreeCancellation, and is useful for accessing the field via an interface.
+func (v *PreviewFreeCancellationResponse) GetPreviewFreeCancellation() PreviewFreeCancellationPreviewFreeCancellationFreeCancellationReview {
+	return v.PreviewFreeCancellation
+}
 
 type PreviewMediaPlacementInput struct {
 	Scope       MediaPlacementScopeInput        `json:"scope"`
@@ -97139,6 +98602,170 @@ func (v *SessionQoeTimeSeriesBucketDefaultFields) GetFrameDropRatio() float64 {
 // GetAvgBitrateBps returns SessionQoeTimeSeriesBucketDefaultFields.AvgBitrateBps, and is useful for accessing the field via an interface.
 func (v *SessionQoeTimeSeriesBucketDefaultFields) GetAvgBitrateBps() float64 { return v.AvgBitrateBps }
 
+// Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months.
+type SetAutomaticTopupInput struct {
+	Enabled                bool   `json:"enabled"`
+	ThresholdEurCents      int    `json:"thresholdEurCents"`
+	NetAmountMinor         int    `json:"netAmountMinor"`
+	MonthlyGrossLimitMinor int    `json:"monthlyGrossLimitMinor"`
+	Currency               string `json:"currency"`
+	ConsentVersion         string `json:"consentVersion"`
+}
+
+// GetEnabled returns SetAutomaticTopupInput.Enabled, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetEnabled() bool { return v.Enabled }
+
+// GetThresholdEurCents returns SetAutomaticTopupInput.ThresholdEurCents, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetThresholdEurCents() int { return v.ThresholdEurCents }
+
+// GetNetAmountMinor returns SetAutomaticTopupInput.NetAmountMinor, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetNetAmountMinor() int { return v.NetAmountMinor }
+
+// GetMonthlyGrossLimitMinor returns SetAutomaticTopupInput.MonthlyGrossLimitMinor, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetMonthlyGrossLimitMinor() int { return v.MonthlyGrossLimitMinor }
+
+// GetCurrency returns SetAutomaticTopupInput.Currency, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetCurrency() string { return v.Currency }
+
+// GetConsentVersion returns SetAutomaticTopupInput.ConsentVersion, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupInput) GetConsentVersion() string { return v.ConsentVersion }
+
+// SetAutomaticTopupResponse is returned by SetAutomaticTopup on success.
+type SetAutomaticTopupResponse struct {
+	SetAutomaticTopup SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings `json:"setAutomaticTopup"`
+}
+
+// GetSetAutomaticTopup returns SetAutomaticTopupResponse.SetAutomaticTopup, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupResponse) GetSetAutomaticTopup() SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings {
+	return v.SetAutomaticTopup
+}
+
+// SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings includes the requested fields of the GraphQL type AutomaticTopupSettings.
+type SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings struct {
+	AutomaticTopupSettingsDefaultFields `json:"-"`
+}
+
+// GetEnabled returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.Enabled, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetEnabled() bool {
+	return v.AutomaticTopupSettingsDefaultFields.Enabled
+}
+
+// GetThresholdEurCents returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.ThresholdEurCents, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetThresholdEurCents() int {
+	return v.AutomaticTopupSettingsDefaultFields.ThresholdEurCents
+}
+
+// GetNetAmountMinor returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.NetAmountMinor, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetNetAmountMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.NetAmountMinor
+}
+
+// GetMonthlyGrossLimitMinor returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.MonthlyGrossLimitMinor, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetMonthlyGrossLimitMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.MonthlyGrossLimitMinor
+}
+
+// GetCurrency returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.Currency, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetCurrency() string {
+	return v.AutomaticTopupSettingsDefaultFields.Currency
+}
+
+// GetPausedReason returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.PausedReason, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetPausedReason() string {
+	return v.AutomaticTopupSettingsDefaultFields.PausedReason
+}
+
+// GetMonthlyReservedOrSpentMinor returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.MonthlyReservedOrSpentMinor, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetMonthlyReservedOrSpentMinor() int {
+	return v.AutomaticTopupSettingsDefaultFields.MonthlyReservedOrSpentMinor
+}
+
+// GetAvailable returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.Available, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetAvailable() bool {
+	return v.AutomaticTopupSettingsDefaultFields.Available
+}
+
+// GetUnavailableReason returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.UnavailableReason, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetUnavailableReason() string {
+	return v.AutomaticTopupSettingsDefaultFields.UnavailableReason
+}
+
+// GetConsentVersion returns SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings.ConsentVersion, and is useful for accessing the field via an interface.
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) GetConsentVersion() string {
+	return v.AutomaticTopupSettingsDefaultFields.ConsentVersion
+}
+
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AutomaticTopupSettingsDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalSetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings struct {
+	Enabled bool `json:"enabled"`
+
+	ThresholdEurCents int `json:"thresholdEurCents"`
+
+	NetAmountMinor int `json:"netAmountMinor"`
+
+	MonthlyGrossLimitMinor int `json:"monthlyGrossLimitMinor"`
+
+	Currency string `json:"currency"`
+
+	PausedReason string `json:"pausedReason"`
+
+	MonthlyReservedOrSpentMinor int `json:"monthlyReservedOrSpentMinor"`
+
+	Available bool `json:"available"`
+
+	UnavailableReason string `json:"unavailableReason"`
+
+	ConsentVersion string `json:"consentVersion"`
+}
+
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *SetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings) __premarshalJSON() (*__premarshalSetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings, error) {
+	var retval __premarshalSetAutomaticTopupSetAutomaticTopupAutomaticTopupSettings
+
+	retval.Enabled = v.AutomaticTopupSettingsDefaultFields.Enabled
+	retval.ThresholdEurCents = v.AutomaticTopupSettingsDefaultFields.ThresholdEurCents
+	retval.NetAmountMinor = v.AutomaticTopupSettingsDefaultFields.NetAmountMinor
+	retval.MonthlyGrossLimitMinor = v.AutomaticTopupSettingsDefaultFields.MonthlyGrossLimitMinor
+	retval.Currency = v.AutomaticTopupSettingsDefaultFields.Currency
+	retval.PausedReason = v.AutomaticTopupSettingsDefaultFields.PausedReason
+	retval.MonthlyReservedOrSpentMinor = v.AutomaticTopupSettingsDefaultFields.MonthlyReservedOrSpentMinor
+	retval.Available = v.AutomaticTopupSettingsDefaultFields.Available
+	retval.UnavailableReason = v.AutomaticTopupSettingsDefaultFields.UnavailableReason
+	retval.ConsentVersion = v.AutomaticTopupSettingsDefaultFields.ConsentVersion
+	return &retval, nil
+}
+
 type SetMediaRetentionPolicyInput struct {
 	// Which class to write: VOD, DVR, or CLIP.
 	TargetType MediaRetentionTarget `json:"targetType"`
@@ -109361,6 +110988,8 @@ var AllStreamEventSource = []StreamEventSource{
 type StreamEventType string
 
 const (
+	StreamEventTypeRecordingRefused      StreamEventType = "RECORDING_REFUSED"
+	StreamEventTypeRecordingActive       StreamEventType = "RECORDING_ACTIVE"
 	StreamEventTypeStreamLifecycleUpdate StreamEventType = "STREAM_LIFECYCLE_UPDATE"
 	StreamEventTypeStreamStart           StreamEventType = "STREAM_START"
 	StreamEventTypeStreamEnd             StreamEventType = "STREAM_END"
@@ -109371,6 +111000,8 @@ const (
 )
 
 var AllStreamEventType = []StreamEventType{
+	StreamEventTypeRecordingRefused,
+	StreamEventTypeRecordingActive,
 	StreamEventTypeStreamLifecycleUpdate,
 	StreamEventTypeStreamStart,
 	StreamEventTypeStreamEnd,
@@ -131729,6 +133360,22 @@ type __CompleteVodUploadInput struct {
 // GetInput returns __CompleteVodUploadInput.Input, and is useful for accessing the field via an interface.
 func (v *__CompleteVodUploadInput) GetInput() CompleteVodUploadInput { return v.Input }
 
+// __ConfirmFreeCancellationInput is used internally by genqlient
+type __ConfirmFreeCancellationInput struct {
+	TierId      string    `json:"tierId"`
+	QuotedAt    time.Time `json:"quotedAt"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+// GetTierId returns __ConfirmFreeCancellationInput.TierId, and is useful for accessing the field via an interface.
+func (v *__ConfirmFreeCancellationInput) GetTierId() string { return v.TierId }
+
+// GetQuotedAt returns __ConfirmFreeCancellationInput.QuotedAt, and is useful for accessing the field via an interface.
+func (v *__ConfirmFreeCancellationInput) GetQuotedAt() time.Time { return v.QuotedAt }
+
+// GetFingerprint returns __ConfirmFreeCancellationInput.Fingerprint, and is useful for accessing the field via an interface.
+func (v *__ConfirmFreeCancellationInput) GetFingerprint() string { return v.Fingerprint }
+
 // __CreateCardTopupInput is used internally by genqlient
 type __CreateCardTopupInput struct {
 	Input CreateCardTopupInput `json:"input"`
@@ -132985,6 +134632,26 @@ func (v *__GetRecentPullSourceEventsInput) GetId() string { return v.Id }
 // GetLimit returns __GetRecentPullSourceEventsInput.Limit, and is useful for accessing the field via an interface.
 func (v *__GetRecentPullSourceEventsInput) GetLimit() *int { return v.Limit }
 
+// __GetRecordingEventsConnectionInput is used internally by genqlient
+type __GetRecordingEventsConnectionInput struct {
+	Page      *ConnectionInput `json:"page"`
+	StreamId  string           `json:"streamId"`
+	TimeRange *TimeRangeInput  `json:"timeRange"`
+	NoCache   *bool            `json:"noCache,omitempty"`
+}
+
+// GetPage returns __GetRecordingEventsConnectionInput.Page, and is useful for accessing the field via an interface.
+func (v *__GetRecordingEventsConnectionInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetStreamId returns __GetRecordingEventsConnectionInput.StreamId, and is useful for accessing the field via an interface.
+func (v *__GetRecordingEventsConnectionInput) GetStreamId() string { return v.StreamId }
+
+// GetTimeRange returns __GetRecordingEventsConnectionInput.TimeRange, and is useful for accessing the field via an interface.
+func (v *__GetRecordingEventsConnectionInput) GetTimeRange() *TimeRangeInput { return v.TimeRange }
+
+// GetNoCache returns __GetRecordingEventsConnectionInput.NoCache, and is useful for accessing the field via an interface.
+func (v *__GetRecordingEventsConnectionInput) GetNoCache() *bool { return v.NoCache }
+
 // __GetReviewClusterMediaConsentChangeInput is used internally by genqlient
 type __GetReviewClusterMediaConsentChangeInput struct {
 	Input ReviewMediaCapacityConsentInput `json:"input"`
@@ -133957,6 +135624,14 @@ type __OpenMistAdminSessionInput struct {
 // GetInput returns __OpenMistAdminSessionInput.Input, and is useful for accessing the field via an interface.
 func (v *__OpenMistAdminSessionInput) GetInput() OpenMistAdminSessionInput { return v.Input }
 
+// __PreviewFreeCancellationInput is used internally by genqlient
+type __PreviewFreeCancellationInput struct {
+	TierId string `json:"tierId"`
+}
+
+// GetTierId returns __PreviewFreeCancellationInput.TierId, and is useful for accessing the field via an interface.
+func (v *__PreviewFreeCancellationInput) GetTierId() string { return v.TierId }
+
 // __PromoteToPaidInput is used internally by genqlient
 type __PromoteToPaidInput struct {
 	TierId string `json:"tierId"`
@@ -134130,6 +135805,14 @@ type __SendMessageInput struct {
 
 // GetInput returns __SendMessageInput.Input, and is useful for accessing the field via an interface.
 func (v *__SendMessageInput) GetInput() SendMessageInput { return v.Input }
+
+// __SetAutomaticTopupInput is used internally by genqlient
+type __SetAutomaticTopupInput struct {
+	Input SetAutomaticTopupInput `json:"input"`
+}
+
+// GetInput returns __SetAutomaticTopupInput.Input, and is useful for accessing the field via an interface.
+func (v *__SetAutomaticTopupInput) GetInput() SetAutomaticTopupInput { return v.Input }
 
 // __SetMediaRetentionPolicyInput is used internally by genqlient
 type __SetMediaRetentionPolicyInput struct {
@@ -135367,6 +137050,124 @@ func CompleteVodUpload(
 	}
 
 	data_ = &CompleteVodUploadResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by ConfirmFreeCancellation.
+const ConfirmFreeCancellation_Operation = `
+mutation ConfirmFreeCancellation ($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {
+	confirmFreeCancellation(tierId: $tierId, quotedAt: $quotedAt, fingerprint: $fingerprint) {
+		__typename
+		... ChangeBillingTierPayloadDefaultFields
+		... ValidationErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
+	success
+	message
+	appliedTier {
+		id
+		tierName
+		tierLevel
+		displayName
+		description
+		basePrice
+		currency
+		billingPeriod
+		features {
+			supportLevel
+			sla
+			processingCustomizable
+		}
+		pricingRules {
+			meter
+			model
+			currency
+			includedQuantity
+			unitPrice
+			configJson
+		}
+		entitlements {
+			key
+			value
+		}
+		supportLevel
+		slaLevel
+		meteringEnabled
+		isEnterprise
+	}
+	pendingTier {
+		id
+		tierName
+		tierLevel
+		displayName
+		description
+		basePrice
+		currency
+		billingPeriod
+		features {
+			supportLevel
+			sla
+			processingCustomizable
+		}
+		pricingRules {
+			meter
+			model
+			currency
+			includedQuantity
+			unitPrice
+			configJson
+		}
+		entitlements {
+			key
+			value
+		}
+		supportLevel
+		slaLevel
+		meteringEnabled
+		isEnterprise
+	}
+	effectiveAt
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+func ConfirmFreeCancellation(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	tierId string,
+	quotedAt time.Time,
+	fingerprint string,
+) (data_ *ConfirmFreeCancellationResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ConfirmFreeCancellation",
+		Query:  ConfirmFreeCancellation_Operation,
+		Variables: &__ConfirmFreeCancellationInput{
+			TierId:      tierId,
+			QuotedAt:    quotedAt,
+			Fingerprint: fingerprint,
+		},
+	}
+
+	data_ = &ConfirmFreeCancellationResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -137385,6 +139186,45 @@ func DisconnectIngest(
 	return data_, err_
 }
 
+// The mutation executed by EnablePrepaidUsage.
+const EnablePrepaidUsage_Operation = `
+mutation EnablePrepaidUsage {
+	enablePrepaidUsage {
+		... EnablePrepaidUsagePayloadDefaultFields
+	}
+}
+fragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {
+	activated
+	awaitingFunds
+	tierName
+	billingModel
+}
+`
+
+// EnablePrepaidUsage executes the corresponding GraphQL operation.
+//
+// Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved.
+func EnablePrepaidUsage(
+	ctx_ context.Context,
+	client_ graphql.Client,
+) (data_ *EnablePrepaidUsageResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "EnablePrepaidUsage",
+		Query:  EnablePrepaidUsage_Operation,
+	}
+
+	data_ = &EnablePrepaidUsageResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The mutation executed by EnableWebhookEndpoint.
 const EnableWebhookEndpoint_Operation = `
 mutation EnableWebhookEndpoint ($id: ID!) {
@@ -138070,6 +139910,48 @@ func GetAuthSessionsConnection(
 	return data_, err_
 }
 
+// The query executed by GetAutomaticTopup.
+const GetAutomaticTopup_Operation = `
+query GetAutomaticTopup {
+	automaticTopup {
+		... AutomaticTopupSettingsDefaultFields
+	}
+}
+fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+	enabled
+	thresholdEurCents
+	netAmountMinor
+	monthlyGrossLimitMinor
+	currency
+	pausedReason
+	monthlyReservedOrSpentMinor
+	available
+	unavailableReason
+	consentVersion
+}
+`
+
+func GetAutomaticTopup(
+	ctx_ context.Context,
+	client_ graphql.Client,
+) (data_ *GetAutomaticTopupResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetAutomaticTopup",
+		Query:  GetAutomaticTopup_Operation,
+	}
+
+	data_ = &GetAutomaticTopupResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The query executed by GetBalanceTransactionsConnection.
 const GetBalanceTransactionsConnection_Operation = `
 query GetBalanceTransactionsConnection ($page: ConnectionInput, $transactionType: String, $timeRange: TimeRangeInput) {
@@ -138320,6 +140202,7 @@ fragment BillingStatusDefaultFields on BillingStatus {
 		isEnterprise
 	}
 	subscription {
+		automaticPrepaidUsage
 		id
 		tenantId
 		tierId
@@ -145239,6 +147122,12 @@ query GetPrepaidBalance {
 	}
 }
 fragment PrepaidBalanceDefaultFields on PrepaidBalance {
+	paymentGrace {
+		active
+		endsAt
+		remainingCreditCents
+		mediaRecoveryUntil
+	}
 	id
 	tenantId
 	balanceCents
@@ -146001,6 +147890,200 @@ func GetRecentPullSourceEvents(
 	}
 
 	data_ = &GetRecentPullSourceEventsResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetRecordingEventsConnection.
+const GetRecordingEventsConnection_Operation = `
+query GetRecordingEventsConnection ($page: ConnectionInput, $streamId: ID!, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
+	analytics {
+		lifecycle {
+			recordingEventsConnection(page: $page, streamId: $streamId, timeRange: $timeRange, noCache: $noCache) {
+				edges {
+					cursor
+					node {
+						... StreamEventDefaultFields
+					}
+				}
+				pageInfo {
+					... PageInfoDefaultFields
+				}
+				totalCount
+			}
+		}
+	}
+}
+fragment StreamEventDefaultFields on StreamEvent {
+	id
+	eventId
+	streamId
+	stream {
+		id
+		streamId
+		name
+		description
+		streamKey
+		playbackId
+		record
+		liveVideoAbr
+		ingestMode
+		pullSource {
+			sourceUriRedacted
+			enabled
+			class
+		}
+		managedSource {
+			sourceKind
+			alwaysOn
+			placementCount
+		}
+		sourceLocation {
+			mode
+			avoidNodeIds
+		}
+		createdAt
+		updatedAt
+		ingest {
+			state
+			isLive
+			sessionId
+			connectedAt
+			liveSince
+			endedAt
+			resumableUntil
+		}
+		metrics {
+			status
+			isLive
+			currentViewers
+			startedAt
+			updatedAt
+			nodeId
+			trackCount
+			totalInputs
+			uploadedBytes
+			downloadedBytes
+			viewerSeconds
+			packetsSent
+			packetsLost
+			packetsRetransmitted
+			bufferState
+			qualityTier
+			primaryWidth
+			primaryHeight
+			primaryFps
+			primaryCodec
+			primaryBitrate
+			hasIssues
+			issuesDescription
+		}
+		pushTargets {
+			id
+			streamId
+			platform
+			name
+			videoChoice
+			targetUri
+			isEnabled
+			status
+			lastError
+			reasonCode
+			lastPushedAt
+			createdAt
+		}
+		playbackPolicy {
+			type
+			allowedOrigins
+		}
+		dvrChapterMode
+		dvrChapterIntervalSeconds
+		monitoring
+		thumbnailAssets {
+			posterUrl
+			spriteVttUrl
+			spriteJpgUrl
+			assetKey
+		}
+		retentionOverrides {
+			streamId
+			dvrRetentionDaysOverride
+			clipRetentionDaysOverride
+		}
+	}
+	nodeId
+	type
+	status
+	timestamp
+	details
+	payload
+	source
+	bufferState
+	hasIssues
+	trackCount
+	qualityTier
+	primaryWidth
+	primaryHeight
+	primaryFps
+	primaryCodec
+	primaryBitrate
+	downloadedBytes
+	uploadedBytes
+	totalViewers
+	totalInputs
+	totalOutputs
+	viewerSeconds
+	requestUrl
+	protocol
+	latitude
+	longitude
+	location
+	countryCode
+	city
+	sourceRegion
+	sourceClusterId
+	streamOriginRegion
+	streamOriginClusterId
+	schemaVersion
+}
+fragment PageInfoDefaultFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// GetRecordingEventsConnection executes the corresponding GraphQL operation.
+//
+// Latest recording outcomes and broadcast boundaries, without buffer/track noise.
+func GetRecordingEventsConnection(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	page *ConnectionInput,
+	streamId string,
+	timeRange *TimeRangeInput,
+	noCache *bool,
+) (data_ *GetRecordingEventsConnectionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetRecordingEventsConnection",
+		Query:  GetRecordingEventsConnection_Operation,
+		Variables: &__GetRecordingEventsConnectionInput{
+			Page:      page,
+			StreamId:  streamId,
+			TimeRange: timeRange,
+			NoCache:   noCache,
+		},
+	}
+
+	data_ = &GetRecordingEventsConnectionResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -153234,6 +155317,51 @@ func OpenMistAdminSession(
 	return data_, err_
 }
 
+// The mutation executed by PreviewFreeCancellation.
+const PreviewFreeCancellation_Operation = `
+mutation PreviewFreeCancellation ($tierId: ID!) {
+	previewFreeCancellation(tierId: $tierId) {
+		... FreeCancellationReviewDefaultFields
+	}
+}
+fragment FreeCancellationReviewDefaultFields on FreeCancellationReview {
+	quotedAt
+	expiresAt
+	effectiveAt
+	fingerprint
+	dueNowMinor
+	refundNowMinor
+	walletCreditNowMinor
+	currency
+	futureUsageMessage
+}
+`
+
+func PreviewFreeCancellation(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	tierId string,
+) (data_ *PreviewFreeCancellationResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "PreviewFreeCancellation",
+		Query:  PreviewFreeCancellation_Operation,
+		Variables: &__PreviewFreeCancellationInput{
+			TierId: tierId,
+		},
+	}
+
+	data_ = &PreviewFreeCancellationResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The mutation executed by PromoteToPaid.
 const PromoteToPaid_Operation = `
 mutation PromoteToPaid ($tierId: ID!) {
@@ -154517,6 +156645,52 @@ func ServerInfo(
 	}
 
 	data_ = &ServerInfoResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by SetAutomaticTopup.
+const SetAutomaticTopup_Operation = `
+mutation SetAutomaticTopup ($input: SetAutomaticTopupInput!) {
+	setAutomaticTopup(input: $input) {
+		... AutomaticTopupSettingsDefaultFields
+	}
+}
+fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+	enabled
+	thresholdEurCents
+	netAmountMinor
+	monthlyGrossLimitMinor
+	currency
+	pausedReason
+	monthlyReservedOrSpentMinor
+	available
+	unavailableReason
+	consentVersion
+}
+`
+
+func SetAutomaticTopup(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input SetAutomaticTopupInput,
+) (data_ *SetAutomaticTopupResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "SetAutomaticTopup",
+		Query:  SetAutomaticTopup_Operation,
+		Variables: &__SetAutomaticTopupInput{
+			Input: input,
+		},
+	}
+
+	data_ = &SetAutomaticTopupResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -156631,6 +158805,8 @@ func (v *UnknownMember) implementsGraphQLInterfaceChangeBillingTierChangeBilling
 func (v *UnknownMember) implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceConfirmFreeCancellationConfirmFreeCancellationChangeBillingTierResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
 }

@@ -63,7 +63,7 @@ func buildToolPolicies() map[string]ToolPolicy {
 	}
 	add("settings:write", ToolRiskWrite, "update_tenant_settings")
 	add("billing:read", ToolRiskRead, "check_topup", "get_payment_options", "get_retention_policy")
-	add("billing:write", ToolRiskHigh, "change_billing_tier", "complete_mollie_postpaid_setup", "pay_invoice", "start_postpaid_setup", "submit_payment", "topup_balance", "update_billing_details")
+	add("billing:write", ToolRiskHigh, "enable_prepaid_usage", "change_billing_tier", "complete_mollie_postpaid_setup", "pay_invoice", "start_postpaid_setup", "submit_payment", "topup_balance", "update_billing_details")
 	add("billing:write", ToolRiskWrite, "set_retention_policy")
 	add("streams:write", ToolRiskWrite, "set_stream_retention_overrides", "update_asset_retention")
 	add("streams:write", ToolRiskHigh, "reset_asset_retention")

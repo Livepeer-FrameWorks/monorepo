@@ -27,17 +27,18 @@ import (
 // X402Reconciler monitors pending x402 settlements and confirms or fails them
 // based on on-chain transaction receipts.
 type X402Reconciler struct {
-	db                  *sql.DB
-	logger              logging.Logger
-	stopCh              chan struct{}
-	includeTestnets     bool
-	rebroadcastTransfer func(context.Context, string, NetworkConfig) (string, error)
-	finalizeSettlement  func(context.Context, SettlementRow) string
-	recoveryWindowHours int
-	reorgDepthBlocks    int
-	rpcErrorLimit       int
-	rpcErrorCounts      map[string]int
-	rpcErrorMu          sync.Mutex
+	convergeFundedAccount func(context.Context, string) error
+	db                    *sql.DB
+	logger                logging.Logger
+	stopCh                chan struct{}
+	includeTestnets       bool
+	rebroadcastTransfer   func(context.Context, string, NetworkConfig) (string, error)
+	finalizeSettlement    func(context.Context, SettlementRow) string
+	recoveryWindowHours   int
+	reorgDepthBlocks      int
+	rpcErrorLimit         int
+	rpcErrorCounts        map[string]int
+	rpcErrorMu            sync.Mutex
 }
 
 // PendingSettlement represents an x402 settlement awaiting confirmation
@@ -442,6 +443,11 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 				"nonce_id":  s.ID,
 			}).Error("Failed to ensure x402 credit before confirming settlement")
 			return
+		}
+		if r.convergeFundedAccount != nil {
+			if err := r.convergeFundedAccount(ctx, s.TenantID); err != nil {
+				r.logger.WithError(err).WithField("tenant_id", s.TenantID).Warn("Confirmed X402 activation pending")
+			}
 		}
 		if r.finalizeSettlement != nil {
 			r.finalizeSettlement(ctx, SettlementRow{

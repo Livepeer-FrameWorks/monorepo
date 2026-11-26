@@ -2457,11 +2457,13 @@ accounting limitations.
 ### frameworks admin billing credit
 
 Add EUR prepaid balance to a tenant, typically to fund a staging or test tenant or a comped
-account. The tenant's tier and billing model do not change: prepaid tenants spend the balance on
-usage, and postpaid tenants have it applied as credit when their invoice closes. Purser creates the
+account. A Free account activates balance-funded PAYG when automatic funding is enabled. Existing
+Free arrangements at rollout and explicit Free choices retain credit until the customer opts in. Prepaid accounts spend credit on usage; paid monthly plans retain their arrangement and apply
+credit when their invoice closes. Wallet adjustment does not refund a card payment. Purser creates the
 balance if the tenant has none, records `operator credit: <reason>` (or `operator debit: <reason>`)
 as the transaction's reason, and records your user as its actor when you are logged in. The command
-prints the transaction ID and the resulting balance.
+prints the transaction ID, retry reference, and balance after that operation. A retry returns the
+original receipt rather than applying the credit again; its recorded balance can precede later usage.
 
 **Flags:**
 
@@ -2470,6 +2472,9 @@ prints the transaction ID and the resulting balance.
   (`frameworks login`)
 - `--amount` - EUR amount with at most two decimals, for example `25.00` (required)
 - `--reason` - Why the balance changes; recorded on the transaction (required)
+- `--reference-id` - Stable adjustment UUID; reuse it after an uncertain result. If omitted, the CLI
+  generates and prints a reference before sending the request. Reusing it with a different amount
+  or reason is refused.
 - `--debit` - Confirms a negative `--amount`; a negative amount without it is refused, and
   `--debit` with a positive amount is refused
 
@@ -2479,6 +2484,41 @@ frameworks admin billing credit --tenant-id <UUID> --amount=-5.00 --debit --reas
 ```
 
 Write negative amounts as `--amount=-5.00` so the shell argument is not read as a flag.
+
+---
+
+### frameworks admin billing entitlements
+
+Read the tenant subscription and its overrides, or patch selected override keys without replacing
+unrelated keys. Writes compare the reviewed override map under the subscription lock. A concurrent
+edit is refused; reload and review before retrying. Every write records its operator and reason and
+refreshes runtime policy caches.
+
+Reviewed entitlement writes require Purser v0.3.16 or later. The CLI and operator panel use a distinct reviewed-map RPC; unsupported servers reject the edit.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Tenant user email; resolution requires a platform-operator session
+- `--set` - `key=<JSON value>`; repeat to change multiple keys
+- `--unset` - Remove an override and inherit its tier value; repeat for multiple keys
+- `--reason` - Required for writes; retained in the subscription audit event
+- `--dry-run` - Print the exact reviewed request without changing the subscription
+
+```bash
+frameworks admin billing entitlements --tenant-id <UUID> --output json
+frameworks admin billing entitlements --tenant-id <UUID> --set max_concurrent_streams=8 --reason "agreed broadcast capacity" --dry-run
+frameworks admin billing entitlements --tenant-id <UUID> --unset max_concurrent_streams --reason "restore catalogue capacity"
+```
+
+Zero and false are explicit grants, while `--unset` removes an override. A retention cap of zero
+allows unlimited retention; it does not set account or asset deletion policies. Set those separately
+on the Storage page or through the media-retention API.
+
+The platform tenant Billing page exposes reviewed wallet adjustments, entitlement replacement,
+immediate arrangement assignment, and checkout preview/recovery through the same Purser operations.
+Cash refunds of completed subscription invoices require their own financial-document disposition;
+wallet credit and cancellation of an unfulfilled checkout are separate operations.
 
 ---
 

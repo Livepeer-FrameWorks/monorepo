@@ -71,7 +71,7 @@ INSERT INTO purser.credit_notes (
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
     reason, evidence_json, customer_snapshot, supplier_snapshot
 )
-SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
+SELECT purser.next_billing_document_number('CN'),
        invoice.tenant_id, invoice.source_type, invoice.id,
        'crypto_reorg', sqlc.arg(event_id)::text, invoice.gross_amount_cents, invoice.currency,
        'confirmed direct crypto top-up reversed after canonicality failure',
@@ -134,7 +134,7 @@ INSERT INTO purser.credit_notes (
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
     reason, evidence_json, customer_snapshot, supplier_snapshot
 ) SELECT
-    'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
+    purser.next_billing_document_number('CN'),
     sqlc.arg(tenant_id)::text::uuid, 'invoice', sqlc.arg(invoice_id)::text::uuid,
     'crypto_reorg', sqlc.arg(event_id), sqlc.arg(amount_cents), sqlc.arg(currency),
     'confirmed crypto invoice payment reversed after canonicality failure',

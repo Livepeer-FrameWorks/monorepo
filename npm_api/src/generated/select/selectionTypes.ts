@@ -210,6 +210,19 @@ export const scalarFields = {
         "cursor",
         "__typename"
     ],
+    "AutomaticTopupSettings": [
+        "enabled",
+        "thresholdEurCents",
+        "netAmountMinor",
+        "monthlyGrossLimitMinor",
+        "currency",
+        "pausedReason",
+        "monthlyReservedOrSpentMinor",
+        "available",
+        "unavailableReason",
+        "consentVersion",
+        "__typename"
+    ],
     "AvailableCluster": [
         "clusterId",
         "clusterName",
@@ -1107,6 +1120,13 @@ export const scalarFields = {
         "source",
         "__typename"
     ],
+    "EnablePrepaidUsagePayload": [
+        "activated",
+        "awaitingFunds",
+        "tierName",
+        "billingModel",
+        "__typename"
+    ],
     "EntitlementEntry": [
         "key",
         "value",
@@ -1173,6 +1193,18 @@ export const scalarFields = {
         "totalEvents",
         "overallAvgLatencyMs",
         "overallFailureRate",
+        "__typename"
+    ],
+    "FreeCancellationReview": [
+        "quotedAt",
+        "expiresAt",
+        "effectiveAt",
+        "fingerprint",
+        "dueNowMinor",
+        "refundNowMinor",
+        "walletCreditNowMinor",
+        "currency",
+        "futureUsageMessage",
         "__typename"
     ],
     "FreeFallback": [
@@ -2188,6 +2220,13 @@ export const scalarFields = {
         "providerReferenceId",
         "__typename"
     ],
+    "PaymentGrace": [
+        "active",
+        "endsAt",
+        "remainingCreditCents",
+        "mediaRecoveryUntil",
+        "__typename"
+    ],
     "PlatformOverview": [
         "totalStreams",
         "activeStreams",
@@ -2798,6 +2837,15 @@ export const scalarFields = {
         "rebufferingRatio",
         "frameDropRatio",
         "avgBitrateBps",
+        "__typename"
+    ],
+    "SetAutomaticTopupInput": [
+        "enabled",
+        "thresholdEurCents",
+        "netAmountMinor",
+        "monthlyGrossLimitMinor",
+        "currency",
+        "consentVersion",
         "__typename"
     ],
     "SetMediaRetentionPolicyInput": [
@@ -3614,6 +3662,7 @@ export const scalarFields = {
         "__typename"
     ],
     "TenantSubscription": [
+        "automaticPrepaidUsage",
         "id",
         "tenantId",
         "tierId",

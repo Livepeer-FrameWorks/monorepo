@@ -54,7 +54,7 @@ var referenceDomains = []referenceDomain{
 	{Slug: "account", Title: "Account and tenant", Summary: "The tenant, wallet and email identities, and self-service sign-in security.",
 		Keywords: []string{"tenant", "wallet", "email", "authsession", "securityactivity", "password"}},
 	{Slug: "billing", Title: "Billing and usage", Summary: "Billing tiers, invoices, payments, top-ups, prepaid balance, and usage records.",
-		Keywords: []string{"billing", "invoice", "payment", "mollie", "prepaid", "balance", "stripe", "topup", "x402", "paid", "usage", "tenantusage"}},
+		Keywords: []string{"billing", "invoice", "payment", "mollie", "prepaid", "balance", "stripe", "topup", "x402", "paid", "usage", "tenantusage", "cancellation"}},
 	{Slug: "clusters", Title: "Clusters and infrastructure", Summary: "Clusters, the marketplace, subscriptions and invites, edge enrollment, nodes, services, and orchestrators.",
 		Keywords: []string{"cluster", "nodes", "nodemode", "orchestrator", "service", "edge", "enrollment", "mist", "subscription"}},
 	{Slug: "platform", Title: "Platform", Summary: "Server info, capabilities, network status, and global object lookup by ID.",

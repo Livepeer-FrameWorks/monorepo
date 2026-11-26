@@ -377,6 +377,18 @@ func (c *GRPCClient) GetStreamEvents(ctx context.Context, tenantID string, strea
 	})
 }
 
+func (c *GRPCClient) GetStreamRecordingEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.stream.GetStreamRecordingEvents(ctx, &periscopepb.GetStreamEventsRequest{
+		TenantId:   tenantID,
+		StreamId:   streamID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	})
+}
+
 // GetBufferEvents returns buffer events for a specific stream
 func (c *GRPCClient) GetBufferEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetBufferEventsResponse, error) {
 	if err := requireTenantID(tenantID); err != nil {

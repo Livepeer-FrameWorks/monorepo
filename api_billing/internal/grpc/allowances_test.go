@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -69,6 +70,8 @@ func TestComputeAllowancesFreeTierWithUsage(t *testing.T) {
 		WithArgs(tierID, "delivered_minutes").
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(10000.0, 0.0, "free"))
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).WithArgs(tenantID, start).
+		WillReturnRows(sqlmock.NewRows([]string{"phase_start"}))
 	// Allowance usage includes canonical records plus applied corrections.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, "delivered_minutes", end, start).
@@ -116,6 +119,8 @@ func TestComputeAllowancesFreeTierExhausted(t *testing.T) {
 		WithArgs(tierID, "delivered_minutes").
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(10000.0, 0.0, "free"))
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).WithArgs(tenantID, start).
+		WillReturnRows(sqlmock.NewRows([]string{"phase_start"}))
 	// 15000 delivered minutes — over the 10000 included.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, "delivered_minutes", end, start).
@@ -278,5 +283,49 @@ func TestComputeAllowancesNoMatchingRule(t *testing.T) {
 	got := server.computeAllowances(context.Background(), tenantID, tierID, time.Now(), time.Now().Add(time.Hour))
 	if got != nil {
 		t.Errorf("expected nil allowances when no pricing rule exists, got %+v", got)
+	}
+}
+
+func TestComputeAllowancesFreeReturnDoesNotResetMonth(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+	start := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	phase := start.Add(10 * 24 * time.Hour)
+	end := start.AddDate(0, 1, 0)
+	mock.ExpectQuery(`FROM purser.tier_pricing_rules`).WithArgs("free", "delivered_minutes").WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).AddRow(10000, 0, "free"))
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).WithArgs("tenant", phase).WillReturnRows(sqlmock.NewRows([]string{"phase_start"}).AddRow(start))
+	mock.ExpectQuery(`-- name: SumPriorFreeAllowanceUsage`).WithArgs("tenant", start, phase, "delivered_minutes").WillReturnRows(sqlmock.NewRows([]string{"used"}).AddRow("9000"))
+	mock.ExpectQuery(`FROM purser.usage_records`).WithArgs("tenant", "delivered_minutes", end, phase).WillReturnRows(sqlmock.NewRows([]string{"used"}).AddRow(1000))
+	got := server.computeAllowances(context.Background(), "tenant", "free", phase, end)
+	if len(got) != 1 || !got[0].Exhausted || got[0].Used != 10000 {
+		t.Fatalf("return to Free reset this month's allowance: %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestComputeAllowancesFreeUsageFailureDoesNotUnlock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+	start := time.Now().UTC()
+	end := start.Add(time.Hour)
+	mock.ExpectQuery(`FROM purser.tier_pricing_rules`).WithArgs("free", "delivered_minutes").WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).AddRow(10000, 0, "free"))
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).WithArgs("tenant", start).WillReturnRows(sqlmock.NewRows([]string{"phase_start"}))
+	mock.ExpectQuery(`FROM purser.usage_records`).WithArgs("tenant", "delivered_minutes", end, start).WillReturnError(errors.New("usage unavailable"))
+	got := server.computeAllowances(context.Background(), "tenant", "free", start, end)
+	if len(got) != 1 || !got[0].Exhausted || !got[0].IsFreeTier {
+		t.Fatalf("unknown Free usage unlocked allowance: %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

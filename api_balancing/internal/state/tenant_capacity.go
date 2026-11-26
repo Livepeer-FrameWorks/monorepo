@@ -492,6 +492,26 @@ func (m *TenantCapacityManager) CountViewers(tenantID string) int {
 	return len(localViewerCapacitySet(m.viewers[tenantID], now))
 }
 
+// CountViewersStrict never substitutes a replica-local count for unavailable HA
+// authority. A billing downgrade must not infer that paid sessions are absent.
+func (m *TenantCapacityManager) CountViewersStrict(ctx context.Context, tenantID string) (int64, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return 0, errors.New("tenant_id required")
+	}
+	now := m.now()
+	m.mu.RLock()
+	r := m.redis
+	m.mu.RUnlock()
+	if r != nil {
+		return r.ZCount(ctx, m.key("viewers", tenantID), "("+strconv.FormatInt(now.UnixMilli(), 10), "+inf").Result()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalLocked(now)
+	return int64(len(localViewerCapacitySet(m.viewers[tenantID], now))), nil
+}
+
 func (m *TenantCapacityManager) HasViewer(tenantID, capacityID string) bool {
 	tenantID, capacityID = strings.TrimSpace(tenantID), strings.TrimSpace(capacityID)
 	if tenantID == "" || capacityID == "" {

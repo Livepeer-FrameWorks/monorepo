@@ -595,6 +595,8 @@ export type InvoiceStatus =
   | 'PAID'
   /** Invoice sent, awaiting payment. */
   | 'PENDING'
+  /** The original payment was returned with an original-tax credit note. */
+  | 'REFUNDED'
   | '%future added value';
 
 /** Input for linking email to a wallet-only account. */
@@ -1002,6 +1004,16 @@ export type SendMessageInput = {
   conversationId: string;
 };
 
+/** Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months. */
+export type SetAutomaticTopupInput = {
+  consentVersion?: string;
+  currency: string;
+  enabled: boolean;
+  monthlyGrossLimitMinor?: number;
+  netAmountMinor?: number;
+  thresholdEurCents?: number;
+};
+
 export type SetMediaRetentionPolicyInput = {
   /**
    * When true, NULLs out the per-class column so the tenant inherits the
@@ -1175,6 +1187,8 @@ export type StreamEventSource =
 export type StreamEventType =
   | 'BUFFER_UPDATE'
   | 'PLAY_REWRITE'
+  | 'RECORDING_ACTIVE'
+  | 'RECORDING_REFUSED'
   | 'STREAM_END'
   | 'STREAM_LIFECYCLE_UPDATE'
   | 'STREAM_SOURCE'
@@ -1844,6 +1858,8 @@ export type AuthSessionDefaultFieldsFragment = { id: string, clientKind: AuthCli
 ipAddress: string | null, /** City and country when a local GeoIP database is configured. */
 location: string | null, createdAt: string, lastActiveAt: string, expiresAt: string, current: boolean };
 
+export type AutomaticTopupSettingsDefaultFieldsFragment = { enabled: boolean, thresholdEurCents: number, netAmountMinor: number, monthlyGrossLimitMinor: number, currency: string, pausedReason: string, monthlyReservedOrSpentMinor: number, available: boolean, unavailableReason: string, consentVersion: string };
+
 export type AvailableClusterDefaultFieldsFragment = { clusterId: string, clusterName: string, tiers: Array<string>, autoEnroll: boolean };
 
 /** A single balance transaction (top-up, usage deduction, refund, etc.). */
@@ -1939,7 +1955,8 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
+entitlements: Array<{ key: string, value: string }> } | null, subscription: { /** Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it. */
+automaticPrepaidUsage: boolean, id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
 pendingReason: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
 presentmentCurrency: string, createdAt: string, updatedAt: string, customFeatures: { /** Support level (community, email, priority, dedicated). */
 supportLevel: string, /** Whether SLA guarantees apply. */
@@ -2568,9 +2585,15 @@ export type EffectiveRetentionDefaultFieldsFragment = { /** Days from now until 
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
 retentionUntil: string | null, source: RetentionSource };
 
+/** The funded-usage arrangement after opting into PAYG. */
+export type EnablePrepaidUsagePayloadDefaultFieldsFragment = { activated: boolean, awaitingFunds: boolean, tierName: string, billingModel: string };
+
 export type FederationEventDefaultFieldsFragment = { timestamp: string, eventType: string, localCluster: string, remoteCluster: string, streamName: string | null, streamId: string | null, sourceNode: string | null, destNode: string | null, dtscUrl: string | null, latencyMs: number | null, timeToLiveMs: number | null, failureReason: string | null, queriedClusters: number | null, respondingClusters: number | null, totalCandidates: number | null, bestRemoteScore: number | null, peerCluster: string | null, role: string, reason: string | null, streamTenantId: string | null, controlCellId: string | null, originClusterId: string | null };
 
 export type FederationSummaryDefaultFieldsFragment = { totalEvents: number, overallAvgLatencyMs: number, overallFailureRate: number, eventCounts: Array<{ eventType: string, count: number, failureCount: number, avgLatencyMs: number }> };
+
+/** Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero. */
+export type FreeCancellationReviewDefaultFieldsFragment = { quotedAt: string, expiresAt: string, effectiveAt: string, fingerprint: string, dueNowMinor: number, refundNowMinor: number, walletCreditNowMinor: number, currency: string, futureUsageMessage: string };
 
 export type GeographicDistributionDefaultFieldsFragment = { streamId: string | null, uniqueCountries: number, uniqueCities: number, totalViewers: number, timeRange: { /** Start of the time range. */
 start: string, /** End of the time range. */
@@ -2895,7 +2918,6 @@ export type PlayerBootSummaryDefaultFieldsFragment = { bootCount: number, errorC
 /** One toStartOfInterval window of the boot-startup summary. TTF percentiles are computed at read time per bucket; `bootCount` is the per-bucket denominator. */
 export type PlayerBootTimeSeriesBucketDefaultFieldsFragment = { timestamp: string, bootCount: number, p50TtfMs: number, p95TtfMs: number, p99TtfMs: number };
 
-/** Prepaid balance for wallet-based accounts. Wallet-only accounts MUST use prepaid billing (balance-based, pay first). */
 export type PrepaidBalanceDefaultFieldsFragment = { /** Unique balance record identifier. */
 id: string, /** Owning tenant identifier. */
 tenantId: string, /** Settled ledger balance in cents before active usage reservations. */
@@ -2907,7 +2929,8 @@ lowBalanceThresholdCents: number, /** True if available balance is below thresho
 isLowBalance: boolean, /** Estimated spend rate in cents per hour (based on last hour's usage). */
 drainRateCentsPerHour: number, /** When the balance was created. */
 createdAt: string, /** When the balance was last updated. */
-updatedAt: string };
+updatedAt: string, /** Temporary paid continuity and any media recovery deadline. */
+paymentGrace: { active: boolean, endsAt: string | null, remainingCreditCents: number, mediaRecoveryUntil: string | null } | null };
 
 export type ProcessingUsageRecordDefaultFieldsFragment = { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
@@ -4885,6 +4908,60 @@ changePassword:
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type ConfirmFreeCancellationMutationVariables = Exact<{
+  tierId: string;
+  quotedAt: string;
+  fingerprint: string;
+}>;
+
+
+export type ConfirmFreeCancellationMutation = { confirmFreeCancellation:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'ChangeBillingTierPayload', /** Whether the request was accepted. */
+success: boolean, /** Human-readable status message. */
+message: string, /** When a scheduled downgrade will take effect. */
+effectiveAt: string | null, /** The active tier after the upgrade's billing boundary commits. */
+appliedTier: { /** Unique tier identifier. */
+id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
+tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
+tierLevel: number, /** User-facing tier name. */
+displayName: string, /** Tier description for marketing. */
+description: string | null, /** Base monthly price. */
+basePrice: number, /** Currency code (USD, EUR, etc.). */
+currency: string, /** Billing period (monthly, yearly). */
+billingPeriod: string, /** Support level included (community, email, priority, dedicated). */
+supportLevel: string | null, /** SLA guarantee level for enterprise tiers. */
+slaLevel: string | null, /** Whether usage metering is enabled for this tier. */
+meteringEnabled: boolean, /** Whether this is an enterprise tier with custom terms. */
+isEnterprise: boolean, /** Feature flags for this tier. */
+features: { /** Support level (community, email, priority, dedicated). */
+supportLevel: string, /** Whether SLA guarantees apply. */
+sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
+processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
+pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
+entitlements: Array<{ key: string, value: string }> } | null, /** The target of a pending upgrade or scheduled downgrade. */
+pendingTier: { /** Unique tier identifier. */
+id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
+tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
+tierLevel: number, /** User-facing tier name. */
+displayName: string, /** Tier description for marketing. */
+description: string | null, /** Base monthly price. */
+basePrice: number, /** Currency code (USD, EUR, etc.). */
+currency: string, /** Billing period (monthly, yearly). */
+billingPeriod: string, /** Support level included (community, email, priority, dedicated). */
+supportLevel: string | null, /** SLA guarantee level for enterprise tiers. */
+slaLevel: string | null, /** Whether usage metering is enabled for this tier. */
+meteringEnabled: boolean, /** Whether this is an enterprise tier with custom terms. */
+isEnterprise: boolean, /** Feature flags for this tier. */
+features: { /** Support level (community, email, priority, dedicated). */
+supportLevel: string, /** Whether SLA guarantees apply. */
+sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
+processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
+pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
+entitlements: Array<{ key: string, value: string }> } | null }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
 export type CreateCardTopupMutationVariables = Exact<{
   input: CreateCardTopupInput;
 }>;
@@ -5289,6 +5366,13 @@ disconnectIngest:
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type EnablePrepaidUsageMutationVariables = Exact<{ [key: string]: never; }>;
+
+
+/** Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved. */
+export type EnablePrepaidUsageMutation = { /** Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved. */
+enablePrepaidUsage: { activated: boolean, awaitingFunds: boolean, tierName: string, billingModel: string } };
+
 export type EnableWebhookEndpointMutationVariables = Exact<{
   id: string;
 }>;
@@ -5370,6 +5454,13 @@ expiresAt: number }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
+
+export type PreviewFreeCancellationMutationVariables = Exact<{
+  tierId: string;
+}>;
+
+
+export type PreviewFreeCancellationMutation = { previewFreeCancellation: { quotedAt: string, expiresAt: string, effectiveAt: string, fingerprint: string, dueNowMinor: number, refundNowMinor: number, walletCreditNowMinor: number, currency: string, futureUsageMessage: string } };
 
 export type PromoteToPaidMutationVariables = Exact<{
   tierId: string;
@@ -5590,6 +5681,13 @@ createdAt: string }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
+
+export type SetAutomaticTopupMutationVariables = Exact<{
+  input: SetAutomaticTopupInput;
+}>;
+
+
+export type SetAutomaticTopupMutation = { setAutomaticTopup: { enabled: boolean, thresholdEurCents: number, netAmountMinor: number, monthlyGrossLimitMinor: number, currency: string, pausedReason: string, monthlyReservedOrSpentMinor: number, available: boolean, unavailableReason: string, consentVersion: string } };
 
 export type SetMediaRetentionPolicyMutationVariables = Exact<{
   input: SetMediaRetentionPolicyInput;
@@ -6100,6 +6198,11 @@ export type GetAuthSessionsConnectionQueryVariables = Exact<{
 export type GetAuthSessionsConnectionQuery = { /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
 authSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clientKind: AuthClientKind, clientId: string, authMethod: AuthMethod, label: string, clientVersion: string | null, ipAddress: string | null, location: string | null, createdAt: string, lastActiveAt: string, expiresAt: string, current: boolean } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
+export type GetAutomaticTopupQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type GetAutomaticTopupQuery = { automaticTopup: { enabled: boolean, thresholdEurCents: number, netAmountMinor: number, monthlyGrossLimitMinor: number, currency: string, pausedReason: string, monthlyReservedOrSpentMinor: number, available: boolean, unavailableReason: string, consentVersion: string } };
+
 export type GetBalanceTransactionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
   transactionType?: string | null | undefined;
@@ -6205,7 +6308,8 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
+entitlements: Array<{ key: string, value: string }> } | null, subscription: { /** Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it. */
+automaticPrepaidUsage: boolean, id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
 pendingReason: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
 presentmentCurrency: string, createdAt: string, updatedAt: string, customFeatures: { /** Support level (community, email, priority, dedicated). */
 supportLevel: string, /** Whether SLA guarantees apply. */
@@ -8146,7 +8250,8 @@ lowBalanceThresholdCents: number, /** True if available balance is below thresho
 isLowBalance: boolean, /** Estimated spend rate in cents per hour (based on last hour's usage). */
 drainRateCentsPerHour: number, /** When the balance was created. */
 createdAt: string, /** When the balance was last updated. */
-updatedAt: string } | null };
+updatedAt: string, /** Temporary paid continuity and any media recovery deadline. */
+paymentGrace: { active: boolean, endsAt: string | null, remainingCreditCents: number, mediaRecoveryUntil: string | null } | null } | null };
 
 export type GetPreviewMediaPlacementQueryVariables = Exact<{
   input: PreviewMediaPlacementInput;
@@ -8213,6 +8318,20 @@ export type GetRecentPullSourceEventsQueryVariables = Exact<{
 export type GetRecentPullSourceEventsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 stream: { /** Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams. */
 recentPullSourceEvents: Array<{ id: string, internalName: string, eventKind: string, detail: string | null, createdAt: string }> | null } | null };
+
+export type GetRecordingEventsConnectionQueryVariables = Exact<{
+  page?: ConnectionInput | null | undefined;
+  streamId: string;
+  timeRange?: TimeRangeInput | null | undefined;
+  noCache?: boolean | null | undefined;
+}>;
+
+
+/** Latest recording outcomes and broadcast boundaries, without buffer/track noise. */
+export type GetRecordingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
+analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
+lifecycle: { /** Latest recording outcomes and broadcast boundaries, without buffer/track noise. */
+recordingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, ingest: { state: StreamIngestState, isLive: boolean, sessionId: string | null, connectedAt: string | null, liveSince: string | null, endedAt: string | null, resumableUntil: string | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetReviewClusterMediaConsentChangeQueryVariables = Exact<{
   input: ReviewMediaCapacityConsentInput;
@@ -11269,6 +11388,20 @@ export const AuthSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
   current
 }
     `, {"fragmentName":"AuthSessionDefaultFields"}) as unknown as TypedDocumentString<AuthSessionDefaultFieldsFragment, unknown>;
+export const AutomaticTopupSettingsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+  enabled
+  thresholdEurCents
+  netAmountMinor
+  monthlyGrossLimitMinor
+  currency
+  pausedReason
+  monthlyReservedOrSpentMinor
+  available
+  unavailableReason
+  consentVersion
+}
+    `, {"fragmentName":"AutomaticTopupSettingsDefaultFields"}) as unknown as TypedDocumentString<AutomaticTopupSettingsDefaultFieldsFragment, unknown>;
 export const AvailableClusterDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment AvailableClusterDefaultFields on AvailableCluster {
   clusterId
@@ -11405,6 +11538,7 @@ export const BillingStatusDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     isEnterprise
   }
   subscription {
+    automaticPrepaidUsage
     id
     tenantId
     tierId
@@ -12621,6 +12755,15 @@ export const EffectiveRetentionDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
   source
 }
     `, {"fragmentName":"EffectiveRetentionDefaultFields"}) as unknown as TypedDocumentString<EffectiveRetentionDefaultFieldsFragment, unknown>;
+/** The funded-usage arrangement after opting into PAYG. */
+export const EnablePrepaidUsagePayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {
+  activated
+  awaitingFunds
+  tierName
+  billingModel
+}
+    `, {"fragmentName":"EnablePrepaidUsagePayloadDefaultFields"}) as unknown as TypedDocumentString<EnablePrepaidUsagePayloadDefaultFieldsFragment, unknown>;
 export const FederationEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment FederationEventDefaultFields on FederationEvent {
   timestamp
@@ -12660,6 +12803,20 @@ export const FederationSummaryDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
   overallFailureRate
 }
     `, {"fragmentName":"FederationSummaryDefaultFields"}) as unknown as TypedDocumentString<FederationSummaryDefaultFieldsFragment, unknown>;
+/** Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero. */
+export const FreeCancellationReviewDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment FreeCancellationReviewDefaultFields on FreeCancellationReview {
+  quotedAt
+  expiresAt
+  effectiveAt
+  fingerprint
+  dueNowMinor
+  refundNowMinor
+  walletCreditNowMinor
+  currency
+  futureUsageMessage
+}
+    `, {"fragmentName":"FreeCancellationReviewDefaultFields"}) as unknown as TypedDocumentString<FreeCancellationReviewDefaultFieldsFragment, unknown>;
 export const GeographicDistributionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment GeographicDistributionDefaultFields on GeographicDistribution {
   timeRange {
@@ -13817,9 +13974,14 @@ export const PlayerBootTimeSeriesBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ 
   p99TtfMs
 }
     `, {"fragmentName":"PlayerBootTimeSeriesBucketDefaultFields"}) as unknown as TypedDocumentString<PlayerBootTimeSeriesBucketDefaultFieldsFragment, unknown>;
-/** Prepaid balance for wallet-based accounts. Wallet-only accounts MUST use prepaid billing (balance-based, pay first). */
 export const PrepaidBalanceDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment PrepaidBalanceDefaultFields on PrepaidBalance {
+  paymentGrace {
+    active
+    endsAt
+    remainingCreditCents
+    mediaRecoveryUntil
+  }
   id
   tenantId
   balanceCents
@@ -18424,6 +18586,96 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<ChangePasswordMutation, ChangePasswordMutationVariables>;
+export const ConfirmFreeCancellationDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {
+  confirmFreeCancellation(
+    tierId: $tierId
+    quotedAt: $quotedAt
+    fingerprint: $fingerprint
+  ) {
+    __typename
+    ...ChangeBillingTierPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
+  success
+  message
+  appliedTier {
+    id
+    tierName
+    tierLevel
+    displayName
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      supportLevel
+      sla
+      processingCustomizable
+    }
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
+    }
+    entitlements {
+      key
+      value
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+  pendingTier {
+    id
+    tierName
+    tierLevel
+    displayName
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      supportLevel
+      sla
+      processingCustomizable
+    }
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
+    }
+    entitlements {
+      key
+      value
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+  effectiveAt
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}`) as unknown as TypedDocumentString<ConfirmFreeCancellationMutation, ConfirmFreeCancellationMutationVariables>;
 /** Create a card checkout session for prepaid balance top-up. Returns a URL to redirect the user to Stripe/Mollie checkout. After successful payment, balance is credited automatically via webhook. */
 export const CreateCardTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateCardTopup($input: CreateCardTopupInput!) {
@@ -19082,6 +19334,19 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<DisconnectIngestMutation, DisconnectIngestMutationVariables>;
+/** Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved. */
+export const EnablePrepaidUsageDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation EnablePrepaidUsage {
+  enablePrepaidUsage {
+    ...EnablePrepaidUsagePayloadDefaultFields
+  }
+}
+    fragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {
+  activated
+  awaitingFunds
+  tierName
+  billingModel
+}`) as unknown as TypedDocumentString<EnablePrepaidUsageMutation, EnablePrepaidUsageMutationVariables>;
 /** Enable a disabled endpoint. Deliveries skipped while it was disabled are not sent again; replay them with replayWebhookDeliveries. */
 export const EnableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation EnableWebhookEndpoint($id: ID!) {
@@ -19208,6 +19473,23 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<OpenMistAdminSessionMutation, OpenMistAdminSessionMutationVariables>;
+export const PreviewFreeCancellationDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation PreviewFreeCancellation($tierId: ID!) {
+  previewFreeCancellation(tierId: $tierId) {
+    ...FreeCancellationReviewDefaultFields
+  }
+}
+    fragment FreeCancellationReviewDefaultFields on FreeCancellationReview {
+  quotedAt
+  expiresAt
+  effectiveAt
+  fingerprint
+  dueNowMinor
+  refundNowMinor
+  walletCreditNowMinor
+  currency
+  futureUsageMessage
+}`) as unknown as TypedDocumentString<PreviewFreeCancellationMutation, PreviewFreeCancellationMutationVariables>;
 /** Switch from prepaid to a selected postpaid tier. A verified email is always required. Free needs no billing profile or payment provider; paid tiers require confirmed provider collection. Existing prepaid balance is carried forward as account credit. */
 export const PromoteToPaidDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation PromoteToPaid($tierId: ID!) {
@@ -19687,6 +19969,24 @@ fragment AuthErrorDefaultFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<SendMessageMutation, SendMessageMutationVariables>;
+export const SetAutomaticTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) {
+  setAutomaticTopup(input: $input) {
+    ...AutomaticTopupSettingsDefaultFields
+  }
+}
+    fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+  enabled
+  thresholdEurCents
+  netAmountMinor
+  monthlyGrossLimitMinor
+  currency
+  pausedReason
+  monthlyReservedOrSpentMinor
+  available
+  unavailableReason
+  consentVersion
+}`) as unknown as TypedDocumentString<SetAutomaticTopupMutation, SetAutomaticTopupMutationVariables>;
 /** Set the tenant per-class retention default. `targetType` picks the asset class (VOD, DVR, or CLIP). `days` is in [0, tier cap] where 0 means "keep forever" — only honored on uncapped (paid) tiers; Free clamps to its cap at write time. `clear: true` NULLs the column so the tenant inherits the per-class system default (VOD: keep forever; DVR/clip: 30d). The tier cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`. */
 export const SetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
@@ -20861,6 +21161,24 @@ fragment PageInfoDefaultFields on PageInfo {
   hasNextPage
   hasPreviousPage
 }`) as unknown as TypedDocumentString<GetAuthSessionsConnectionQuery, GetAuthSessionsConnectionQueryVariables>;
+export const GetAutomaticTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetAutomaticTopup {
+  automaticTopup {
+    ...AutomaticTopupSettingsDefaultFields
+  }
+}
+    fragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {
+  enabled
+  thresholdEurCents
+  netAmountMinor
+  monthlyGrossLimitMinor
+  currency
+  pausedReason
+  monthlyReservedOrSpentMinor
+  available
+  unavailableReason
+  consentVersion
+}`) as unknown as TypedDocumentString<GetAutomaticTopupQuery, GetAutomaticTopupQueryVariables>;
 /** List balance transactions for the tenant with pagination. */
 export const GetBalanceTransactionsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetBalanceTransactionsConnection($page: ConnectionInput, $transactionType: String, $timeRange: TimeRangeInput) {
@@ -21026,6 +21344,7 @@ export const GetBillingStatusDocument = /*#__PURE__*/ new TypedDocumentString(`
     isEnterprise
   }
   subscription {
+    automaticPrepaidUsage
     id
     tenantId
     tierId
@@ -25886,6 +26205,12 @@ export const GetPrepaidBalanceDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     fragment PrepaidBalanceDefaultFields on PrepaidBalance {
+  paymentGrace {
+    active
+    endsAt
+    remainingCreditCents
+    mediaRecoveryUntil
+  }
   id
   tenantId
   balanceCents
@@ -26478,6 +26803,169 @@ export const GetRecentPullSourceEventsDocument = /*#__PURE__*/ new TypedDocument
   detail
   createdAt
 }`) as unknown as TypedDocumentString<GetRecentPullSourceEventsQuery, GetRecentPullSourceEventsQueryVariables>;
+/** Latest recording outcomes and broadcast boundaries, without buffer/track noise. */
+export const GetRecordingEventsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetRecordingEventsConnection($page: ConnectionInput, $streamId: ID!, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
+  analytics {
+    lifecycle {
+      recordingEventsConnection(
+        page: $page
+        streamId: $streamId
+        timeRange: $timeRange
+        noCache: $noCache
+      ) {
+        edges {
+          cursor
+          node {
+            ...StreamEventDefaultFields
+          }
+        }
+        pageInfo {
+          ...PageInfoDefaultFields
+        }
+        totalCount
+      }
+    }
+  }
+}
+    fragment PageInfoDefaultFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment StreamEventDefaultFields on StreamEvent {
+  id
+  eventId
+  streamId
+  stream {
+    id
+    streamId
+    name
+    description
+    streamKey
+    playbackId
+    record
+    liveVideoAbr
+    ingestMode
+    pullSource {
+      sourceUriRedacted
+      enabled
+      class
+    }
+    managedSource {
+      sourceKind
+      alwaysOn
+      placementCount
+    }
+    sourceLocation {
+      mode
+      avoidNodeIds
+    }
+    createdAt
+    updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
+    metrics {
+      status
+      isLive
+      currentViewers
+      startedAt
+      updatedAt
+      nodeId
+      trackCount
+      totalInputs
+      uploadedBytes
+      downloadedBytes
+      viewerSeconds
+      packetsSent
+      packetsLost
+      packetsRetransmitted
+      bufferState
+      qualityTier
+      primaryWidth
+      primaryHeight
+      primaryFps
+      primaryCodec
+      primaryBitrate
+      hasIssues
+      issuesDescription
+    }
+    pushTargets {
+      id
+      streamId
+      platform
+      name
+      videoChoice
+      targetUri
+      isEnabled
+      status
+      lastError
+      reasonCode
+      lastPushedAt
+      createdAt
+    }
+    playbackPolicy {
+      type
+      allowedOrigins
+    }
+    dvrChapterMode
+    dvrChapterIntervalSeconds
+    monitoring
+    thumbnailAssets {
+      posterUrl
+      spriteVttUrl
+      spriteJpgUrl
+      assetKey
+    }
+    retentionOverrides {
+      streamId
+      dvrRetentionDaysOverride
+      clipRetentionDaysOverride
+    }
+  }
+  nodeId
+  type
+  status
+  timestamp
+  details
+  payload
+  source
+  bufferState
+  hasIssues
+  trackCount
+  qualityTier
+  primaryWidth
+  primaryHeight
+  primaryFps
+  primaryCodec
+  primaryBitrate
+  downloadedBytes
+  uploadedBytes
+  totalViewers
+  totalInputs
+  totalOutputs
+  viewerSeconds
+  requestUrl
+  protocol
+  latitude
+  longitude
+  location
+  countryCode
+  city
+  sourceRegion
+  sourceClusterId
+  streamOriginRegion
+  streamOriginClusterId
+  schemaVersion
+}`) as unknown as TypedDocumentString<GetRecordingEventsConnectionQuery, GetRecordingEventsConnectionQueryVariables>;
 export const GetReviewClusterMediaConsentChangeDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetReviewClusterMediaConsentChange($input: ReviewMediaCapacityConsentInput!) {
   reviewClusterMediaConsentChange(input: $input) {

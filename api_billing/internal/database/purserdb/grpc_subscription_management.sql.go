@@ -14,6 +14,10 @@ import (
 const assignTenantSubscriptionTier = `-- name: AssignTenantSubscriptionTier :execrows
 UPDATE purser.tenant_subscriptions
 SET tier_id = $1::text::uuid,
+    automatic_prepaid_usage = CASE
+        WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=$1::text::uuid)='free' THEN FALSE
+        WHEN $2::text='prepaid' THEN TRUE
+        ELSE automatic_prepaid_usage END,
     status = CASE
         WHEN billing_model = 'prepaid' AND $2::text = 'postpaid' THEN 'active'
         ELSE status
@@ -468,6 +472,7 @@ func (q *Queries) LockTenantSubscriptionForTierChange(ctx context.Context, tenan
 const promotePrepaidTenantSubscription = `-- name: PromotePrepaidTenantSubscription :one
 UPDATE purser.tenant_subscriptions
 SET billing_model = 'postpaid', tier_id = $1::text::uuid,
+    automatic_prepaid_usage = CASE WHEN (SELECT tier_name FROM purser.billing_tiers WHERE id=$1::text::uuid)='free' THEN FALSE ELSE automatic_prepaid_usage END,
     status = 'active', updated_at = NOW()
 WHERE tenant_id = $2::text::uuid AND billing_model = 'prepaid'
 RETURNING id::text AS id

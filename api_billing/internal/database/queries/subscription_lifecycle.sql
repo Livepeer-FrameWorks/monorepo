@@ -16,7 +16,7 @@ SELECT id, tenant_id, tier_id, status, billing_email, started_at,
        pending_tier_id, pending_effective_at, pending_reason,
        COALESCE(created_at, TIMESTAMP 'epoch') AS created_at,
        COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
-       presentment_currency::text AS presentment_currency
+       presentment_currency::text AS presentment_currency, automatic_prepaid_usage
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -26,14 +26,15 @@ LIMIT 1;
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
     trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-    payment_method, custom_features, presentment_currency, created_at, updated_at
+    payment_method, custom_features, presentment_currency, created_at, updated_at,
+    automatic_prepaid_usage
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id)::text::uuid, sqlc.arg(tier_id)::text::uuid,
     'active', sqlc.arg(billing_email), sqlc.arg(billing_model), sqlc.arg(now),
     sqlc.narg(trial_ends_at), sqlc.arg(next_billing_date),
     sqlc.arg(billing_period_start), sqlc.arg(billing_period_end),
     sqlc.arg(payment_method)::text, sqlc.arg(custom_features)::jsonb,
-    sqlc.arg(presentment_currency)::text, sqlc.arg(now), sqlc.arg(now)
+    sqlc.arg(presentment_currency)::text, sqlc.arg(now), sqlc.arg(now), TRUE
 );
 
 -- name: GetTenantSubscriptionTierID :one
@@ -124,14 +125,15 @@ LIMIT 1;
 -- beginning. UTC calendar arithmetic caps renewal on the next month's last day.
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, billing_model, status,
-    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at
+    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at,
+    automatic_prepaid_usage
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id)::text::uuid, sqlc.arg(tier_id),
     sqlc.arg(billing_model), 'active',
     sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC',
     (sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
     (sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
-    sqlc.narg(now), sqlc.narg(now)
+    sqlc.narg(now), sqlc.narg(now), TRUE
 )
 ON CONFLICT (tenant_id) DO NOTHING;
 

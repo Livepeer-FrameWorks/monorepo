@@ -155,12 +155,12 @@ JOIN LATERAL (
 ) AS an ON true
 WHERE a.sync_status = 'failed'
   AND a.artifact_type != 'dvr'
-  AND a.updated_at < NOW() - LEAST(
+  AND COALESCE(a.last_sync_attempt, a.created_at) < NOW() - LEAST(
       INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
       INTERVAL '1 hour'
   ) * (0.8 + 0.4 * random())
   AND a.status = 'ready'
-ORDER BY a.updated_at ASC
+ORDER BY COALESCE(a.last_sync_attempt, a.created_at) ASC, a.artifact_hash ASC
 LIMIT $1;
 
 -- name: ListPendingArtifactsForFreeze :many

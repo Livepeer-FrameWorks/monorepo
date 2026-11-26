@@ -13,6 +13,18 @@ import (
 // that api_gateway can inject fakes for resolver real-path tests. The concrete
 // client satisfies it (asserted below).
 type Interface interface {
+	AdminGetInvoiceRefund(context.Context, *purserpb.AdminGetInvoiceRefundRequest) (*purserpb.AdminRefundInvoiceResponse, error)
+	AdminRefundInvoice(context.Context, *purserpb.AdminRefundInvoiceRequest) (*purserpb.AdminRefundInvoiceResponse, error)
+	GetAutomaticTopup(context.Context, *purserpb.GetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	SetAutomaticTopup(context.Context, *purserpb.SetAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	AdminDisableAutomaticTopup(context.Context, *purserpb.AdminDisableAutomaticTopupRequest) (*purserpb.AutomaticTopupSettings, error)
+	PreviewFreeCancellation(context.Context, *purserpb.ChangeBillingTierRequest) (*purserpb.FreeCancellationQuote, error)
+	ConfirmFreeCancellation(context.Context, *purserpb.ConfirmFreeCancellationRequest) (*purserpb.ChangeBillingTierResponse, error)
+	EnablePrepaidUsage(context.Context, string) (*purserpb.EnablePrepaidUsageResponse, error)
+	PreviewAdminAssignTier(context.Context, *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignmentQuote, error)
+	AdminAssignTierWithReview(context.Context, *purserpb.AdminAssignTierReviewedRequest) (*purserpb.AdminAssignTierResponse, error)
+	AdminAssignTier(context.Context, *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error)
+	AdminRecoverCheckout(context.Context, *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error)
 	GetMediaPlacementQuote(ctx context.Context, request *placementpb.CommercialQuoteRequest) (*placementpb.CommercialQuoteResponse, error)
 	Close() error
 	GetTenantAdmissionStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error)
@@ -26,6 +38,7 @@ type Interface interface {
 	GetSubscription(ctx context.Context, tenantID string) (*purserpb.GetSubscriptionResponse, error)
 	CreateSubscription(ctx context.Context, req *purserpb.CreateSubscriptionRequest) (*purserpb.TenantSubscription, error)
 	UpdateSubscription(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error)
+	UpdateSubscriptionWithEntitlementReview(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error)
 	GetInvoice(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error)
 	ListInvoices(ctx context.Context, tenantID string, status *string, pagination *commonpb.CursorPaginationRequest) (*purserpb.ListInvoicesResponse, error)
 	ListBillingDocuments(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error)

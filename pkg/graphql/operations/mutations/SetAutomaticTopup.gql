@@ -1,0 +1,14 @@
+mutation SetAutomaticTopup($input: SetAutomaticTopupInput!) {
+  setAutomaticTopup(input: $input) {
+    enabled
+    thresholdEurCents
+    netAmountMinor
+    monthlyGrossLimitMinor
+    currency
+    pausedReason
+    monthlyReservedOrSpentMinor
+    available
+    unavailableReason
+    consentVersion
+  }
+}

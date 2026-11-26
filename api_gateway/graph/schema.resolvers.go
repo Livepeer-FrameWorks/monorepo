@@ -345,6 +345,12 @@ func (r *analyticsInfraResolver) FederationSummary(ctx context.Context, obj *mar
 	return r.DoGetFederationSummary(ctx, &timeRange, noCache)
 }
 
+// RecordingEventsConnection is the resolver for the recordingEventsConnection field.
+func (r *analyticsLifecycleResolver) RecordingEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error) {
+	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoGetStreamRecordingEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+}
+
 // StreamEventsConnection is the resolver for the streamEventsConnection field.
 func (r *analyticsLifecycleResolver) StreamEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -1790,6 +1796,8 @@ func (r *invoiceResolver) Status(ctx context.Context, obj *purserpb.Invoice) (mo
 		return model.InvoiceStatusFailed, nil
 	case "manual_review":
 		return model.InvoiceStatusManualReview, nil
+	case "refunded":
+		return model.InvoiceStatusRefunded, nil
 	case "cancelled":
 		return model.InvoiceStatusCancelled, nil
 	default:
@@ -2301,6 +2309,61 @@ func (r *mutationResolver) CryptoTopupStatus(ctx context.Context, topupID string
 // UpdateBillingDetails is the resolver for the updateBillingDetails field.
 func (r *mutationResolver) UpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*purserpb.BillingDetails, error) {
 	return r.DoUpdateBillingDetails(ctx, input)
+}
+
+// EnablePrepaidUsage is the resolver for the enablePrepaidUsage field.
+func (r *mutationResolver) EnablePrepaidUsage(ctx context.Context) (*model.EnablePrepaidUsagePayload, error) {
+	return r.DoEnablePrepaidUsage(ctx)
+}
+
+// PreviewFreeCancellation is the resolver for the previewFreeCancellation field.
+func (r *mutationResolver) PreviewFreeCancellation(ctx context.Context, tierID string) (*model.FreeCancellationReview, error) {
+	return r.DoPreviewFreeCancellation(ctx, tierID)
+}
+
+// ConfirmFreeCancellation is the resolver for the confirmFreeCancellation field.
+func (r *mutationResolver) ConfirmFreeCancellation(ctx context.Context, tierID string, quotedAt time.Time, fingerprint string) (model.ChangeBillingTierResult, error) {
+	return r.DoChangeBillingTier(ctx, tierID, &purserpb.ConfirmFreeCancellationRequest{QuotedAt: timestamppb.New(quotedAt), ExpectedFingerprint: fingerprint})
+}
+
+// SetAutomaticTopup is the resolver for the setAutomaticTopup field.
+func (r *mutationResolver) SetAutomaticTopup(ctx context.Context, input model.SetAutomaticTopupInput) (*purserpb.AutomaticTopupSettings, error) {
+	return r.DoSetAutomaticTopup(ctx, input)
+}
+
+// PlatformDisableAutomaticTopup is the resolver for the platformDisableAutomaticTopup field.
+func (r *mutationResolver) PlatformDisableAutomaticTopup(ctx context.Context, tenantID string, reason string) (*purserpb.AutomaticTopupSettings, error) {
+	return r.DoPlatformDisableAutomaticTopup(ctx, tenantID, reason)
+}
+
+// PlatformRefundInvoice is the resolver for the platformRefundInvoice field.
+func (r *mutationResolver) PlatformRefundInvoice(ctx context.Context, tenantID string, invoiceID string, requestID string, reason string, confirmed bool, fingerprint string) (*model.PlatformInvoiceRefund, error) {
+	return r.DoPlatformRefundInvoice(ctx, tenantID, invoiceID, requestID, reason, confirmed, fingerprint)
+}
+
+// PlatformAdjustBalance is the resolver for the platformAdjustBalance field.
+func (r *mutationResolver) PlatformAdjustBalance(ctx context.Context, tenantID string, amountCents int, reason string, referenceID string) (*model.BalanceTransaction, error) {
+	return r.DoPlatformAdjustBalance(ctx, tenantID, amountCents, reason, referenceID)
+}
+
+// PlatformPreviewBillingTier is the resolver for the platformPreviewBillingTier field.
+func (r *mutationResolver) PlatformPreviewBillingTier(ctx context.Context, tenantID string, tierName string, reason string) (*model.PlatformBillingAssignmentQuote, error) {
+	return r.DoPlatformPreviewBillingTier(ctx, tenantID, tierName, reason)
+}
+
+// PlatformAssignBillingTierWithReview is the resolver for the platformAssignBillingTierWithReview field.
+func (r *mutationResolver) PlatformAssignBillingTierWithReview(ctx context.Context, tenantID string, tierName string, reason string, quotedAt time.Time, fingerprint string) (*model.PlatformBillingAssignment, error) {
+	return r.DoPlatformAssignBillingTierWithReview(ctx, tenantID, tierName, reason, quotedAt, fingerprint)
+}
+
+// PlatformAssignBillingTier is the resolver for the platformAssignBillingTier field.
+func (r *mutationResolver) PlatformAssignBillingTier(ctx context.Context, tenantID string, tierName string, reason string) (*model.PlatformBillingAssignment, error) {
+	return r.DoPlatformAssignBillingTier(ctx, tenantID, tierName, reason)
+}
+
+// PlatformRecoverCheckout is the resolver for the platformRecoverCheckout field.
+func (r *mutationResolver) PlatformRecoverCheckout(ctx context.Context, tenantID string, reservationID string, reason string, confirmed bool) (*model.PlatformCheckoutRecovery, error) {
+	return r.DoPlatformRecoverCheckout(ctx, tenantID, reservationID, reason, confirmed)
 }
 
 // UpdateSubscriptionCustomTerms is the resolver for the updateSubscriptionCustomTerms field.
@@ -3124,6 +3187,24 @@ func (r *paymentResolver) CreatedAt(ctx context.Context, obj *purserpb.PaymentRe
 	return &t, nil
 }
 
+// EndsAt is the resolver for the endsAt field.
+func (r *paymentGraceResolver) EndsAt(ctx context.Context, obj *purserpb.PaymentGrace) (*time.Time, error) {
+	if obj.GetEndsAt() == nil {
+		return nil, nil
+	}
+	t := obj.EndsAt.AsTime()
+	return &t, nil
+}
+
+// MediaRecoveryUntil is the resolver for the mediaRecoveryUntil field.
+func (r *paymentGraceResolver) MediaRecoveryUntil(ctx context.Context, obj *purserpb.PaymentGrace) (*time.Time, error) {
+	if obj.GetMediaRecoveryUntil() == nil {
+		return nil, nil
+	}
+	t := obj.MediaRecoveryUntil.AsTime()
+	return &t, nil
+}
+
 // Tenants is the resolver for the tenants field.
 func (r *platformResolver) Tenants(ctx context.Context, obj *markers.Platform, timeRange *model.TimeRangeInput, limit *int) (*model.PlatformTenantIndex, error) {
 	return r.DoPlatformTenants(ctx, timeRange, limit)
@@ -3516,6 +3597,16 @@ func (r *qualityTierSummaryResolver) CodecVp9Minutes(ctx context.Context, obj *p
 // CodecAv1Minutes is the resolver for the codecAv1Minutes field.
 func (r *qualityTierSummaryResolver) CodecAv1Minutes(ctx context.Context, obj *periscopepb.QualityTierSummary) (int, error) {
 	return int(obj.CodecAv1Minutes), nil
+}
+
+// AutomaticTopup is the resolver for the automaticTopup field.
+func (r *queryResolver) AutomaticTopup(ctx context.Context) (*purserpb.AutomaticTopupSettings, error) {
+	return r.DoAutomaticTopup(ctx)
+}
+
+// PlatformAutomaticTopup is the resolver for the platformAutomaticTopup field.
+func (r *queryResolver) PlatformAutomaticTopup(ctx context.Context, tenantID string) (*purserpb.AutomaticTopupSettings, error) {
+	return r.DoPlatformAutomaticTopup(ctx, tenantID)
 }
 
 // AuthSessionsConnection is the resolver for the authSessionsConnection field.
@@ -6040,6 +6131,11 @@ func (r *tenantResolver) CustomDomainStatus(ctx context.Context, obj *quartermas
 	return out, nil
 }
 
+// Subscription is the resolver for the subscription field.
+func (r *tenantAdminBillingResolver) Subscription(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.TenantSubscription, error) {
+	return r.DoPlatformTenantSubscription(ctx, obj.TenantID)
+}
+
 // Snapshot is the resolver for the snapshot field.
 func (r *tenantAdminBillingResolver) Snapshot(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.TenantBillingSnapshot, error) {
 	return r.DoPlatformTenantBillingSnapshot(ctx, obj.TenantID)
@@ -7025,6 +7121,9 @@ func (r *Resolver) OrchestratorVantage() generated.OrchestratorVantageResolver {
 // Payment returns generated.PaymentResolver implementation.
 func (r *Resolver) Payment() generated.PaymentResolver { return &paymentResolver{r} }
 
+// PaymentGrace returns generated.PaymentGraceResolver implementation.
+func (r *Resolver) PaymentGrace() generated.PaymentGraceResolver { return &paymentGraceResolver{r} }
+
 // Platform returns generated.PlatformResolver implementation.
 func (r *Resolver) Platform() generated.PlatformResolver { return &platformResolver{r} }
 
@@ -7358,6 +7457,7 @@ type orchestratorInstanceResolver struct{ *Resolver }
 type orchestratorPerformancePointResolver struct{ *Resolver }
 type orchestratorVantageResolver struct{ *Resolver }
 type paymentResolver struct{ *Resolver }
+type paymentGraceResolver struct{ *Resolver }
 type platformResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
 type playbackInstanceResolver struct{ *Resolver }

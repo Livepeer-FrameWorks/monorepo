@@ -520,6 +520,97 @@
       }
     },
     {
+      "name": "ConfirmFreeCancellation",
+      "document": "mutation ConfirmFreeCancellation ($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {\n  confirmFreeCancellation(tierId: $tierId, quotedAt: $quotedAt, fingerprint: $fingerprint) {\n    __typename\n    ... ChangeBillingTierPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {\n  success\n  message\n  appliedTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  pendingTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  effectiveAt\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "identity": "sha256:860232f31822164fe8b75e7c48ccad5d2baa1f38dc66a8ecc37557f136b0af18",
+      "kind": "mutation",
+      "variables": {
+        "fingerprint": "text",
+        "quotedAt": "2026-09-19T14:03:27Z",
+        "tierId": "id-1"
+      },
+      "response": {
+        "data": {
+          "confirmFreeCancellation": {
+            "__typename": "ChangeBillingTierPayload",
+            "appliedTier": {
+              "basePrice": 1.5,
+              "billingPeriod": "text",
+              "currency": "text",
+              "description": "text",
+              "displayName": "text",
+              "entitlements": [
+                {
+                  "key": "text",
+                  "value": "text"
+                }
+              ],
+              "features": {
+                "processingCustomizable": true,
+                "sla": true,
+                "supportLevel": "text"
+              },
+              "id": "id-1",
+              "isEnterprise": true,
+              "meteringEnabled": true,
+              "pricingRules": [
+                {
+                  "configJson": "text",
+                  "currency": "text",
+                  "includedQuantity": "text",
+                  "meter": "text",
+                  "model": "text",
+                  "unitPrice": "text"
+                }
+              ],
+              "slaLevel": "text",
+              "supportLevel": "text",
+              "tierLevel": 1,
+              "tierName": "text"
+            },
+            "effectiveAt": "2026-09-19T14:03:27Z",
+            "message": "text",
+            "pendingTier": {
+              "basePrice": 1.5,
+              "billingPeriod": "text",
+              "currency": "text",
+              "description": "text",
+              "displayName": "text",
+              "entitlements": [
+                {
+                  "key": "text",
+                  "value": "text"
+                }
+              ],
+              "features": {
+                "processingCustomizable": true,
+                "sla": true,
+                "supportLevel": "text"
+              },
+              "id": "id-1",
+              "isEnterprise": true,
+              "meteringEnabled": true,
+              "pricingRules": [
+                {
+                  "configJson": "text",
+                  "currency": "text",
+                  "includedQuantity": "text",
+                  "meter": "text",
+                  "model": "text",
+                  "unitPrice": "text"
+                }
+              ],
+              "slaLevel": "text",
+              "supportLevel": "text",
+              "tierLevel": 1,
+              "tierName": "text"
+            },
+            "success": true
+          }
+        }
+      }
+    },
+    {
       "name": "CreateCardTopup",
       "document": "mutation CreateCardTopup ($input: CreateCardTopupInput!) {\n  createCardTopup(input: $input) {\n    ... CardTopupResultDefaultFields\n  }\n}\nfragment CardTopupResultDefaultFields on CardTopupResult {\n  topupId\n  checkoutUrl\n  expiresAt\n  amountCents\n  currency\n  conversion {\n    originalAmountCents\n    originalCurrency\n    eurAmountCents\n    unitsPerEur\n    source\n    referenceDate\n  }\n}\n",
       "identity": "sha256:f18ede69f5dd0f0c432d9ba2166eedc7a6eae6c0c236418f5c648bf95e00edf7",
@@ -1438,6 +1529,23 @@
       }
     },
     {
+      "name": "EnablePrepaidUsage",
+      "document": "mutation EnablePrepaidUsage {\n  enablePrepaidUsage {\n    ... EnablePrepaidUsagePayloadDefaultFields\n  }\n}\nfragment EnablePrepaidUsagePayloadDefaultFields on EnablePrepaidUsagePayload {\n  activated\n  awaitingFunds\n  tierName\n  billingModel\n}\n",
+      "identity": "sha256:a2ac1c66d18fa77eca17d76b11db7abc7bc8e277176a14eab3db19b65966b04a",
+      "kind": "mutation",
+      "variables": {},
+      "response": {
+        "data": {
+          "enablePrepaidUsage": {
+            "activated": true,
+            "awaitingFunds": true,
+            "billingModel": "text",
+            "tierName": "text"
+          }
+        }
+      }
+    },
+    {
       "name": "EnableWebhookEndpoint",
       "document": "mutation EnableWebhookEndpoint ($id: ID!) {\n  enableWebhookEndpoint(id: $id) {\n    __typename\n    ... WebhookEndpointDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment WebhookEndpointDefaultFields on WebhookEndpoint {\n  id\n  url\n  description\n  eventTypes\n  apiVersion\n  status\n  disabledReason\n  disabledAt\n  consecutiveFailures\n  failingSince\n  lastSuccessAt\n  lastFailureAt\n  previousSecretExpiresAt\n  createdAt\n  updatedAt\n}\n",
       "identity": "sha256:90b7197b4a7048c88819ab269459ff00829f435a15facd306069e8a71e82e7c3",
@@ -1931,6 +2039,29 @@
       }
     },
     {
+      "name": "GetAutomaticTopup",
+      "document": "query GetAutomaticTopup {\n  automaticTopup {\n    ... AutomaticTopupSettingsDefaultFields\n  }\n}\nfragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {\n  enabled\n  thresholdEurCents\n  netAmountMinor\n  monthlyGrossLimitMinor\n  currency\n  pausedReason\n  monthlyReservedOrSpentMinor\n  available\n  unavailableReason\n  consentVersion\n}\n",
+      "identity": "sha256:37f77323a8e4ceb25cc21efac0c6ad64f2ba36f2937a50d4bfa2bcd4de501d3e",
+      "kind": "query",
+      "variables": {},
+      "response": {
+        "data": {
+          "automaticTopup": {
+            "available": true,
+            "consentVersion": "text",
+            "currency": "text",
+            "enabled": true,
+            "monthlyGrossLimitMinor": 1,
+            "monthlyReservedOrSpentMinor": 1,
+            "netAmountMinor": 1,
+            "pausedReason": "text",
+            "thresholdEurCents": 1,
+            "unavailableReason": "text"
+          }
+        }
+      }
+    },
+    {
       "name": "GetBalanceTransactionsConnection",
       "document": "query GetBalanceTransactionsConnection ($page: ConnectionInput, $transactionType: String, $timeRange: TimeRangeInput) {\n  balanceTransactionsConnection(page: $page, transactionType: $transactionType, timeRange: $timeRange) {\n    edges {\n      cursor\n      node {\n        ... BalanceTransactionDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment BalanceTransactionDefaultFields on BalanceTransaction {\n  id\n  tenantId\n  amountCents\n  balanceAfterCents\n  transactionType\n  description\n  referenceId\n  referenceType\n  createdAt\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n",
       "identity": "sha256:200fb9e48b5c61f5d499eed689e6509b0ba3a62c261cb638a2927085a0f77306",
@@ -2068,8 +2199,8 @@
     },
     {
       "name": "GetBillingStatus",
-      "document": "query GetBillingStatus {\n  billingStatus {\n    ... BillingStatusDefaultFields\n  }\n}\nfragment BillingStatusDefaultFields on BillingStatus {\n  currentTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  subscription {\n    id\n    tenantId\n    tierId\n    status\n    billingEmail\n    startedAt\n    trialEndsAt\n    nextBillingDate\n    cancelledAt\n    customFeatures {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingOverrides {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlementOverrides {\n      key\n      value\n    }\n    paymentMethod\n    billingModel\n    pendingTier {\n      id\n      tierName\n      tierLevel\n      displayName\n      description\n      basePrice\n      currency\n      billingPeriod\n      supportLevel\n      slaLevel\n      meteringEnabled\n      isEnterprise\n    }\n    pendingEffectiveAt\n    pendingReason\n    presentmentCurrency\n    createdAt\n    updatedAt\n  }\n  billingStatus\n  paymentMethods\n  collectionReady\n  collectionProvider\n  setupProviders\n  recentPayments {\n    id\n    invoiceId\n    method\n    amount\n    currency\n    status\n    confirmedAt\n    createdAt\n    updatedAt\n    conversion {\n      originalAmountCents\n      originalCurrency\n      eurAmountCents\n      unitsPerEur\n      source\n      referenceDate\n    }\n  }\n  nextBillingDate\n  trialEndsAt\n  outstandingAmount\n  currency\n  liveUsage {\n    tenantId\n    periodStart\n    periodEnd\n    streamHours\n    egressGb\n    peakBandwidthMbps\n    displayStorageGb\n    livepeerH264Seconds\n    livepeerVp9Seconds\n    livepeerAv1Seconds\n    livepeerHevcSeconds\n    nativeAvH264Seconds\n    nativeAvVp9Seconds\n    nativeAvAv1Seconds\n    nativeAvHevcSeconds\n    nativeAvAacSeconds\n    nativeAvOpusSeconds\n    totalStreams\n    totalViewers\n    viewerHours\n    maxViewers\n    uniqueUsers\n    livepeerSegmentCount\n    livepeerUniqueStreams\n    nativeAvSegmentCount\n    nativeAvUniqueStreams\n    uniqueCountries\n    uniqueCities\n    geoBreakdown {\n      countryCode\n      viewerCount\n      viewerHours\n      egressGb\n    }\n    clipsCreated\n    clipsDeleted\n    dvrCreated\n    dvrDeleted\n    vodCreated\n    vodDeleted\n    clipBytes\n    dvrBytes\n    vodBytes\n    frozenClipBytes\n    frozenDvrBytes\n    frozenVodBytes\n    syncedArtifactCount\n    syncedArtifactBytes\n  }\n  invoicePreview {\n    id\n    amount\n    baseAmount\n    meteredAmount\n    grossMeteredAmount\n    prepaidCreditApplied\n    currency\n    presentmentAmountCents\n    presentmentCurrency\n    presentmentUnitsPerEur\n    presentmentReferenceDate\n    finalizedAt\n    status\n    dueDate\n    paidAt\n    createdAt\n    updatedAt\n    periodStart\n    periodEnd\n    usageDetails\n    lineItems {\n      lineKey\n      meter\n      description\n      quantity\n      includedQuantity\n      billableQuantity\n      unitPrice\n      total\n      currency\n      clusterId\n      clusterName\n      clusterKind\n      pricingSource\n      pricingLabel\n      unit\n      dimensions\n    }\n  }\n}\n",
-      "identity": "sha256:2b6091ea5327ee5a81b4739f9dac242b8fad74cfd1fead092317c2224806e971",
+      "document": "query GetBillingStatus {\n  billingStatus {\n    ... BillingStatusDefaultFields\n  }\n}\nfragment BillingStatusDefaultFields on BillingStatus {\n  currentTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  subscription {\n    automaticPrepaidUsage\n    id\n    tenantId\n    tierId\n    status\n    billingEmail\n    startedAt\n    trialEndsAt\n    nextBillingDate\n    cancelledAt\n    customFeatures {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingOverrides {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlementOverrides {\n      key\n      value\n    }\n    paymentMethod\n    billingModel\n    pendingTier {\n      id\n      tierName\n      tierLevel\n      displayName\n      description\n      basePrice\n      currency\n      billingPeriod\n      supportLevel\n      slaLevel\n      meteringEnabled\n      isEnterprise\n    }\n    pendingEffectiveAt\n    pendingReason\n    presentmentCurrency\n    createdAt\n    updatedAt\n  }\n  billingStatus\n  paymentMethods\n  collectionReady\n  collectionProvider\n  setupProviders\n  recentPayments {\n    id\n    invoiceId\n    method\n    amount\n    currency\n    status\n    confirmedAt\n    createdAt\n    updatedAt\n    conversion {\n      originalAmountCents\n      originalCurrency\n      eurAmountCents\n      unitsPerEur\n      source\n      referenceDate\n    }\n  }\n  nextBillingDate\n  trialEndsAt\n  outstandingAmount\n  currency\n  liveUsage {\n    tenantId\n    periodStart\n    periodEnd\n    streamHours\n    egressGb\n    peakBandwidthMbps\n    displayStorageGb\n    livepeerH264Seconds\n    livepeerVp9Seconds\n    livepeerAv1Seconds\n    livepeerHevcSeconds\n    nativeAvH264Seconds\n    nativeAvVp9Seconds\n    nativeAvAv1Seconds\n    nativeAvHevcSeconds\n    nativeAvAacSeconds\n    nativeAvOpusSeconds\n    totalStreams\n    totalViewers\n    viewerHours\n    maxViewers\n    uniqueUsers\n    livepeerSegmentCount\n    livepeerUniqueStreams\n    nativeAvSegmentCount\n    nativeAvUniqueStreams\n    uniqueCountries\n    uniqueCities\n    geoBreakdown {\n      countryCode\n      viewerCount\n      viewerHours\n      egressGb\n    }\n    clipsCreated\n    clipsDeleted\n    dvrCreated\n    dvrDeleted\n    vodCreated\n    vodDeleted\n    clipBytes\n    dvrBytes\n    vodBytes\n    frozenClipBytes\n    frozenDvrBytes\n    frozenVodBytes\n    syncedArtifactCount\n    syncedArtifactBytes\n  }\n  invoicePreview {\n    id\n    amount\n    baseAmount\n    meteredAmount\n    grossMeteredAmount\n    prepaidCreditApplied\n    currency\n    presentmentAmountCents\n    presentmentCurrency\n    presentmentUnitsPerEur\n    presentmentReferenceDate\n    finalizedAt\n    status\n    dueDate\n    paidAt\n    createdAt\n    updatedAt\n    periodStart\n    periodEnd\n    usageDetails\n    lineItems {\n      lineKey\n      meter\n      description\n      quantity\n      includedQuantity\n      billableQuantity\n      unitPrice\n      total\n      currency\n      clusterId\n      clusterName\n      clusterKind\n      pricingSource\n      pricingLabel\n      unit\n      dimensions\n    }\n  }\n}\n",
+      "identity": "sha256:86a072fcf127b7fa39fb81f7ac73c40ca20914103a25f2f0290b62bad67f62b0",
       "kind": "query",
       "variables": {},
       "response": {
@@ -2242,6 +2373,7 @@
               "text"
             ],
             "subscription": {
+              "automaticPrepaidUsage": true,
               "billingEmail": "text",
               "billingModel": "text",
               "cancelledAt": "2026-09-19T14:03:27Z",
@@ -5274,8 +5406,8 @@
     },
     {
       "name": "GetPrepaidBalance",
-      "document": "query GetPrepaidBalance {\n  prepaidBalance {\n    ... PrepaidBalanceDefaultFields\n  }\n}\nfragment PrepaidBalanceDefaultFields on PrepaidBalance {\n  id\n  tenantId\n  balanceCents\n  reservedBalanceCents\n  availableBalanceCents\n  currency\n  lowBalanceThresholdCents\n  isLowBalance\n  drainRateCentsPerHour\n  createdAt\n  updatedAt\n}\n",
-      "identity": "sha256:1643613955c852a0a86a9329230ac0067f57aed2e0bf9b372d89d28247bf9700",
+      "document": "query GetPrepaidBalance {\n  prepaidBalance {\n    ... PrepaidBalanceDefaultFields\n  }\n}\nfragment PrepaidBalanceDefaultFields on PrepaidBalance {\n  paymentGrace {\n    active\n    endsAt\n    remainingCreditCents\n    mediaRecoveryUntil\n  }\n  id\n  tenantId\n  balanceCents\n  reservedBalanceCents\n  availableBalanceCents\n  currency\n  lowBalanceThresholdCents\n  isLowBalance\n  drainRateCentsPerHour\n  createdAt\n  updatedAt\n}\n",
+      "identity": "sha256:36863e573f82890a20715fff9d246bf0f46a89e818d8d0079f5a3f48eac039dd",
       "kind": "query",
       "variables": {},
       "response": {
@@ -5289,6 +5421,12 @@
             "id": "id-1",
             "isLowBalance": true,
             "lowBalanceThresholdCents": 1,
+            "paymentGrace": {
+              "active": true,
+              "endsAt": "2026-09-19T14:03:27Z",
+              "mediaRecoveryUntil": "2026-09-19T14:03:27Z",
+              "remainingCreditCents": 1
+            },
             "reservedBalanceCents": 1,
             "tenantId": "text",
             "updatedAt": "2026-09-19T14:03:27Z"
@@ -5885,6 +6023,177 @@
                 "internalName": "text"
               }
             ]
+          }
+        }
+      }
+    },
+    {
+      "name": "GetRecordingEventsConnection",
+      "document": "query GetRecordingEventsConnection ($page: ConnectionInput, $streamId: ID!, $timeRange: TimeRangeInput, $noCache: Boolean = false) {\n  analytics {\n    lifecycle {\n      recordingEventsConnection(page: $page, streamId: $streamId, timeRange: $timeRange, noCache: $noCache) {\n        edges {\n          cursor\n          node {\n            ... StreamEventDefaultFields\n          }\n        }\n        pageInfo {\n          ... PageInfoDefaultFields\n        }\n        totalCount\n      }\n    }\n  }\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment StreamEventDefaultFields on StreamEvent {\n  id\n  eventId\n  streamId\n  stream {\n    id\n    streamId\n    name\n    description\n    streamKey\n    playbackId\n    record\n    liveVideoAbr\n    ingestMode\n    pullSource {\n      sourceUriRedacted\n      enabled\n      class\n    }\n    managedSource {\n      sourceKind\n      alwaysOn\n      placementCount\n    }\n    sourceLocation {\n      mode\n      avoidNodeIds\n    }\n    createdAt\n    updatedAt\n    ingest {\n      state\n      isLive\n      sessionId\n      connectedAt\n      liveSince\n      endedAt\n      resumableUntil\n    }\n    metrics {\n      status\n      isLive\n      currentViewers\n      startedAt\n      updatedAt\n      nodeId\n      trackCount\n      totalInputs\n      uploadedBytes\n      downloadedBytes\n      viewerSeconds\n      packetsSent\n      packetsLost\n      packetsRetransmitted\n      bufferState\n      qualityTier\n      primaryWidth\n      primaryHeight\n      primaryFps\n      primaryCodec\n      primaryBitrate\n      hasIssues\n      issuesDescription\n    }\n    pushTargets {\n      id\n      streamId\n      platform\n      name\n      videoChoice\n      targetUri\n      isEnabled\n      status\n      lastError\n      reasonCode\n      lastPushedAt\n      createdAt\n    }\n    playbackPolicy {\n      type\n      allowedOrigins\n    }\n    dvrChapterMode\n    dvrChapterIntervalSeconds\n    monitoring\n    thumbnailAssets {\n      posterUrl\n      spriteVttUrl\n      spriteJpgUrl\n      assetKey\n    }\n    retentionOverrides {\n      streamId\n      dvrRetentionDaysOverride\n      clipRetentionDaysOverride\n    }\n  }\n  nodeId\n  type\n  status\n  timestamp\n  details\n  payload\n  source\n  bufferState\n  hasIssues\n  trackCount\n  qualityTier\n  primaryWidth\n  primaryHeight\n  primaryFps\n  primaryCodec\n  primaryBitrate\n  downloadedBytes\n  uploadedBytes\n  totalViewers\n  totalInputs\n  totalOutputs\n  viewerSeconds\n  requestUrl\n  protocol\n  latitude\n  longitude\n  location\n  countryCode\n  city\n  sourceRegion\n  sourceClusterId\n  streamOriginRegion\n  streamOriginClusterId\n  schemaVersion\n}\n",
+      "identity": "sha256:a79b215a22c9870c8fdbc58b1b01ad0d43951873ce149a284af0dbef72f6fea8",
+      "kind": "query",
+      "variables": {
+        "streamId": "id-1"
+      },
+      "response": {
+        "data": {
+          "analytics": {
+            "lifecycle": {
+              "recordingEventsConnection": {
+                "edges": [
+                  {
+                    "cursor": "text",
+                    "node": {
+                      "bufferState": "text",
+                      "city": "text",
+                      "countryCode": "text",
+                      "details": "text",
+                      "downloadedBytes": 1.5,
+                      "eventId": "id-1",
+                      "hasIssues": true,
+                      "id": "id-1",
+                      "latitude": 1.5,
+                      "location": "text",
+                      "longitude": 1.5,
+                      "nodeId": "text",
+                      "payload": {
+                        "key": "value"
+                      },
+                      "primaryBitrate": 1,
+                      "primaryCodec": "text",
+                      "primaryFps": 1.5,
+                      "primaryHeight": 1,
+                      "primaryWidth": 1,
+                      "protocol": "text",
+                      "qualityTier": "text",
+                      "requestUrl": "text",
+                      "schemaVersion": 1,
+                      "source": "HISTORICAL",
+                      "sourceClusterId": "text",
+                      "sourceRegion": "text",
+                      "status": "OFFLINE",
+                      "stream": {
+                        "createdAt": "2026-09-19T14:03:27Z",
+                        "description": "text",
+                        "dvrChapterIntervalSeconds": 1,
+                        "dvrChapterMode": "WINDOW_SIZED",
+                        "id": "id-1",
+                        "ingest": {
+                          "connectedAt": "2026-09-19T14:03:27Z",
+                          "endedAt": "2026-09-19T14:03:27Z",
+                          "isLive": true,
+                          "liveSince": "2026-09-19T14:03:27Z",
+                          "resumableUntil": "2026-09-19T14:03:27Z",
+                          "sessionId": "id-1",
+                          "state": "IDLE"
+                        },
+                        "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
+                        "managedSource": {
+                          "alwaysOn": true,
+                          "placementCount": 1,
+                          "sourceKind": "text"
+                        },
+                        "metrics": {
+                          "bufferState": "text",
+                          "currentViewers": 1,
+                          "downloadedBytes": 1.5,
+                          "hasIssues": true,
+                          "isLive": true,
+                          "issuesDescription": "text",
+                          "nodeId": "text",
+                          "packetsLost": 1.5,
+                          "packetsRetransmitted": 1.5,
+                          "packetsSent": 1.5,
+                          "primaryBitrate": 1,
+                          "primaryCodec": "text",
+                          "primaryFps": 1.5,
+                          "primaryHeight": 1,
+                          "primaryWidth": 1,
+                          "qualityTier": "text",
+                          "startedAt": "2026-09-19T14:03:27Z",
+                          "status": "OFFLINE",
+                          "totalInputs": 1,
+                          "trackCount": 1,
+                          "updatedAt": "2026-09-19T14:03:27Z",
+                          "uploadedBytes": 1.5,
+                          "viewerSeconds": 1.5
+                        },
+                        "monitoring": "INHERIT",
+                        "name": "text",
+                        "playbackId": "text",
+                        "playbackPolicy": {
+                          "allowedOrigins": [
+                            "text"
+                          ],
+                          "type": "PUBLIC"
+                        },
+                        "pullSource": {
+                          "class": "text",
+                          "enabled": true,
+                          "sourceUriRedacted": "text"
+                        },
+                        "pushTargets": [
+                          {
+                            "createdAt": "2026-09-19T14:03:27Z",
+                            "id": "id-1",
+                            "isEnabled": true,
+                            "lastError": "text",
+                            "lastPushedAt": "2026-09-19T14:03:27Z",
+                            "name": "text",
+                            "platform": "text",
+                            "reasonCode": "text",
+                            "status": "text",
+                            "streamId": "id-1",
+                            "targetUri": "text",
+                            "videoChoice": "text"
+                          }
+                        ],
+                        "record": true,
+                        "retentionOverrides": {
+                          "clipRetentionDaysOverride": 1,
+                          "dvrRetentionDaysOverride": 1,
+                          "streamId": "id-1"
+                        },
+                        "sourceLocation": {
+                          "avoidNodeIds": [
+                            "id-1"
+                          ],
+                          "mode": "ANY"
+                        },
+                        "streamId": "text",
+                        "streamKey": "text",
+                        "thumbnailAssets": {
+                          "assetKey": "text",
+                          "posterUrl": "text",
+                          "spriteJpgUrl": "text",
+                          "spriteVttUrl": "text"
+                        },
+                        "updatedAt": "2026-09-19T14:03:27Z"
+                      },
+                      "streamId": "id-1",
+                      "streamOriginClusterId": "text",
+                      "streamOriginRegion": "text",
+                      "timestamp": "2026-09-19T14:03:27Z",
+                      "totalInputs": 1,
+                      "totalOutputs": 1,
+                      "totalViewers": 1,
+                      "trackCount": 1,
+                      "type": "RECORDING_REFUSED",
+                      "uploadedBytes": 1.5,
+                      "viewerSeconds": 1.5
+                    }
+                  }
+                ],
+                "pageInfo": {
+                  "endCursor": "text",
+                  "hasNextPage": true,
+                  "hasPreviousPage": true,
+                  "startCursor": "text"
+                },
+                "totalCount": 1
+              }
+            }
           }
         }
       }
@@ -7508,7 +7817,7 @@
                       "totalOutputs": 1,
                       "totalViewers": 1,
                       "trackCount": 1,
-                      "type": "STREAM_LIFECYCLE_UPDATE",
+                      "type": "RECORDING_REFUSED",
                       "uploadedBytes": 1.5,
                       "viewerSeconds": 1.5
                     }
@@ -10291,7 +10600,7 @@
               "totalOutputs": 1,
               "totalViewers": 1,
               "trackCount": 1,
-              "type": "STREAM_LIFECYCLE_UPDATE",
+              "type": "RECORDING_REFUSED",
               "uploadedBytes": 1.5,
               "viewerSeconds": 1.5
             },
@@ -10880,7 +11189,7 @@
             "totalOutputs": 1,
             "totalViewers": 1,
             "trackCount": 1,
-            "type": "STREAM_LIFECYCLE_UPDATE",
+            "type": "RECORDING_REFUSED",
             "uploadedBytes": 1.5,
             "viewerSeconds": 1.5
           }
@@ -11222,6 +11531,30 @@
             "expiresAt": 1,
             "postUrl": "text",
             "sessionToken": "text"
+          }
+        }
+      }
+    },
+    {
+      "name": "PreviewFreeCancellation",
+      "document": "mutation PreviewFreeCancellation ($tierId: ID!) {\n  previewFreeCancellation(tierId: $tierId) {\n    ... FreeCancellationReviewDefaultFields\n  }\n}\nfragment FreeCancellationReviewDefaultFields on FreeCancellationReview {\n  quotedAt\n  expiresAt\n  effectiveAt\n  fingerprint\n  dueNowMinor\n  refundNowMinor\n  walletCreditNowMinor\n  currency\n  futureUsageMessage\n}\n",
+      "identity": "sha256:d9f910bd36c3cf3701cf6ead571c64b8cdadc4dbadd77895a63d07bab8e97392",
+      "kind": "mutation",
+      "variables": {
+        "tierId": "id-1"
+      },
+      "response": {
+        "data": {
+          "previewFreeCancellation": {
+            "currency": "text",
+            "dueNowMinor": 1,
+            "effectiveAt": "2026-09-19T14:03:27Z",
+            "expiresAt": "2026-09-19T14:03:27Z",
+            "fingerprint": "text",
+            "futureUsageMessage": "text",
+            "quotedAt": "2026-09-19T14:03:27Z",
+            "refundNowMinor": 1,
+            "walletCreditNowMinor": 1
           }
         }
       }
@@ -11800,6 +12133,34 @@
               "text"
             ],
             "version": "text"
+          }
+        }
+      }
+    },
+    {
+      "name": "SetAutomaticTopup",
+      "document": "mutation SetAutomaticTopup ($input: SetAutomaticTopupInput!) {\n  setAutomaticTopup(input: $input) {\n    ... AutomaticTopupSettingsDefaultFields\n  }\n}\nfragment AutomaticTopupSettingsDefaultFields on AutomaticTopupSettings {\n  enabled\n  thresholdEurCents\n  netAmountMinor\n  monthlyGrossLimitMinor\n  currency\n  pausedReason\n  monthlyReservedOrSpentMinor\n  available\n  unavailableReason\n  consentVersion\n}\n",
+      "identity": "sha256:053c3b886864933f936e7b2b3fcb542379bbf1fc28def8ef906f387be7107857",
+      "kind": "mutation",
+      "variables": {
+        "input": {
+          "currency": "text",
+          "enabled": true
+        }
+      },
+      "response": {
+        "data": {
+          "setAutomaticTopup": {
+            "available": true,
+            "consentVersion": "text",
+            "currency": "text",
+            "enabled": true,
+            "monthlyGrossLimitMinor": 1,
+            "monthlyReservedOrSpentMinor": 1,
+            "netAmountMinor": 1,
+            "pausedReason": "text",
+            "thresholdEurCents": 1,
+            "unavailableReason": "text"
           }
         }
       }

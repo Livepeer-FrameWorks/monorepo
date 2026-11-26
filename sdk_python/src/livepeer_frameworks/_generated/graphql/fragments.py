@@ -1260,6 +1260,19 @@ class AuthSessionDefault(BaseModel):
     current: bool
 
 
+class AutomaticTopupSettingsDefault(BaseModel):
+    enabled: bool
+    threshold_eur_cents: int = Field(alias="thresholdEurCents")
+    net_amount_minor: int = Field(alias="netAmountMinor")
+    monthly_gross_limit_minor: int = Field(alias="monthlyGrossLimitMinor")
+    currency: str
+    paused_reason: str = Field(alias="pausedReason")
+    monthly_reserved_or_spent_minor: int = Field(alias="monthlyReservedOrSpentMinor")
+    available: bool
+    unavailable_reason: str = Field(alias="unavailableReason")
+    consent_version: str = Field(alias="consentVersion")
+
+
 class AvailableClusterDefault(BaseModel):
     cluster_id: str = Field(alias="clusterId")
     cluster_name: str = Field(alias="clusterName")
@@ -1753,6 +1766,11 @@ class BillingStatusDefaultCurrentTierEntitlements(BaseModel):
 
 
 class BillingStatusDefaultSubscription(BaseModel):
+    automatic_prepaid_usage: bool = Field(
+        alias="automaticPrepaidUsage",
+        description="Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it.",
+    )
+    "Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it."
     id: str
     tenant_id: str = Field(alias="tenantId")
     tier_id: str = Field(alias="tierId")
@@ -5712,6 +5730,15 @@ class EffectiveRetentionDefault(BaseModel):
     source: RetentionSource
 
 
+class EnablePrepaidUsagePayloadDefault(BaseModel):
+    """The funded-usage arrangement after opting into PAYG."""
+
+    activated: bool
+    awaiting_funds: bool = Field(alias="awaitingFunds")
+    tier_name: str = Field(alias="tierName")
+    billing_model: str = Field(alias="billingModel")
+
+
 class EventArtifact(BaseModel):
     """Part of a public event payload (frameworks.events.public.v1.Artifact)."""
 
@@ -5767,6 +5794,20 @@ class FederationSummaryDefaultEventCounts(BaseModel):
     count: int
     failure_count: int = Field(alias="failureCount")
     avg_latency_ms: float = Field(alias="avgLatencyMs")
+
+
+class FreeCancellationReviewDefault(BaseModel):
+    """Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero."""
+
+    quoted_at: datetime = Field(alias="quotedAt")
+    expires_at: datetime = Field(alias="expiresAt")
+    effective_at: datetime = Field(alias="effectiveAt")
+    fingerprint: str
+    due_now_minor: int = Field(alias="dueNowMinor")
+    refund_now_minor: int = Field(alias="refundNowMinor")
+    wallet_credit_now_minor: int = Field(alias="walletCreditNowMinor")
+    currency: str
+    future_usage_message: str = Field(alias="futureUsageMessage")
 
 
 class GeographicDistributionDefault(BaseModel):
@@ -7976,9 +8017,11 @@ class PlayerBootTimeSeriesBucketDefault(BaseModel):
 
 
 class PrepaidBalanceDefault(BaseModel):
-    """Prepaid balance for wallet-based accounts.
-    Wallet-only accounts MUST use prepaid billing (balance-based, pay first)."""
-
+    payment_grace: Optional["PrepaidBalanceDefaultPaymentGrace"] = Field(
+        alias="paymentGrace",
+        description="Temporary paid continuity and any media recovery deadline.",
+    )
+    "Temporary paid continuity and any media recovery deadline."
     id: str = Field(description="Unique balance record identifier.")
     "Unique balance record identifier."
     tenant_id: str = Field(alias="tenantId", description="Owning tenant identifier.")
@@ -8022,6 +8065,16 @@ class PrepaidBalanceDefault(BaseModel):
         alias="updatedAt", description="When the balance was last updated."
     )
     "When the balance was last updated."
+
+
+class PrepaidBalanceDefaultPaymentGrace(BaseModel):
+    """Prepaid balance for wallet-based accounts.
+    Wallet-only accounts MUST use prepaid billing (balance-based, pay first)."""
+
+    active: bool
+    ends_at: Optional[datetime] = Field(alias="endsAt")
+    remaining_credit_cents: int = Field(alias="remainingCreditCents")
+    media_recovery_until: Optional[datetime] = Field(alias="mediaRecoveryUntil")
 
 
 class ProcessingUsageRecordDefault(BaseModel):
@@ -20212,6 +20265,7 @@ AssetNodeCopiesDefault.model_rebuild()
 AuthErrorDefault.model_rebuild()
 AuthError.model_rebuild()
 AuthSessionDefault.model_rebuild()
+AutomaticTopupSettingsDefault.model_rebuild()
 AvailableClusterDefault.model_rebuild()
 BalanceTransactionDefault.model_rebuild()
 BillingDetailsDefault.model_rebuild()
@@ -20255,10 +20309,12 @@ DeleteSuccessDefault.model_rebuild()
 DeleteSuccess.model_rebuild()
 DeveloperToken.model_rebuild()
 EffectiveRetentionDefault.model_rebuild()
+EnablePrepaidUsagePayloadDefault.model_rebuild()
 EventArtifact.model_rebuild()
 EventMoney.model_rebuild()
 FederationEventDefault.model_rebuild()
 FederationSummaryDefault.model_rebuild()
+FreeCancellationReviewDefault.model_rebuild()
 GeographicDistributionDefault.model_rebuild()
 IncidentDefault.model_rebuild()
 IncidentDetailDefault.model_rebuild()

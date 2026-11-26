@@ -121,6 +121,10 @@ func TestEnsureManagedStreamDVR_CarriesChapterPolicy(t *testing.T) {
 			if req == nil {
 				t.Fatal("StartDVR not called")
 			}
+			if req.GetStreamId() != "stream-1" {
+				t.Fatal("automatic DVR request omitted canonical stream ID; early failure events cannot be attributed")
+			}
+
 			if (req.DvrChapterMode == nil) != (tc.wantMode == nil) || (tc.wantMode != nil && req.GetDvrChapterMode() != *tc.wantMode) {
 				t.Fatalf("dvr_chapter_mode = %v, want %v", req.DvrChapterMode, tc.wantMode)
 			}

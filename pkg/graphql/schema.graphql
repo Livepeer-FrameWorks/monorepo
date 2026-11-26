@@ -105,6 +105,9 @@ enabling graceful degradation when individual services are unavailable.
 Most connection fields are non-null, but some may be nullable when upstream data is optional.
 """
 type Query {
+  automaticTopup: AutomaticTopupSettings!
+  platformAutomaticTopup(tenantId: ID!): AutomaticTopupSettings!
+    @internal(reason: "Requires the platform_operator grant.")
   "The signed-in user’s own interactive sessions, newest first. Supports first=1..100."
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
   "Your own security activity from the past 90 days."
@@ -1238,6 +1241,14 @@ Lifecycle analytics for streams and artifacts.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type AnalyticsLifecycle {
+  "Latest recording outcomes and broadcast boundaries, without buffer/track noise."
+  recordingEventsConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamEventsConnection!
+
   streamEventsConnection(
     page: ConnectionInput
     streamId: ID!
@@ -1693,9 +1704,60 @@ type Mutation {
   """
   updateBillingDetails(input: UpdateBillingDetailsInput!): BillingDetails!
 
-  # NOTE: adjustPrepaidBalance is NOT exposed in GraphQL.
-  # Admin operations go through CLI → direct gRPC to Purser.
-  # We have no RBAC in Gateway to safely expose admin routes.
+  "Enable PAYG pricing from the prepaid balance, including after an explicit choice of Free. Existing paid monthly subscriptions are preserved."
+  enablePrepaidUsage: EnablePrepaidUsagePayload!
+  previewFreeCancellation(tierId: ID!): FreeCancellationReview!
+  confirmFreeCancellation(
+    tierId: ID!
+    quotedAt: Time!
+    fingerprint: String!
+  ): ChangeBillingTierResult!
+  setAutomaticTopup(input: SetAutomaticTopupInput!): AutomaticTopupSettings!
+  platformDisableAutomaticTopup(tenantId: ID!, reason: String!): AutomaticTopupSettings!
+    @internal(reason: "Requires the platform_operator grant.")
+  platformRefundInvoice(
+    tenantId: ID!
+    invoiceId: ID!
+    requestId: ID!
+    reason: String!
+    confirmed: Boolean! = false
+    fingerprint: String! = ""
+  ): PlatformInvoiceRefund! @internal(reason: "Requires the platform_operator grant.")
+
+  "Record an audited EUR wallet adjustment. Reuse referenceId when retrying."
+  platformAdjustBalance(
+    tenantId: ID!
+    amountCents: Int!
+    reason: String!
+    referenceId: ID!
+  ): BalanceTransaction! @internal(reason: "Requires the platform_operator grant.")
+  "Price an immediate arrangement change without committing it. The quote expires after five minutes."
+  platformPreviewBillingTier(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+  ): PlatformBillingAssignmentQuote! @internal(reason: "Requires the platform_operator grant.")
+  "Apply the exact financial effects reviewed in an unexpired quote. Changed billing or usage requires another preview."
+  platformAssignBillingTierWithReview(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+    quotedAt: Time!
+    fingerprint: String!
+  ): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
+  "Assign a billing arrangement immediately, closing its existing billing phase."
+  platformAssignBillingTier(
+    tenantId: ID!
+    tierName: String!
+    reason: String!
+  ): PlatformBillingAssignment! @internal(reason: "Requires the platform_operator grant.")
+  "Preview or reconcile a tenant-owned checkout, including provider cancellation or refund when required."
+  platformRecoverCheckout(
+    tenantId: ID!
+    reservationId: ID!
+    reason: String!
+    confirmed: Boolean! = false
+  ): PlatformCheckoutRecovery! @internal(reason: "Requires the platform_operator grant.")
 
   """
   Update custom billing terms for a tenant subscription.
@@ -3430,6 +3492,10 @@ input CreatePaymentInput {
 Input for updating enterprise subscription custom terms.
 """
 input UpdateSubscriptionCustomTermsInput {
+  "Refuse replacement if the stored override map differs from this reviewed value."
+  expectedEntitlementOverrides: [EntitlementEntryInput!]
+  "Reason retained in the subscription audit event."
+  reason: String
   "Custom support terms."
   customFeatures: BillingFeaturesInput
   "Per-subscription pricing rule overrides (wholesale replace by meter)."
@@ -3913,6 +3979,8 @@ enum InvoiceStatus {
   FAILED
   "Invoice requires operator review and cannot be paid."
   MANUAL_REVIEW
+  "The original payment was returned with an original-tax credit note."
+  REFUNDED
   "Invoice cancelled."
   CANCELLED
 }
@@ -4061,6 +4129,8 @@ type BufferEvent implements Node {
 }
 
 enum StreamEventType {
+  RECORDING_REFUSED
+  RECORDING_ACTIVE
   STREAM_LIFECYCLE_UPDATE
   STREAM_START
   STREAM_END
@@ -5653,6 +5723,8 @@ type InvoicesConnection {
 
 # Tenant subscription with custom terms
 type TenantSubscription {
+  "Whether a settled balance can automatically activate PAYG while this account is on Free. An explicit Free choice disables it."
+  automaticPrepaidUsage: Boolean!
   id: ID!
   tenantId: ID!
   tierId: String!
@@ -6095,7 +6167,16 @@ type UsageRecordsConnection {
 Prepaid balance for wallet-based accounts.
 Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
 """
+type PaymentGrace {
+  active: Boolean!
+  endsAt: Time
+  remainingCreditCents: Int!
+  mediaRecoveryUntil: Time
+}
+
 type PrepaidBalance {
+  "Temporary paid continuity and any media recovery deadline."
+  paymentGrace: PaymentGrace
   "Unique balance record identifier."
   id: ID!
   "Owning tenant identifier."
@@ -9030,6 +9111,7 @@ type TenantAdminDetail {
 "Admin view of one tenant's billing surface (reuses the tenant-facing types)."
 type TenantAdminBilling {
   tenantId: ID!
+  subscription: TenantSubscription
   snapshot: TenantBillingSnapshot
   "Plan lifecycle as the tenant sees it: arrangement, scheduled move to Free and pending plan change. Null when the tenant has no subscription."
   lifecycle: BillingLifecycle
@@ -10117,4 +10199,86 @@ type DVRChapterConnection {
 type DVRChapterEdge {
   cursor: String!
   node: DVRChapterRef!
+}
+
+"Priced financial effects of an operator arrangement change. EUR cents and original presentment minor units are labelled in effectsJson."
+type PlatformBillingAssignmentQuote {
+  quotedAt: Time!
+  expiresAt: Time!
+  fingerprint: String!
+  effectsJson: String!
+}
+
+"Operator billing-assignment receipt."
+type PlatformBillingAssignment {
+  subscriptionId: ID!
+  tierName: String!
+  billingModel: String!
+  changed: Boolean!
+}
+
+"Provider-observed result of an operator checkout recovery."
+type PlatformCheckoutRecovery {
+  provider: String!
+  status: String!
+  amountCents: Int!
+  currency: String!
+  amountKnown: Boolean!
+  outcome: String!
+  detail: String!
+  auditId: String!
+}
+
+"The funded-usage arrangement after opting into PAYG."
+type EnablePrepaidUsagePayload {
+  activated: Boolean!
+  awaitingFunds: Boolean!
+  tierName: String!
+  billingModel: String!
+}
+
+"Explicit automatic top-up consent. Monthly cash limits include tax and pending charges, using UTC calendar months."
+input SetAutomaticTopupInput {
+  enabled: Boolean!
+  thresholdEurCents: Int! = 500
+  netAmountMinor: Int! = 2000
+  monthlyGrossLimitMinor: Int! = 10000
+  currency: String!
+  consentVersion: String! = ""
+}
+type AutomaticTopupSettings {
+  enabled: Boolean!
+  thresholdEurCents: Int!
+  netAmountMinor: Int!
+  monthlyGrossLimitMinor: Int!
+  currency: String!
+  pausedReason: String!
+  monthlyReservedOrSpentMinor: Int!
+  available: Boolean!
+  unavailableReason: String!
+  consentVersion: String!
+}
+type PlatformInvoiceRefund {
+  requestId: ID!
+  invoiceId: ID!
+  provider: String!
+  amountMinor: Int!
+  currency: String!
+  status: String!
+  fingerprint: String!
+  detail: String!
+  providerRefundId: String!
+}
+
+"Version-bound review of a scheduled move to Free. Future usage remains payable and is not estimated as zero."
+type FreeCancellationReview {
+  quotedAt: Time!
+  expiresAt: Time!
+  effectiveAt: Time!
+  fingerprint: String!
+  dueNowMinor: Int!
+  refundNowMinor: Int!
+  walletCreditNowMinor: Int!
+  currency: String!
+  futureUsageMessage: String!
 }

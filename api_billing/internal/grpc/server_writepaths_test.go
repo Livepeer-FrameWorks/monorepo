@@ -3,6 +3,8 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"frameworks/api_billing/internal/handlers"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +205,8 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 
 func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	s.billing = handlers.NewService(s.db, s.logger, nil, nil, nil, nil, nil)
+	s.billing.SetFreeTierEligibilityReader(func(context.Context, string, handlers.FreeTierLimits) (bool, error) { return true, nil })
 	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
@@ -212,6 +216,7 @@ func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *t
 			AddRow("tier-free", int32(1), "free", false, true))
 	expectSelfServiceTier(mock, "tier-free", 1, false, true, false)
 	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
+	mock.ExpectExec("-- name: BeginFreeMediaRecovery").WithArgs("tenant-1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-free", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
@@ -616,4 +621,36 @@ func expectSelfServiceCheckout(mock sqlmock.Sqlmock, tenantID, tierID, provider 
 	expectSelfServiceTier(mock, tierID, 2, false, true, false)
 	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(tenantID, tierID).WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
 	mock.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
+}
+
+func expectFreeChoiceProof(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("-- name: FreeTierChoiceHasFinancialHold").WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"held"}).AddRow(false))
+	mock.ExpectQuery("-- name: ListTierEntitlements").WithArgs("tier-free").WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).AddRow("storage_limit_gb", "10").AddRow("recording_retention_days", "30"))
+	mock.ExpectQuery("-- name: ListSubscriptionEntitlementOverrides").WithArgs("sub-1").WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+}
+
+func TestPromoteToFreeDoesNotRequirePhysicalMediaEligibility(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	s.billing = handlers.NewService(s.db, s.logger, nil, nil, nil, nil, nil)
+	s.billing.SetFreeTierEligibilityReader(func(context.Context, string, handlers.FreeTierLimits) (bool, error) {
+		t.Fatal("stored media blocked explicit Free choice")
+		return false, errors.New("unavailable")
+	})
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
+	mock.ExpectBegin()
+	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
+	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).WithArgs(true, "tier-free").WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-free", int32(1), "free", false, true))
+	expectSelfServiceTier(mock, "tier-free", 1, false, true, false)
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
+	mock.ExpectExec("-- name: BeginFreeMediaRecovery").WithArgs("tenant-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).WithArgs("tier-free", "tenant-1").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
+	mock.ExpectCommit()
+	expectCanonicalPromotion(mock, "tenant-1", "sub-1", "tier-free", int32(1), "free", -79)
+	response, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1", TierId: "tier-free"})
+	if err != nil || !response.GetSuccess() || response.GetCreditBalanceCents() != -79 {
+		t.Fatalf("Free lost debt or required media deletion: %+v %v", response, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }

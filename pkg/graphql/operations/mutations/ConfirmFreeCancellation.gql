@@ -1,0 +1,30 @@
+mutation ConfirmFreeCancellation($tierId: ID!, $quotedAt: Time!, $fingerprint: String!) {
+  confirmFreeCancellation(tierId: $tierId, quotedAt: $quotedAt, fingerprint: $fingerprint) {
+    ... on ChangeBillingTierPayload {
+      success
+      message
+      appliedTier {
+        id
+        tierName
+        displayName
+        tierLevel
+      }
+      pendingTier {
+        id
+        tierName
+        displayName
+        tierLevel
+      }
+      effectiveAt
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}
