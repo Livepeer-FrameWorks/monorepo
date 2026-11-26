@@ -2592,6 +2592,12 @@ INSERT INTO foghorn.vod_original_retention_activation (singleton, activated_at)
 VALUES (true, NOW())
 ON CONFLICT (singleton) DO NOTHING;
 
+-- Serves the media recovery sweep: its tenant cursor and each tenant's artifact page.
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_media_recovery
+    ON foghorn.artifacts (tenant_id ASC, artifact_hash ASC)
+    WHERE federated_pointer = false
+      AND status IN ('completed', 'completed_partial', 'ready', 'failed');
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_billable_storage
     ON foghorn.artifacts (tenant_id ASC, artifact_type ASC, artifact_hash ASC)
     INCLUDE (size_bytes, sync_status)
