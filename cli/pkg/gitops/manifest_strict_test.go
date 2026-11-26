@@ -109,6 +109,7 @@ external_dependencies:
           probe_commands: [nvidia-smi]
           device_paths: [/dev/nvidiactl]
           driver_libraries: [libcuda.so.1]
+          system_packages: [ocl-icd-libopencl1]
           platforms:
             linux/amd64:
               host:
@@ -134,6 +135,9 @@ external_dependencies:
 	variant := dep.RuntimeVariantForPlatform("cuda", "linux/amd64")
 	if variant == nil || variant.Artifact == nil || variant.Artifact.Checksum != "sha256:def" {
 		t.Fatalf("typed variant lost: %+v", dep)
+	}
+	if got := dep.ReleaseIndex.Profiles["cuda"].SystemPackages; len(got) != 1 || got[0] != "ocl-icd-libopencl1" {
+		t.Fatalf("profile package list lost: %+v", got)
 	}
 	if got := variant.Host.SystemPackages; len(got) != 1 || got[0] != "ffmpeg" {
 		t.Fatalf("host package contract lost: %+v", got)

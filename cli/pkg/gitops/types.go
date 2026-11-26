@@ -73,16 +73,20 @@ type ExternalReleaseIndex struct {
 // ExternalProfile describes one runtime implementation and its supported
 // target platforms.
 type ExternalProfile struct {
-	Family              string                      `yaml:"family"`
-	Version             string                      `yaml:"version,omitempty"`
-	CUDAVersion         string                      `yaml:"cuda_version,omitempty"`
-	Installation        string                      `yaml:"installation,omitempty"`
-	CPUFallback         bool                        `yaml:"cpu_fallback,omitempty"`
-	ProbeCommands       []string                    `yaml:"probe_commands,omitempty"`
-	DevicePaths         []string                    `yaml:"device_paths,omitempty"`
-	OptionalDevicePaths []string                    `yaml:"optional_device_paths,omitempty"`
-	DriverLibraries     []string                    `yaml:"driver_libraries,omitempty"`
-	Platforms           map[string]ExternalPlatform `yaml:"platforms"`
+	Family              string   `yaml:"family"`
+	Version             string   `yaml:"version,omitempty"`
+	CUDAVersion         string   `yaml:"cuda_version,omitempty"`
+	Installation        string   `yaml:"installation,omitempty"`
+	CPUFallback         bool     `yaml:"cpu_fallback,omitempty"`
+	ProbeCommands       []string `yaml:"probe_commands,omitempty"`
+	DevicePaths         []string `yaml:"device_paths,omitempty"`
+	OptionalDevicePaths []string `yaml:"optional_device_paths,omitempty"`
+	DriverLibraries     []string `yaml:"driver_libraries,omitempty"`
+	// SystemPackages lists the profile's own host packages; the release index
+	// already merges them into each platform's Host.SystemPackages, which is
+	// what provisioning installs.
+	SystemPackages []string                    `yaml:"system_packages,omitempty"`
+	Platforms      map[string]ExternalPlatform `yaml:"platforms"`
 }
 
 // ExternalPlatform carries the exact image and native artifact for one
